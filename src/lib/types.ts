@@ -14,12 +14,27 @@ export interface PortInfo {
   service: string | null;
 }
 
+export interface DeviceFingerprint {
+  mac_address: string | null;
+  oui: string | null;
+  vendor: string | null;
+  manufacturer: string | null;
+  model_guess: string | null;
+  device_type: string | null;
+  os_guess: string | null;
+  confidence: number;
+  sources: string[];
+  notes: string[];
+  last_updated: string;
+}
+
 export interface Host {
   ip: string;
   name: string | null;
   reachable: boolean;
   open_ports: PortInfo[];
   last_seen: string;
+  fingerprint: DeviceFingerprint | null;
 }
 
 export interface ScanOptions {

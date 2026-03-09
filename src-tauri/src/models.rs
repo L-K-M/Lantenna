@@ -23,6 +23,22 @@ pub struct Host {
     pub reachable: bool,
     pub open_ports: Vec<PortInfo>,
     pub last_seen: String,
+    pub fingerprint: Option<DeviceFingerprint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceFingerprint {
+    pub mac_address: Option<String>,
+    pub oui: Option<String>,
+    pub vendor: Option<String>,
+    pub manufacturer: Option<String>,
+    pub model_guess: Option<String>,
+    pub device_type: Option<String>,
+    pub os_guess: Option<String>,
+    pub confidence: u8,
+    pub sources: Vec<String>,
+    pub notes: Vec<String>,
+    pub last_updated: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

@@ -91,6 +91,9 @@ pub async fn start_scan(
 
         match result {
             Ok(scan_result) => {
+                let mut scan_result = scan_result;
+                scan_result.hosts = scanner::enrich_hosts_with_cache(scan_result.hosts, storage.clone()).await;
+
                 if let Err(error) = storage.save_scan_result(scan_result.clone()) {
                     log::error!("Failed to persist scan result: {}", error);
                 }
@@ -127,14 +130,20 @@ pub async fn get_scan_results(state: State<'_, AppState>) -> Result<Option<ScanR
 }
 
 #[tauri::command]
-pub async fn scan_host_ports(ip: String, profile: PortProfile) -> Result<Host, String> {
+pub async fn scan_host_ports(
+    ip: String,
+    profile: PortProfile,
+    state: State<'_, AppState>,
+) -> Result<Host, String> {
     let timeout_ms = match profile {
         PortProfile::Quick => 220,
         PortProfile::Standard => 280,
         PortProfile::Deep => 320,
     };
 
-    scanner::scan_single_host(ip, profile, timeout_ms)
+    let host = scanner::scan_single_host(ip, profile, timeout_ms)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+
+    Ok(scanner::enrich_host_with_cache(host, state.storage.clone()).await)
 }

@@ -31,6 +31,19 @@
     const date = new Date(iso);
     return date.toLocaleTimeString();
   }
+
+  function formatFingerprint(host: Host): string {
+    const fp = host.fingerprint;
+    if (!fp) {
+      return 'Not fingerprinted yet';
+    }
+
+    const vendor = fp.vendor || fp.manufacturer || 'Unknown vendor';
+    const kind = fp.device_type || fp.os_guess || fp.model_guess || 'Unknown type';
+    const confidence = Number.isFinite(fp.confidence) ? `${fp.confidence}%` : 'n/a';
+
+    return `${vendor} • ${kind} (${confidence})`;
+  }
 </script>
 
 <div class="table-wrap">
@@ -40,6 +53,7 @@
         <tr>
           <th class="col-ip">IP</th>
           <th class="col-name">Name</th>
+          <th class="col-fingerprint">Fingerprint</th>
           <th class="col-ports">Open Ports</th>
           <th class="col-seen">Last Seen</th>
           <th class="col-actions">Actions</th>
@@ -53,11 +67,11 @@
       <tbody>
         {#if loading && hosts.length === 0}
           <tr>
-            <td colspan="5" class="placeholder">Scanning...</td>
+            <td colspan="6" class="placeholder">Scanning...</td>
           </tr>
         {:else if hosts.length === 0}
           <tr>
-            <td colspan="5" class="placeholder">No hosts yet. Start a scan.</td>
+            <td colspan="6" class="placeholder">No hosts yet. Start a scan.</td>
           </tr>
         {:else}
           {#each hosts as host}
@@ -66,6 +80,7 @@
             <tr class:selected={selectedHostIp === host.ip} onclick={() => onSelectHost?.(host.ip)}>
               <td class="col-ip">{host.ip}</td>
               <td class="col-name">{host.name || 'Unknown'}</td>
+              <td class="col-fingerprint">{formatFingerprint(host)}</td>
               <td class="col-ports">{formatPorts(host)}</td>
               <td class="col-seen">{formatTime(host.last_seen)}</td>
               <td class="col-actions">
@@ -122,23 +137,30 @@
   }
 
   .col-ip {
-    width: 17%;
+    width: 14%;
   }
 
   .col-name {
-    width: 23%;
+    width: 17%;
+  }
+
+  .col-fingerprint {
+    width: 24%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .col-ports {
-    width: 35%;
+    width: 25%;
   }
 
   .col-seen {
-    width: 12%;
+    width: 10%;
   }
 
   .col-actions {
-    width: 13%;
+    width: 10%;
     text-align: right;
   }
 

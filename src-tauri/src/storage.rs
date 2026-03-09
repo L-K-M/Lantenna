@@ -1,13 +1,17 @@
-use crate::models::ScanResult;
+use crate::models::{DeviceFingerprint, ScanResult};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 struct StoredData {
     latest_scan: Option<ScanResult>,
+    fingerprint_cache: HashMap<String, DeviceFingerprint>,
+    oui_vendor_cache: HashMap<String, String>,
 }
 
 pub struct Storage {
@@ -59,6 +63,43 @@ impl Storage {
     pub fn save_scan_result(&self, result: ScanResult) -> Result<()> {
         let mut data = self.data.lock().unwrap();
         data.latest_scan = Some(result);
+        drop(data);
+        self.save()
+    }
+
+    pub fn get_cached_fingerprint(&self, key: &str) -> Result<Option<DeviceFingerprint>> {
+        let data = self.data.lock().unwrap();
+        Ok(data.fingerprint_cache.get(key).cloned())
+    }
+
+    pub fn cache_fingerprints(&self, entries: Vec<(String, DeviceFingerprint)>) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let mut data = self.data.lock().unwrap();
+        for (key, fingerprint) in entries {
+            data.fingerprint_cache.insert(key, fingerprint);
+        }
+        drop(data);
+
+        self.save()
+    }
+
+    pub fn get_cached_vendor(&self, oui: &str) -> Result<Option<String>> {
+        let data = self.data.lock().unwrap();
+        Ok(data.oui_vendor_cache.get(oui).cloned())
+    }
+
+    pub fn cache_vendors(&self, entries: Vec<(String, String)>) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let mut data = self.data.lock().unwrap();
+        for (oui, vendor) in entries {
+            data.oui_vendor_cache.insert(oui, vendor);
+        }
         drop(data);
         self.save()
     }

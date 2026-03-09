@@ -10,11 +10,38 @@
 
 <aside class="inspector">
   {#if host}
+    {@const fp = host.fingerprint}
     <h3>Host Details</h3>
     <div class="kv"><span>IP</span><span>{host.ip}</span></div>
     <div class="kv"><span>Name</span><span>{host.name || 'Unknown'}</span></div>
     <div class="kv"><span>Reachable</span><span>{host.reachable ? 'Yes' : 'No'}</span></div>
     <div class="kv"><span>Last Seen</span><span>{formatTime(host.last_seen)}</span></div>
+
+    <h4>Fingerprint</h4>
+    <div class="kv"><span>MAC</span><span>{fp?.mac_address || 'Unknown'}</span></div>
+    <div class="kv"><span>Vendor</span><span>{fp?.vendor || fp?.manufacturer || 'Unknown'}</span></div>
+    <div class="kv"><span>Type</span><span>{fp?.device_type || 'Unknown'}</span></div>
+    <div class="kv"><span>OS</span><span>{fp?.os_guess || 'Unknown'}</span></div>
+    <div class="kv"><span>Model</span><span>{fp?.model_guess || 'Unknown'}</span></div>
+    <div class="kv"><span>Confidence</span><span>{fp ? `${fp.confidence}%` : 'n/a'}</span></div>
+
+    {#if fp?.sources?.length}
+      <h4>Fingerprint Sources</h4>
+      <ul class="plain-list">
+        {#each fp.sources as source}
+          <li class="plain-item">{source}</li>
+        {/each}
+      </ul>
+    {/if}
+
+    {#if fp?.notes?.length}
+      <h4>Fingerprint Notes</h4>
+      <ul class="plain-list">
+        {#each fp.notes as note}
+          <li class="plain-item">{note}</li>
+        {/each}
+      </ul>
+    {/if}
 
     <h4>Open Ports</h4>
     {#if host.open_ports.length === 0}
@@ -22,7 +49,7 @@
     {:else}
       <ul>
         {#each host.open_ports as port}
-          <li>
+          <li class="port-item">
             <span>{port.port}</span>
             <span>{port.service || 'unknown'}</span>
           </li>
@@ -68,13 +95,22 @@
     padding: 0;
   }
 
-  li {
+  .port-item {
     display: flex;
     justify-content: space-between;
     gap: 8px;
     border: 1px solid #000;
     padding: 4px 6px;
     margin-bottom: 6px;
+  }
+
+  .plain-list {
+    list-style: square;
+    padding-left: 18px;
+  }
+
+  .plain-item {
+    margin-bottom: 4px;
   }
 
   .empty {
