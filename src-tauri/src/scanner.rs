@@ -15,6 +15,28 @@ use std::sync::{
 use tokio::net::TcpStream;
 use tokio::time::{timeout, Duration};
 
+fn available_workers() -> usize {
+    std::thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(4)
+}
+
+fn host_concurrency_for_profile(profile: &PortProfile, workers: usize) -> usize {
+    match profile {
+        PortProfile::Quick => (workers * 12).clamp(64, 192),
+        PortProfile::Standard => (workers * 10).clamp(32, 128),
+        PortProfile::Deep => (workers * 4).clamp(12, 48),
+    }
+}
+
+fn port_concurrency_for_profile(profile: &PortProfile, workers: usize) -> usize {
+    match profile {
+        PortProfile::Quick => 64,
+        PortProfile::Standard => (workers * 16).clamp(64, 192),
+        PortProfile::Deep => (workers * 24).clamp(128, 320),
+    }
+}
+
 pub fn list_network_interfaces() -> Result<Vec<NetworkInterface>> {
     let mut interfaces = Vec::new();
 
@@ -95,12 +117,18 @@ where
     let timeout_ms = options.timeout_ms.unwrap_or(350).clamp(50, 5000);
     let timeout_duration = Duration::from_millis(timeout_ms);
     let ports = Arc::new(ports_for_profile(&options.port_profile));
+    let workers = available_workers();
+    let host_concurrency = host_concurrency_for_profile(&options.port_profile, workers);
+    let port_concurrency = port_concurrency_for_profile(&options.port_profile, workers);
 
-    let host_concurrency = match options.port_profile {
-        PortProfile::Quick => 64,
-        PortProfile::Standard => 48,
-        PortProfile::Deep => 24,
-    };
+    log::info!(
+        "scan config: profile={:?} workers={} hosts={} ports={} timeout_ms={}",
+        options.port_profile,
+        workers,
+        host_concurrency,
+        port_concurrency,
+        timeout_ms
+    );
 
     let total = targets.len();
     let mut scanned = 0usize;
@@ -124,7 +152,7 @@ where
                 return (current_ip, None);
             }
 
-            let host = scan_host_internal(ip, ports, timeout_duration, cancel_flag).await;
+            let host = scan_host_internal(ip, ports, timeout_duration, port_concurrency, cancel_flag).await;
             (current_ip, host)
         }
     }))
@@ -178,9 +206,17 @@ pub async fn scan_single_host(ip: String, profile: PortProfile, timeout_ms: u64)
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let ports = Arc::new(ports_for_profile(&profile));
     let timeout_duration = Duration::from_millis(timeout_ms.clamp(50, 5000));
+    let port_concurrency = port_concurrency_for_profile(&profile, available_workers());
 
-    let open_ports = scan_open_ports(parsed_ip, ports, timeout_duration, cancel_flag).await;
-    let name = resolve_hostname(parsed_ip).await;
+    let open_ports = scan_open_ports(
+        parsed_ip,
+        ports,
+        timeout_duration,
+        port_concurrency,
+        cancel_flag,
+    )
+    .await;
+    let name = resolve_hostname_with_timeout(parsed_ip, Duration::from_millis(250)).await;
 
     Ok(Host {
         ip,
@@ -195,14 +231,15 @@ async fn scan_host_internal(
     ip: Ipv4Addr,
     ports: Arc<Vec<u16>>,
     timeout_duration: Duration,
+    port_concurrency: usize,
     cancel_flag: Arc<AtomicBool>,
 ) -> Option<Host> {
-    let open_ports = scan_open_ports(ip, ports, timeout_duration, cancel_flag).await;
+    let open_ports = scan_open_ports(ip, ports, timeout_duration, port_concurrency, cancel_flag).await;
     if open_ports.is_empty() {
         return None;
     }
 
-    let name = resolve_hostname(ip).await;
+    let name = resolve_hostname_with_timeout(ip, Duration::from_millis(250)).await;
 
     Some(Host {
         ip: ip.to_string(),
@@ -217,9 +254,10 @@ async fn scan_open_ports(
     ip: Ipv4Addr,
     ports: Arc<Vec<u16>>,
     timeout_duration: Duration,
+    port_concurrency: usize,
     cancel_flag: Arc<AtomicBool>,
 ) -> Vec<PortInfo> {
-    let concurrency = if ports.len() > 512 { 128 } else { 64 };
+    let concurrency = port_concurrency.clamp(1, 1024).min(ports.len().max(1));
 
     let mut stream = stream::iter(ports.iter().copied().map(|port| {
         let cancel_flag = cancel_flag.clone();
@@ -267,6 +305,10 @@ async fn resolve_hostname(ip: Ipv4Addr) -> Option<String> {
         .flatten()
         .map(|name| name.trim_end_matches('.').to_string())
         .filter(|name| !name.is_empty())
+}
+
+async fn resolve_hostname_with_timeout(ip: Ipv4Addr, max_wait: Duration) -> Option<String> {
+    timeout(max_wait, resolve_hostname(ip)).await.ok().flatten()
 }
 
 fn ports_for_profile(profile: &PortProfile) -> Vec<u16> {

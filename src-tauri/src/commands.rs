@@ -128,7 +128,13 @@ pub async fn get_scan_results(state: State<'_, AppState>) -> Result<Option<ScanR
 
 #[tauri::command]
 pub async fn scan_host_ports(ip: String, profile: PortProfile) -> Result<Host, String> {
-    scanner::scan_single_host(ip, profile, 450)
+    let timeout_ms = match profile {
+        PortProfile::Quick => 220,
+        PortProfile::Standard => 280,
+        PortProfile::Deep => 320,
+    };
+
+    scanner::scan_single_host(ip, profile, timeout_ms)
         .await
         .map_err(|error| error.to_string())
 }

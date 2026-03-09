@@ -193,11 +193,17 @@ function createScanStore() {
       }));
 
       try {
+        const timeoutByProfile: Record<PortProfile, number> = {
+          quick: 220,
+          standard: 280,
+          deep: 320
+        };
+
         await TauriService.startScan({
           interface_name: currentState.selectedInterface,
           subnet: null,
           port_profile: currentState.portProfile,
-          timeout_ms: 350,
+          timeout_ms: timeoutByProfile[currentState.portProfile],
           max_hosts: 512
         });
         notifications.add('Scan started.', 'info');
