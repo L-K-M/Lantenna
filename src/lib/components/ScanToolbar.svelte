@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { BalloonHelp, Button } from '@lkmc/system7-ui';
+  import { BalloonHelp, Button, Dropdown } from '@lkmc/system7-ui';
   import type { NetworkInterface, PortProfile, ScanProgress } from '$lib/types';
 
   export let interfaces: NetworkInterface[] = [];
@@ -23,6 +23,11 @@
     { value: 'deep', label: 'Deep' }
   ];
 
+  $: interfaceOptions =
+    interfaces.length === 0
+      ? [{ value: '', label: 'No interfaces found', disabled: true }]
+      : interfaces.map((item) => ({ value: item.name, label: interfaceLabel(item) }));
+
   const portsHelpText =
     'Quick: 22 common ports (20,21,22,23,53,80,110,135,139,143,443,445,515,548,631,3389,5000,5353,5900,8000,8080,8443). Standard: expanded common service list. Deep: all TCP ports 1-2048.';
 
@@ -34,34 +39,28 @@
 <div class="toolbar">
   <div class="toolbar-group">
     <label for="interface-select">Interface</label>
-    <select
-      id="interface-select"
-      disabled={scanning}
-      value={selectedInterface ?? ''}
-      onchange={(event) => onInterfaceChange?.((event.currentTarget as HTMLSelectElement).value)}
-    >
-      {#if interfaces.length === 0}
-        <option value="">No interfaces found</option>
-      {:else}
-        {#each interfaces as item}
-          <option value={item.name}>{interfaceLabel(item)}</option>
-        {/each}
-      {/if}
-    </select>
+    <div class="dropdown-wrap interface-dropdown">
+      <Dropdown
+        id="interface-select"
+        disabled={scanning}
+        value={selectedInterface ?? ''}
+        options={interfaceOptions}
+        onchange={(value) => onInterfaceChange?.(value)}
+      />
+    </div>
 
     <BalloonHelp message={portsHelpText} delay={300}>
       <div class="ports-control">
         <label for="profile-select">Ports</label>
-        <select
-          id="profile-select"
-          disabled={scanning}
-          value={profile}
-          onchange={(event) => onProfileChange?.((event.currentTarget as HTMLSelectElement).value as PortProfile)}
-        >
-          {#each profileOptions as option}
-            <option value={option.value}>{option.label}</option>
-          {/each}
-        </select>
+        <div class="dropdown-wrap profile-dropdown">
+          <Dropdown
+            id="profile-select"
+            disabled={scanning}
+            value={profile}
+            options={profileOptions}
+            onchange={(value) => onProfileChange?.(value as PortProfile)}
+          />
+        </div>
       </div>
     </BalloonHelp>
 
@@ -122,9 +121,16 @@
     white-space: nowrap;
   }
 
-  select,
   input {
     min-width: 160px;
+  }
+
+  .dropdown-wrap :global(.sys7-dropdown) {
+    min-width: 220px;
+  }
+
+  .profile-dropdown :global(.sys7-dropdown) {
+    min-width: 170px;
   }
 
   .search-wrap {
