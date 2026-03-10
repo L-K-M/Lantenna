@@ -3,6 +3,7 @@ use crate::models::{
 };
 use crate::scanner;
 use crate::storage::Storage;
+use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -146,4 +147,48 @@ pub async fn scan_host_ports(
         .map_err(|error| error.to_string())?;
 
     Ok(scanner::enrich_host_with_cache(host, state.storage.clone()).await)
+}
+
+#[tauri::command]
+pub async fn open_external_url(url: String) -> Result<(), String> {
+    let normalized = url.to_lowercase();
+    let allowed = normalized.starts_with("http://")
+        || normalized.starts_with("https://")
+        || normalized.starts_with("smb://")
+        || normalized.starts_with("ssh://")
+        || normalized.starts_with("ftp://")
+        || normalized.starts_with("vnc://")
+        || normalized.starts_with("telnet://")
+        || normalized.starts_with("rtsp://");
+
+    if !allowed {
+        return Err("Unsupported URL scheme".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    let status = Command::new("open")
+        .arg(&url)
+        .status()
+        .map_err(|error| error.to_string())?;
+
+    #[cfg(target_os = "linux")]
+    let status = Command::new("xdg-open")
+        .arg(&url)
+        .status()
+        .map_err(|error| error.to_string())?;
+
+    #[cfg(target_os = "windows")]
+    let status = Command::new("cmd")
+        .args(["/C", "start", "", &url])
+        .status()
+        .map_err(|error| error.to_string())?;
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    return Err("Unsupported platform".to_string());
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err("Failed to launch external URL".to_string())
+    }
 }

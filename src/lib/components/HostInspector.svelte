@@ -1,25 +1,68 @@
 <script lang="ts">
   import { BalloonHelp, Button } from '@lkmc/system7-ui';
+  import { TauriService } from '$lib/tauri';
   import type { Host } from '$lib/types';
+  import { notifications } from '$lib/util/notifications';
 
   export let host: Host | null = null;
   export let onDeepScan: ((ip: string) => void) | undefined = undefined;
 
   interface PortTarget {
-    label: 'HTTP' | 'HTTPS' | 'SMB' | 'SSH' | 'FTP';
+    label: 'HTTP' | 'HTTPS' | 'SMB' | 'SSH' | 'FTP' | 'VNC' | 'Telnet' | 'RTSP';
     url: string;
   }
 
-  const httpPorts = new Set([80, 81, 3000, 5000, 8000, 8080, 8081, 8888, 9000]);
-  const httpsPorts = new Set([443, 8443, 9443]);
+  const httpPorts = new Set([
+    80,
+    81,
+    82,
+    88,
+    3000,
+    3001,
+    5000,
+    5601,
+    7001,
+    7080,
+    8000,
+    8008,
+    8080,
+    8081,
+    8088,
+    8090,
+    8181,
+    8880,
+    8888,
+    9000,
+    9080,
+    9090
+  ]);
+  const httpsPorts = new Set([443, 444, 5443, 6443, 7443, 8443, 8843, 9443, 10443]);
+  const smbPorts = new Set([139, 445]);
+  const sshPorts = new Set([22, 2222]);
+  const ftpPorts = new Set([20, 21, 2121]);
+  const vncPorts = new Set([5900, 5901, 5902]);
+  const telnetPorts = new Set([23, 2323]);
+  const rtspPorts = new Set([554, 8554]);
 
   function formatTime(iso: string): string {
-    return new Date(iso).toLocaleString();
+    if (!iso) {
+      return '-';
+    }
+
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) {
+      return '-';
+    }
+
+    return date.toLocaleString();
   }
 
   function getPortTarget(hostIp: string, port: number, service: string | null): PortTarget | null {
     const normalized = (service || '').toLowerCase();
-    const buildUrl = (scheme: 'http' | 'https' | 'ftp', defaultPort: number): string =>
+    const buildUrl = (
+      scheme: 'http' | 'https' | 'ftp' | 'ssh' | 'telnet' | 'rtsp' | 'vnc',
+      defaultPort: number
+    ): string =>
       `${scheme}://${hostIp}${port === defaultPort ? '' : `:${port}`}`;
 
     if (normalized.includes('https') || normalized.includes('ssl/http') || normalized.includes('tls/http')) {
@@ -35,11 +78,23 @@
     }
 
     if (normalized.includes('ssh')) {
-      return { label: 'SSH', url: `ssh://${hostIp}` };
+      return { label: 'SSH', url: buildUrl('ssh', 22) };
     }
 
     if (normalized.includes('ftp')) {
       return { label: 'FTP', url: buildUrl('ftp', 21) };
+    }
+
+    if (normalized.includes('vnc')) {
+      return { label: 'VNC', url: buildUrl('vnc', 5900) };
+    }
+
+    if (normalized.includes('telnet')) {
+      return { label: 'Telnet', url: buildUrl('telnet', 23) };
+    }
+
+    if (normalized.includes('rtsp')) {
+      return { label: 'RTSP', url: buildUrl('rtsp', 554) };
     }
 
     if (httpsPorts.has(port)) {
@@ -50,19 +105,42 @@
       return { label: 'HTTP', url: buildUrl('http', 80) };
     }
 
-    if (port === 445 || port === 139) {
+    if (smbPorts.has(port)) {
       return { label: 'SMB', url: `smb://${hostIp}` };
     }
 
-    if (port === 22) {
-      return { label: 'SSH', url: `ssh://${hostIp}` };
+    if (sshPorts.has(port)) {
+      return { label: 'SSH', url: buildUrl('ssh', 22) };
     }
 
-    if (port === 21) {
+    if (ftpPorts.has(port)) {
       return { label: 'FTP', url: buildUrl('ftp', 21) };
     }
 
+    if (vncPorts.has(port)) {
+      return { label: 'VNC', url: buildUrl('vnc', 5900) };
+    }
+
+    if (telnetPorts.has(port)) {
+      return { label: 'Telnet', url: buildUrl('telnet', 23) };
+    }
+
+    if (rtspPorts.has(port)) {
+      return { label: 'RTSP', url: buildUrl('rtsp', 554) };
+    }
+
     return null;
+  }
+
+  async function openPortTarget(event: MouseEvent, url: string) {
+    event.preventDefault();
+
+    try {
+      await TauriService.openExternalUrl(url);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to open link';
+      notifications.add(message, 'error');
+    }
   }
 </script>
 
@@ -114,24 +192,32 @@
       <ul>
         {#each host.open_ports as port}
           {@const target = getPortTarget(host.ip, port.port, port.service)}
-          <li class="port-item">
-            <div class="port-main">
-              <span class="port-number">{port.port}</span>
-              <span class="port-service">{port.service || 'unknown'}</span>
-            </div>
-
-            {#if target}
+          {#if target}
+            <li>
               <a
-                class="port-link"
+                class="port-item port-item-link"
                 href={target.url}
                 target="_blank"
                 rel="noreferrer noopener"
                 title={target.url}
+                onclick={(event) => openPortTarget(event, target.url)}
               >
-                {target.label}
+                <div class="port-main">
+                  <span class="port-number">{port.port}</span>
+                  <span class="port-service">{port.service || 'unknown'}</span>
+                </div>
+
+                <span class="port-link-label">{target.label}</span>
               </a>
-            {/if}
-          </li>
+            </li>
+          {:else}
+            <li class="port-item">
+              <div class="port-main">
+                <span class="port-number">{port.port}</span>
+                <span class="port-service">{port.service || 'unknown'}</span>
+              </div>
+            </li>
+          {/if}
         {/each}
       </ul>
     {/if}
@@ -187,12 +273,25 @@
     margin-bottom: 6px;
   }
 
+  .port-item-link {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .port-item-link:hover,
+  .port-item-link:focus-visible {
+    background: #000;
+    color: #fff;
+    outline: none;
+  }
+
   .port-main {
     display: flex;
     align-items: center;
     gap: 8px;
     min-width: 0;
     overflow: hidden;
+    flex: 1;
   }
 
   .port-number {
@@ -205,15 +304,11 @@
     text-overflow: ellipsis;
   }
 
-  .port-link {
+  .port-link-label {
     margin-left: auto;
     color: inherit;
     text-decoration: underline;
-  }
-
-  .port-link:hover {
-    color: #fff;
-    background: #000;
+    flex: 0 0 auto;
   }
 
   .plain-list {

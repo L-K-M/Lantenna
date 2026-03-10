@@ -9,6 +9,8 @@ interface ScanStoreState {
   selectedInterface: string | null;
   portProfile: PortProfile;
   hosts: Host[];
+  favoriteIps: string[];
+  staleFavoriteIps: string[];
   progress: ScanProgress | null;
   scanning: boolean;
   loading: boolean;
@@ -18,11 +20,127 @@ interface ScanStoreState {
   lastScanAt: string | null;
 }
 
+type FavoriteHostSnapshots = Record<string, Host>;
+
+const FAVORITE_IPS_STORAGE_KEY = 'lantenna.favoriteIps';
+const FAVORITE_HOSTS_STORAGE_KEY = 'lantenna.favoriteHosts';
+
+function canUseStorage(): boolean {
+  return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+}
+
+function loadFavoriteIps(): string[] {
+  if (!canUseStorage()) {
+    return [];
+  }
+
+  try {
+    const raw = window.localStorage.getItem(FAVORITE_IPS_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter((item): item is string => typeof item === 'string');
+  } catch {
+    return [];
+  }
+}
+
+function saveFavoriteIps(favoriteIps: string[]) {
+  if (!canUseStorage()) {
+    return;
+  }
+
+  window.localStorage.setItem(FAVORITE_IPS_STORAGE_KEY, JSON.stringify(favoriteIps));
+}
+
+function loadFavoriteHostSnapshots(): FavoriteHostSnapshots {
+  if (!canUseStorage()) {
+    return {};
+  }
+
+  try {
+    const raw = window.localStorage.getItem(FAVORITE_HOSTS_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return {};
+    }
+
+    return parsed as FavoriteHostSnapshots;
+  } catch {
+    return {};
+  }
+}
+
+function saveFavoriteHostSnapshots(snapshots: FavoriteHostSnapshots) {
+  if (!canUseStorage()) {
+    return;
+  }
+
+  window.localStorage.setItem(FAVORITE_HOSTS_STORAGE_KEY, JSON.stringify(snapshots));
+}
+
+function normalizeFavoriteIps(favoriteIps: string[]): string[] {
+  const unique = Array.from(new Set(favoriteIps));
+  return unique.sort((a, b) => ipToNumber(a) - ipToNumber(b));
+}
+
+function makeFallbackHost(ip: string): Host {
+  return {
+    ip,
+    name: null,
+    reachable: false,
+    open_ports: [],
+    last_seen: '',
+    fingerprint: null
+  };
+}
+
+function mergeStaleFavoritesIntoHosts(
+  hosts: Host[],
+  staleFavoriteIps: string[],
+  snapshots: FavoriteHostSnapshots
+): Host[] {
+  const nextHosts = [...hosts];
+  const existingIps = new Set(hosts.map((host) => host.ip));
+
+  for (const ip of staleFavoriteIps) {
+    if (existingIps.has(ip)) {
+      continue;
+    }
+
+    const snapshot = snapshots[ip];
+    nextHosts.push(snapshot ? { ...snapshot, ip } : makeFallbackHost(ip));
+  }
+
+  return sortHosts(nextHosts);
+}
+
+function calculateStaleFavoriteIps(favoriteIps: string[], hosts: Host[]): string[] {
+  const visibleIps = new Set(hosts.map((host) => host.ip));
+  return favoriteIps.filter((ip) => !visibleIps.has(ip));
+}
+
+const initialFavoriteIps = normalizeFavoriteIps(loadFavoriteIps());
+const initialFavoriteHostSnapshots = loadFavoriteHostSnapshots();
+const initialStaleFavoriteIps = [...initialFavoriteIps];
+
 const initialState: ScanStoreState = {
   interfaces: [],
   selectedInterface: null,
   portProfile: 'quick',
-  hosts: [],
+  hosts: mergeStaleFavoritesIntoHosts([], initialStaleFavoriteIps, initialFavoriteHostSnapshots),
+  favoriteIps: initialFavoriteIps,
+  staleFavoriteIps: initialStaleFavoriteIps,
   progress: null,
   scanning: false,
   loading: false,
@@ -59,6 +177,19 @@ function upsertHost(hosts: Host[], host: Host): Host[] {
 function createScanStore() {
   const { subscribe, update } = writable<ScanStoreState>(initialState);
   let currentState = initialState;
+  let favoriteHostSnapshots: FavoriteHostSnapshots = { ...initialFavoriteHostSnapshots };
+
+  function rememberFavoriteHost(host: Host, favoriteIps: string[]) {
+    if (!favoriteIps.includes(host.ip)) {
+      return;
+    }
+
+    favoriteHostSnapshots = {
+      ...favoriteHostSnapshots,
+      [host.ip]: host
+    };
+    saveFavoriteHostSnapshots(favoriteHostSnapshots);
+  }
 
   subscribe((state) => {
     currentState = state;
@@ -74,7 +205,17 @@ function createScanStore() {
 
     unlisteners.push(
       await listen<Host>('host-found', (event) => {
-        update((state) => ({ ...state, hosts: upsertHost(state.hosts, event.payload) }));
+        update((state) => {
+          rememberFavoriteHost(event.payload, state.favoriteIps);
+          const staleFavoriteIps = state.staleFavoriteIps.filter((ip) => ip !== event.payload.ip);
+          const hosts = upsertHost(state.hosts, event.payload);
+
+          return {
+            ...state,
+            hosts: mergeStaleFavoritesIntoHosts(hosts, staleFavoriteIps, favoriteHostSnapshots),
+            staleFavoriteIps
+          };
+        });
       })
     );
 
@@ -90,22 +231,32 @@ function createScanStore() {
 
     unlisteners.push(
       await listen<ScanResult>('scan-complete', (event) => {
-        update((state) => ({
-          ...state,
-          hosts: sortHosts(event.payload.hosts),
-          scanning: false,
-          progress: state.progress
-            ? { ...state.progress, running: false, current_ip: null }
-            : {
-                scanned: event.payload.hosts.length,
-                total: event.payload.hosts.length,
-                found: event.payload.hosts.length,
-                running: false,
-                current_ip: null
-              },
-          lastScanAt: event.payload.completed_at,
-          error: null
-        }));
+        update((state) => {
+          const scannedHosts = sortHosts(event.payload.hosts);
+          for (const host of scannedHosts) {
+            rememberFavoriteHost(host, state.favoriteIps);
+          }
+
+          const staleFavoriteIps = calculateStaleFavoriteIps(state.favoriteIps, scannedHosts);
+
+          return {
+            ...state,
+            hosts: mergeStaleFavoritesIntoHosts(scannedHosts, staleFavoriteIps, favoriteHostSnapshots),
+            staleFavoriteIps,
+            scanning: false,
+            progress: state.progress
+              ? { ...state.progress, running: false, current_ip: null }
+              : {
+                  scanned: event.payload.hosts.length,
+                  total: event.payload.hosts.length,
+                  found: event.payload.hosts.length,
+                  running: false,
+                  current_ip: null
+                },
+            lastScanAt: event.payload.completed_at,
+            error: null
+          };
+        });
         notifications.add(`Scan complete: ${event.payload.hosts.length} hosts found.`, 'success');
       })
     );
@@ -133,15 +284,25 @@ function createScanStore() {
           TauriService.getScanResults()
         ]);
 
-        update((state) => ({
-          ...state,
-          interfaces,
-          selectedInterface: state.selectedInterface || interfaces[0]?.name || null,
-          hosts: previous ? sortHosts(previous.hosts) : state.hosts,
-          lastScanAt: previous?.completed_at || state.lastScanAt,
-          loading: false,
-          error: null
-        }));
+        update((state) => {
+          const knownHosts = previous ? sortHosts(previous.hosts) : [];
+          for (const host of knownHosts) {
+            rememberFavoriteHost(host, state.favoriteIps);
+          }
+
+          const staleFavoriteIps = calculateStaleFavoriteIps(state.favoriteIps, knownHosts);
+
+          return {
+            ...state,
+            interfaces,
+            selectedInterface: state.selectedInterface || interfaces[0]?.name || null,
+            hosts: mergeStaleFavoritesIntoHosts(knownHosts, staleFavoriteIps, favoriteHostSnapshots),
+            staleFavoriteIps,
+            lastScanAt: previous?.completed_at || state.lastScanAt,
+            loading: false,
+            error: null
+          };
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to initialize scanner';
         update((state) => ({ ...state, loading: false, error: message }));
@@ -166,6 +327,55 @@ function createScanStore() {
     setQuery: (query: string) => {
       update((state) => ({ ...state, query }));
     },
+    toggleFavorite: (ip: string) => {
+      update((state) => {
+        const currentlyFavorite = state.favoriteIps.includes(ip);
+
+        if (currentlyFavorite) {
+          const favoriteIps = normalizeFavoriteIps(state.favoriteIps.filter((item) => item !== ip));
+          const staleFavoriteIps = state.staleFavoriteIps.filter((item) => item !== ip);
+
+          const snapshots = { ...favoriteHostSnapshots };
+          delete snapshots[ip];
+          favoriteHostSnapshots = snapshots;
+
+          saveFavoriteIps(favoriteIps);
+          saveFavoriteHostSnapshots(favoriteHostSnapshots);
+
+          const hosts = state.staleFavoriteIps.includes(ip)
+            ? state.hosts.filter((host) => host.ip !== ip)
+            : state.hosts;
+
+          return {
+            ...state,
+            favoriteIps,
+            staleFavoriteIps,
+            hosts: sortHosts(hosts)
+          };
+        }
+
+        const favoriteIps = normalizeFavoriteIps([...state.favoriteIps, ip]);
+        const staleFavoriteIps = state.staleFavoriteIps.includes(ip)
+          ? state.staleFavoriteIps
+          : state.hosts.some((host) => host.ip === ip)
+            ? state.staleFavoriteIps
+            : [...state.staleFavoriteIps, ip];
+
+        const host = state.hosts.find((item) => item.ip === ip);
+        if (host) {
+          rememberFavoriteHost(host, favoriteIps);
+        }
+
+        saveFavoriteIps(favoriteIps);
+
+        return {
+          ...state,
+          favoriteIps,
+          staleFavoriteIps,
+          hosts: mergeStaleFavoritesIntoHosts(state.hosts, staleFavoriteIps, favoriteHostSnapshots)
+        };
+      });
+    },
     setSelectedHost: (ip: string | null) => {
       update((state) => ({ ...state, selectedHostIp: ip }));
     },
@@ -178,19 +388,24 @@ function createScanStore() {
         return;
       }
 
-      update((next) => ({
-        ...next,
-        scanning: true,
-        error: null,
-        hosts: [],
-        progress: {
-          scanned: 0,
-          total: 0,
-          found: 0,
-          running: true,
-          current_ip: null
-        }
-      }));
+      update((next) => {
+        const staleFavoriteIps = [...next.favoriteIps];
+
+        return {
+          ...next,
+          scanning: true,
+          error: null,
+          hosts: mergeStaleFavoritesIntoHosts([], staleFavoriteIps, favoriteHostSnapshots),
+          staleFavoriteIps,
+          progress: {
+            scanned: 0,
+            total: 0,
+            found: 0,
+            running: true,
+            current_ip: null
+          }
+        };
+      });
 
       try {
         const timeoutByProfile: Record<PortProfile, number> = {
@@ -226,7 +441,20 @@ function createScanStore() {
     refreshHostPorts: async (ip: string, profile: PortProfile = 'deep') => {
       try {
         const host = await TauriService.scanHostPorts(ip, profile);
-        update((state) => ({ ...state, hosts: upsertHost(state.hosts, host) }));
+        update((state) => {
+          rememberFavoriteHost(host, state.favoriteIps);
+          const staleFavoriteIps = state.staleFavoriteIps.filter((item) => item !== host.ip);
+
+          return {
+            ...state,
+            staleFavoriteIps,
+            hosts: mergeStaleFavoritesIntoHosts(
+              upsertHost(state.hosts, host),
+              staleFavoriteIps,
+              favoriteHostSnapshots
+            )
+          };
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to scan host ports';
         notifications.add(message, 'error');

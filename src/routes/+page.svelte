@@ -19,6 +19,8 @@
     selectedInterface,
     portProfile,
     hosts,
+    favoriteIps,
+    staleFavoriteIps,
     progress,
     scanning,
     loading,
@@ -111,7 +113,10 @@
           hosts={filteredHosts}
           loading={loading || scanning}
           {selectedHostIp}
+          {favoriteIps}
+          {staleFavoriteIps}
           onSelectHost={(ip) => scanStore.setSelectedHost(ip)}
+          onToggleFavorite={(ip) => scanStore.toggleFavorite(ip)}
         />
         <HostInspector host={selectedHost} onDeepScan={(ip) => scanStore.refreshHostPorts(ip, 'deep')} />
       </section>
