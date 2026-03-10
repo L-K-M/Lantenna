@@ -5,7 +5,22 @@
   import { notifications } from '$lib/util/notifications';
 
   export let host: Host | null = null;
+  export let customNames: Record<string, string> = {};
   export let onDeepScan: ((ip: string) => void) | undefined = undefined;
+  export let onSetCustomName: ((ip: string, name: string) => void) | undefined = undefined;
+
+  let customNameDraft = '';
+  let customNameDraftIp: string | null = null;
+
+  $: selectedCustomName = host ? customNames[host.ip] || '' : '';
+
+  $: if (!host) {
+    customNameDraft = '';
+    customNameDraftIp = null;
+  } else if (customNameDraftIp !== host.ip) {
+    customNameDraft = selectedCustomName;
+    customNameDraftIp = host.ip;
+  }
 
   interface PortTarget {
     label: 'HTTP' | 'HTTPS' | 'SMB' | 'SSH' | 'FTP' | 'VNC' | 'Telnet' | 'RTSP';
@@ -142,16 +157,66 @@
       notifications.add(message, 'error');
     }
   }
+
+  function displayName(hostValue: Host): string {
+    return customNames[hostValue.ip]?.trim() || hostValue.name || 'Unknown';
+  }
+
+  function saveCustomName() {
+    if (!host) {
+      return;
+    }
+
+    customNameDraft = customNameDraft.trim();
+    onSetCustomName?.(host.ip, customNameDraft);
+  }
+
+  function clearCustomName() {
+    if (!host) {
+      return;
+    }
+
+    customNameDraft = '';
+    onSetCustomName?.(host.ip, '');
+  }
+
+  function handleCustomNameKeydown(event: KeyboardEvent) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      saveCustomName();
+    }
+  }
 </script>
 
 <aside class="inspector">
   {#if host}
     {@const fp = host.fingerprint}
+    {@const displayHostName = displayName(host)}
     <h3>Host Details</h3>
     <div class="kv"><span>IP</span><span>{host.ip}</span></div>
-    <div class="kv"><span>Name</span><span>{host.name || 'Unknown'}</span></div>
+    <div class="kv"><span>Name</span><span>{displayHostName}</span></div>
+    {#if selectedCustomName && host.name && host.name !== selectedCustomName}
+      <div class="kv"><span>Detected Name</span><span>{host.name}</span></div>
+    {/if}
     <div class="kv"><span>Reachable</span><span>{host.reachable ? 'Yes' : 'No'}</span></div>
     <div class="kv"><span>Last Seen</span><span>{formatTime(host.last_seen)}</span></div>
+
+    <div class="name-editor">
+      <label for="custom-name-input">Custom Name</label>
+      <div class="name-editor-controls">
+        <input
+          id="custom-name-input"
+          type="text"
+          bind:value={customNameDraft}
+          placeholder="Set a friendly device name"
+          onkeydown={handleCustomNameKeydown}
+        />
+        <Button onclick={saveCustomName}>Save</Button>
+        {#if selectedCustomName || customNameDraft.trim()}
+          <Button onclick={clearCustomName}>Clear</Button>
+        {/if}
+      </div>
+    </div>
 
     <div class="actions">
       <BalloonHelp message="Run a deeper scan for this host">
@@ -256,6 +321,22 @@
 
   .actions {
     margin-top: 10px;
+  }
+
+  .name-editor {
+    margin-top: 10px;
+  }
+
+  .name-editor-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+  }
+
+  .name-editor-controls input {
+    flex: 1;
+    min-width: 0;
   }
 
   ul {

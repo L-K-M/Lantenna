@@ -19,6 +19,7 @@
     selectedInterface,
     portProfile,
     hosts,
+    customNames,
     favoriteIps,
     staleFavoriteIps,
     progress,
@@ -35,7 +36,12 @@
     }
 
     const needle = query.toLowerCase();
-    return host.ip.includes(needle) || (host.name || '').toLowerCase().includes(needle);
+    const customName = (customNames[host.ip] || '').toLowerCase();
+    return (
+      host.ip.includes(needle) ||
+      (host.name || '').toLowerCase().includes(needle) ||
+      customName.includes(needle)
+    );
   });
 
   $: selectedHost = hosts.find((host) => host.ip === selectedHostIp) || null;
@@ -113,12 +119,18 @@
           hosts={filteredHosts}
           loading={loading || scanning}
           {selectedHostIp}
+          {customNames}
           {favoriteIps}
           {staleFavoriteIps}
           onSelectHost={(ip) => scanStore.setSelectedHost(ip)}
           onToggleFavorite={(ip) => scanStore.toggleFavorite(ip)}
         />
-        <HostInspector host={selectedHost} onDeepScan={(ip) => scanStore.refreshHostPorts(ip, 'deep')} />
+        <HostInspector
+          host={selectedHost}
+          {customNames}
+          onSetCustomName={(ip, name) => scanStore.setCustomName(ip, name)}
+          onDeepScan={(ip) => scanStore.refreshHostPorts(ip, 'deep')}
+        />
       </section>
     </main>
 

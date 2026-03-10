@@ -1,9 +1,21 @@
 <script lang="ts">
   import type { Host } from '$lib/types';
+  import cameraIcon from '$lib/assets/host-icons/camera.svg';
+  import iotIcon from '$lib/assets/host-icons/iot.svg';
+  import mediaIcon from '$lib/assets/host-icons/media.svg';
+  import mobileIcon from '$lib/assets/host-icons/mobile.svg';
+  import pcGenericIcon from '$lib/assets/host-icons/pc-generic.svg';
+  import pcLinuxIcon from '$lib/assets/host-icons/pc-linux.svg';
+  import pcMacIcon from '$lib/assets/host-icons/pc-mac.svg';
+  import pcWindowsIcon from '$lib/assets/host-icons/pc-windows.svg';
+  import printerIcon from '$lib/assets/host-icons/printer.svg';
+  import routerIcon from '$lib/assets/host-icons/router.svg';
+  import serverIcon from '$lib/assets/host-icons/server.svg';
 
   export let hosts: Host[] = [];
   export let loading = false;
   export let selectedHostIp: string | null = null;
+  export let customNames: Record<string, string> = {};
   export let favoriteIps: string[] = [];
   export let staleFavoriteIps: string[] = [];
   export let onSelectHost: ((ip: string) => void) | undefined = undefined;
@@ -13,11 +25,11 @@
   type SortDirection = 'asc' | 'desc';
 
   interface IconInfo {
-    symbol: string;
+    src: string;
     label: string;
   }
 
-  let sortField: SortField = 'ip';
+  let sortField: SortField = 'favorite';
   let sortDirection: SortDirection = 'asc';
 
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
@@ -72,7 +84,7 @@
       case 'favorite':
         return Number(favorites.has(b.ip)) - Number(favorites.has(a.ip));
       case 'name':
-        return collator.compare(a.name || '', b.name || '');
+        return collator.compare(displayName(a), displayName(b));
       case 'fingerprint':
         return collator.compare(formatFingerprint(a), formatFingerprint(b));
       case 'ports':
@@ -138,68 +150,64 @@
     return favoriteSet.has(ip) ? `Unfavorite ${ip}` : `Favorite ${ip}`;
   }
 
-  function getTypeIcon(host: Host): IconInfo {
+  function displayName(host: Host): string {
+    const customName = customNames[host.ip]?.trim() || '';
+    return customName || host.name || 'Unknown';
+  }
+
+  function getHostIcon(host: Host): IconInfo {
     const source = `${host.fingerprint?.device_type || ''} ${host.fingerprint?.model_guess || ''} ${host.name || ''}`.toLowerCase();
+    const os = (host.fingerprint?.os_guess || '').toLowerCase();
 
     if (source.includes('router') || source.includes('gateway') || source.includes('modem') || source.includes('access point') || source.includes('switch') || source.includes('firewall')) {
-      return { symbol: '\u{1F4E1}', label: 'Network device' };
+      return { src: routerIcon, label: 'Network device' };
     }
 
     if (source.includes('phone') || source.includes('mobile') || source.includes('tablet')) {
-      return { symbol: '\u{1F4F1}', label: 'Mobile device' };
+      return { src: mobileIcon, label: 'Mobile device' };
     }
 
     if (source.includes('camera')) {
-      return { symbol: '\u{1F4F7}', label: 'Camera' };
+      return { src: cameraIcon, label: 'Camera' };
     }
 
     if (source.includes('printer')) {
-      return { symbol: '\u{1F5A8}', label: 'Printer' };
+      return { src: printerIcon, label: 'Printer' };
     }
 
     if (source.includes('tv') || source.includes('media')) {
-      return { symbol: '\u{1F4FA}', label: 'TV / media device' };
+      return { src: mediaIcon, label: 'TV / media device' };
     }
 
     if (source.includes('nas') || source.includes('server') || source.includes('storage')) {
-      return { symbol: '\u{1F5C4}', label: 'Server / storage' };
+      return { src: serverIcon, label: 'Server / storage' };
     }
 
     if (source.includes('iot') || source.includes('smart')) {
-      return { symbol: '\u{1F50C}', label: 'IoT device' };
+      return { src: iotIcon, label: 'IoT device' };
     }
-
-    if (source.includes('laptop') || source.includes('notebook')) {
-      return { symbol: '\u{1F4BB}', label: 'Laptop' };
-    }
-
-    return { symbol: '\u{1F5A5}', label: 'Computer' };
-  }
-
-  function getOsIcon(host: Host): IconInfo {
-    const os = (host.fingerprint?.os_guess || '').toLowerCase();
 
     if (os.includes('windows')) {
-      return { symbol: '\u{1FA9F}', label: 'Windows' };
+      return { src: pcWindowsIcon, label: 'Windows host' };
     }
 
     if (os.includes('mac') || os.includes('ios') || os.includes('darwin')) {
-      return { symbol: '\u{1F34E}', label: 'Apple OS' };
+      return { src: pcMacIcon, label: 'Apple host' };
     }
 
     if (os.includes('linux') || os.includes('ubuntu') || os.includes('debian') || os.includes('fedora') || os.includes('centos') || os.includes('arch')) {
-      return { symbol: '\u{1F427}', label: 'Linux' };
+      return { src: pcLinuxIcon, label: 'Linux host' };
     }
 
     if (os.includes('android')) {
-      return { symbol: '\u{1F916}', label: 'Android' };
+      return { src: mobileIcon, label: 'Android host' };
     }
 
     if (os.includes('bsd') || os.includes('unix')) {
-      return { symbol: '\u2699', label: 'Unix / BSD' };
+      return { src: pcLinuxIcon, label: 'Unix / BSD host' };
     }
 
-    return { symbol: '\u25A1', label: 'Unknown OS' };
+    return { src: pcGenericIcon, label: 'Unknown host' };
   }
 </script>
 
@@ -212,15 +220,6 @@
             <div class="ip-header">
               <button
                 type="button"
-                class="sort-button"
-                class:sorted={sortField === 'ip'}
-                onclick={() => setSort('ip')}
-              >
-                IP
-              </button>
-
-              <button
-                type="button"
                 class="favorite-sort"
                 class:sorted={sortField === 'favorite'}
                 onclick={() => setSort('favorite')}
@@ -230,6 +229,15 @@
                 <svg viewBox="0 0 16 16" role="img" focusable="false" aria-hidden="true">
                   <path d="M8 1.5l2 4 4.5.6-3.3 3.1.8 4.8L8 12l-4 2 0.8-4.8L1.5 6.1l4.5-.6L8 1.5z" />
                 </svg>
+              </button>
+
+              <button
+                type="button"
+                class="sort-button"
+                class:sorted={sortField === 'ip'}
+                onclick={() => setSort('ip')}
+              >
+                IP
               </button>
             </div>
           </th>
@@ -291,8 +299,7 @@
           </tr>
         {:else}
           {#each sortedHosts as host}
-            {@const typeIcon = getTypeIcon(host)}
-            {@const osIcon = getOsIcon(host)}
+            {@const hostIcon = getHostIcon(host)}
 
             <!-- svelte-ignore a11y-click-events-have-key-events -->
             <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -315,17 +322,12 @@
                       <path d="M8 1.5l2 4 4.5.6-3.3 3.1.8 4.8L8 12l-4 2 0.8-4.8L1.5 6.1l4.5-.6L8 1.5z" />
                     </svg>
                   </button>
+                  <img class="device-icon" src={hostIcon.src} alt="" aria-hidden="true" title={hostIcon.label} />
                   <span class="ip-text">{host.ip}</span>
                 </div>
               </td>
               <td class="col-name">
-                <div class="name-cell">
-                  <span class="host-icons" title={`${typeIcon.label}, ${osIcon.label}`}>
-                    <span class="host-icon">{typeIcon.symbol}</span>
-                    <span class="host-icon">{osIcon.symbol}</span>
-                  </span>
-                  <span class="host-name">{host.name || 'Unknown'}</span>
-                </div>
+                <span class="host-name">{displayName(host)}</span>
               </td>
               <td class="col-fingerprint">{formatFingerprint(host)}</td>
               <td class="col-ports">{formatPorts(host)}</td>
@@ -382,6 +384,8 @@
   th {
     font-weight: normal;
     border-bottom: none;
+    white-space: nowrap;
+    overflow: hidden;
   }
 
   .sort-button {
@@ -397,6 +401,12 @@
     padding: 0;
     cursor: pointer;
     text-decoration: none;
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
   }
 
   .sort-button.sorted {
@@ -407,6 +417,12 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
+  }
+
+  .ip-header .sort-button {
+    flex: 1;
+    min-width: 0;
   }
 
   .favorite-sort,
@@ -450,9 +466,9 @@
   }
 
   .col-ip {
-    width: 140px;
-    min-width: 140px;
-    max-width: 140px;
+    width: 160px;
+    min-width: 160px;
+    max-width: 160px;
   }
 
   .col-name {
@@ -476,12 +492,18 @@
     max-width: 100px;
   }
 
-  .ip-cell,
-  .name-cell {
+  .ip-cell {
     display: flex;
     align-items: center;
     gap: 6px;
     min-width: 0;
+  }
+
+  .device-icon {
+    width: 16px;
+    height: 16px;
+    image-rendering: pixelated;
+    flex: 0 0 auto;
   }
 
   .ip-text,
@@ -489,21 +511,6 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-
-  .host-icons {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    flex: 0 0 auto;
-  }
-
-  .host-icon {
-    width: 14px;
-    display: inline-flex;
-    justify-content: center;
-    align-items: center;
-    line-height: 1;
   }
 
   tr {

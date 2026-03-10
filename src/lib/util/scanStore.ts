@@ -9,6 +9,7 @@ interface ScanStoreState {
   selectedInterface: string | null;
   portProfile: PortProfile;
   hosts: Host[];
+  customNames: Record<string, string>;
   favoriteIps: string[];
   staleFavoriteIps: string[];
   progress: ScanProgress | null;
@@ -24,6 +25,7 @@ type FavoriteHostSnapshots = Record<string, Host>;
 
 const FAVORITE_IPS_STORAGE_KEY = 'lantenna.favoriteIps';
 const FAVORITE_HOSTS_STORAGE_KEY = 'lantenna.favoriteHosts';
+const CUSTOM_NAMES_STORAGE_KEY = 'lantenna.customNames';
 
 function canUseStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
@@ -94,6 +96,40 @@ function normalizeFavoriteIps(favoriteIps: string[]): string[] {
   return unique.sort((a, b) => ipToNumber(a) - ipToNumber(b));
 }
 
+function loadCustomNames(): Record<string, string> {
+  if (!canUseStorage()) {
+    return {};
+  }
+
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_NAMES_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return {};
+    }
+
+    const entries = Object.entries(parsed).filter(
+      (entry): entry is [string, string] => typeof entry[0] === 'string' && typeof entry[1] === 'string'
+    );
+
+    return Object.fromEntries(entries);
+  } catch {
+    return {};
+  }
+}
+
+function saveCustomNames(customNames: Record<string, string>) {
+  if (!canUseStorage()) {
+    return;
+  }
+
+  window.localStorage.setItem(CUSTOM_NAMES_STORAGE_KEY, JSON.stringify(customNames));
+}
+
 function makeFallbackHost(ip: string): Host {
   return {
     ip,
@@ -133,12 +169,14 @@ function calculateStaleFavoriteIps(favoriteIps: string[], hosts: Host[]): string
 const initialFavoriteIps = normalizeFavoriteIps(loadFavoriteIps());
 const initialFavoriteHostSnapshots = loadFavoriteHostSnapshots();
 const initialStaleFavoriteIps = [...initialFavoriteIps];
+const initialCustomNames = loadCustomNames();
 
 const initialState: ScanStoreState = {
   interfaces: [],
   selectedInterface: null,
   portProfile: 'quick',
   hosts: mergeStaleFavoritesIntoHosts([], initialStaleFavoriteIps, initialFavoriteHostSnapshots),
+  customNames: initialCustomNames,
   favoriteIps: initialFavoriteIps,
   staleFavoriteIps: initialStaleFavoriteIps,
   progress: null,
@@ -326,6 +364,25 @@ function createScanStore() {
     },
     setQuery: (query: string) => {
       update((state) => ({ ...state, query }));
+    },
+    setCustomName: (ip: string, nextName: string) => {
+      update((state) => {
+        const trimmed = nextName.trim();
+        const customNames = { ...state.customNames };
+
+        if (trimmed.length === 0) {
+          delete customNames[ip];
+        } else {
+          customNames[ip] = trimmed;
+        }
+
+        saveCustomNames(customNames);
+
+        return {
+          ...state,
+          customNames
+        };
+      });
     },
     toggleFavorite: (ip: string) => {
       update((state) => {
