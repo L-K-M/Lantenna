@@ -2,6 +2,7 @@
   import type { Host } from '$lib/types';
   import cameraIcon from '$lib/assets/host-icons/camera.svg';
   import iotIcon from '$lib/assets/host-icons/iot.svg';
+  import kvmIcon from '$lib/assets/host-icons/kvm.svg';
   import mediaIcon from '$lib/assets/host-icons/media.svg';
   import mobileIcon from '$lib/assets/host-icons/mobile.svg';
   import pcGenericIcon from '$lib/assets/host-icons/pc-generic.svg';
@@ -155,56 +156,144 @@
     return customName || host.name || 'Unknown';
   }
 
+  function includesAny(haystack: string, needles: string[]): boolean {
+    return needles.some((needle) => haystack.includes(needle));
+  }
+
+  function normalizeHintText(value: string): string {
+    return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  }
+
+  function isWindowsLike(os: string): boolean {
+    return includesAny(os, ['windows', 'microsoft', 'win32', 'win64']);
+  }
+
+  function isMacLike(os: string): boolean {
+    return includesAny(os, ['mac', 'darwin', 'os x', 'ios']);
+  }
+
+  function isLinuxLike(os: string): boolean {
+    return includesAny(os, ['linux', 'ubuntu', 'debian', 'fedora', 'centos', 'arch', 'red hat', 'unix', 'bsd']);
+  }
+
   function getHostIcon(host: Host): IconInfo {
-    const source = `${host.fingerprint?.device_type || ''} ${host.fingerprint?.model_guess || ''} ${host.name || ''}`.toLowerCase();
-    const os = (host.fingerprint?.os_guess || '').toLowerCase();
+    const customName = customNames[host.ip] || '';
+    const fp = host.fingerprint;
+    const nameHints = normalizeHintText(`${customName} ${host.name || ''}`);
+    const deviceType = normalizeHintText(fp?.device_type || '');
+    const modelHints = normalizeHintText(`${fp?.model_guess || ''} ${fp?.vendor || ''} ${fp?.manufacturer || ''}`);
+    const os = normalizeHintText(fp?.os_guess || '');
+    const allHints = `${nameHints} ${deviceType} ${modelHints} ${os}`;
 
-    if (source.includes('router') || source.includes('gateway') || source.includes('modem') || source.includes('access point') || source.includes('switch') || source.includes('firewall')) {
-      return { src: routerIcon, label: 'Network device' };
-    }
+    const hasRtspLikePort = host.open_ports.some(
+      (port) =>
+        port.port === 554 ||
+        port.port === 8554 ||
+        (port.service || '').toLowerCase().includes('rtsp') ||
+        (port.service || '').toLowerCase().includes('onvif')
+    );
 
-    if (source.includes('phone') || source.includes('mobile') || source.includes('tablet')) {
-      return { src: mobileIcon, label: 'Mobile device' };
-    }
+    const hasKvmLikePort = host.open_ports.some(
+      (port) =>
+        [5900, 5901, 5902, 623].includes(port.port) ||
+        (port.service || '').toLowerCase().includes('vnc') ||
+        (port.service || '').toLowerCase().includes('ipmi')
+    );
 
-    if (source.includes('camera')) {
+    if (
+      /\bcam\b/.test(nameHints) ||
+      includesAny(allHints, [
+        'camera',
+        'webcam',
+        'ipcam',
+        'cctv',
+        'hikvision',
+        'reolink',
+        'dahua',
+        'axis',
+        'onvif'
+      ]) ||
+      hasRtspLikePort
+    ) {
       return { src: cameraIcon, label: 'Camera' };
     }
 
-    if (source.includes('printer')) {
+    if (
+      includesAny(allHints, ['kvm', 'pikvm', 'ipkvm', 'ipmi', 'idrac', 'ilo', 'bmc']) ||
+      hasKvmLikePort
+    ) {
+      return { src: kvmIcon, label: 'KVM device' };
+    }
+
+    if (
+      includesAny(allHints, [
+        'rt ax',
+        'rt ac',
+        'rt be',
+        'router',
+        'gateway',
+        'access point',
+        'wifi',
+        'wi fi',
+        'wlan',
+        'mesh',
+        'fritzbox',
+        'unifi',
+        'openwrt',
+        'dd wrt',
+        'modem',
+        'firewall',
+        'switch'
+      ])
+    ) {
+      return { src: routerIcon, label: 'Network device' };
+    }
+
+    if (includesAny(allHints, ['phone', 'mobile', 'tablet', 'iphone', 'ipad', 'pixel', 'galaxy'])) {
+      return { src: mobileIcon, label: 'Mobile device' };
+    }
+
+    if (includesAny(allHints, ['printer', 'laserjet', 'deskjet', 'officejet', 'epson', 'brother'])) {
       return { src: printerIcon, label: 'Printer' };
     }
 
-    if (source.includes('tv') || source.includes('media')) {
+    if (includesAny(allHints, ['tv', 'appletv', 'apple tv', 'chromecast', 'roku', 'fire tv', 'media'])) {
       return { src: mediaIcon, label: 'TV / media device' };
     }
 
-    if (source.includes('nas') || source.includes('server') || source.includes('storage')) {
-      return { src: serverIcon, label: 'Server / storage' };
-    }
-
-    if (source.includes('iot') || source.includes('smart')) {
-      return { src: iotIcon, label: 'IoT device' };
-    }
-
-    if (os.includes('windows')) {
-      return { src: pcWindowsIcon, label: 'Windows host' };
-    }
-
-    if (os.includes('mac') || os.includes('ios') || os.includes('darwin')) {
+    if (includesAny(nameHints, ['macbook', 'imac', 'mac mini', 'mac studio']) || /\bmac\b/.test(nameHints)) {
       return { src: pcMacIcon, label: 'Apple host' };
     }
 
-    if (os.includes('linux') || os.includes('ubuntu') || os.includes('debian') || os.includes('fedora') || os.includes('centos') || os.includes('arch')) {
+    if (
+      (includesAny(deviceType, ['workstation', 'server']) || includesAny(allHints, ['workstation', 'server'])) &&
+      isWindowsLike(os)
+    ) {
+      return { src: pcWindowsIcon, label: 'Windows workstation/server' };
+    }
+
+    if (includesAny(allHints, ['nas', 'synology', 'qnap', 'truenas', 'freenas', 'storage'])) {
+      return { src: serverIcon, label: 'Server / storage' };
+    }
+
+    if (includesAny(allHints, ['iot', 'smart', 'esphome', 'tasmota', 'shelly', 'zigbee', 'zwave'])) {
+      return { src: iotIcon, label: 'IoT device' };
+    }
+
+    if (isWindowsLike(os)) {
+      return { src: pcWindowsIcon, label: 'Windows host' };
+    }
+
+    if (isMacLike(os)) {
+      return { src: pcMacIcon, label: 'Apple host' };
+    }
+
+    if (isLinuxLike(os)) {
       return { src: pcLinuxIcon, label: 'Linux host' };
     }
 
-    if (os.includes('android')) {
+    if (includesAny(os, ['android'])) {
       return { src: mobileIcon, label: 'Android host' };
-    }
-
-    if (os.includes('bsd') || os.includes('unix')) {
-      return { src: pcLinuxIcon, label: 'Unix / BSD host' };
     }
 
     return { src: pcGenericIcon, label: 'Unknown host' };
