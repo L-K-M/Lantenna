@@ -1,7 +1,8 @@
 # Lantenna
 
-Lantenna is a Tauri-based macOS app that scans the local LAN and displays discovered hosts, host names, and open ports.
+Lantenna is a Tauri-based Mac OS X program that scans the local LAN and displays discovered hosts, host names, and open ports.
 
+![Screenshot of Lantenna showing a list of discovered hosts with their IP addresses, host names, and open ports](./media-sources/screenshot.png)
 
 ## Installation
 
