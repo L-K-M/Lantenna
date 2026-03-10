@@ -5,8 +5,64 @@
   export let host: Host | null = null;
   export let onDeepScan: ((ip: string) => void) | undefined = undefined;
 
+  interface PortTarget {
+    label: 'HTTP' | 'HTTPS' | 'SMB' | 'SSH' | 'FTP';
+    url: string;
+  }
+
+  const httpPorts = new Set([80, 81, 3000, 5000, 8000, 8080, 8081, 8888, 9000]);
+  const httpsPorts = new Set([443, 8443, 9443]);
+
   function formatTime(iso: string): string {
     return new Date(iso).toLocaleString();
+  }
+
+  function getPortTarget(hostIp: string, port: number, service: string | null): PortTarget | null {
+    const normalized = (service || '').toLowerCase();
+    const buildUrl = (scheme: 'http' | 'https' | 'ftp', defaultPort: number): string =>
+      `${scheme}://${hostIp}${port === defaultPort ? '' : `:${port}`}`;
+
+    if (normalized.includes('https') || normalized.includes('ssl/http') || normalized.includes('tls/http')) {
+      return { label: 'HTTPS', url: buildUrl('https', 443) };
+    }
+
+    if (normalized.includes('http')) {
+      return { label: 'HTTP', url: buildUrl('http', 80) };
+    }
+
+    if (normalized.includes('smb') || normalized.includes('microsoft-ds') || normalized.includes('netbios')) {
+      return { label: 'SMB', url: `smb://${hostIp}` };
+    }
+
+    if (normalized.includes('ssh')) {
+      return { label: 'SSH', url: `ssh://${hostIp}` };
+    }
+
+    if (normalized.includes('ftp')) {
+      return { label: 'FTP', url: buildUrl('ftp', 21) };
+    }
+
+    if (httpsPorts.has(port)) {
+      return { label: 'HTTPS', url: buildUrl('https', 443) };
+    }
+
+    if (httpPorts.has(port)) {
+      return { label: 'HTTP', url: buildUrl('http', 80) };
+    }
+
+    if (port === 445 || port === 139) {
+      return { label: 'SMB', url: `smb://${hostIp}` };
+    }
+
+    if (port === 22) {
+      return { label: 'SSH', url: `ssh://${hostIp}` };
+    }
+
+    if (port === 21) {
+      return { label: 'FTP', url: buildUrl('ftp', 21) };
+    }
+
+    return null;
   }
 </script>
 
@@ -57,9 +113,24 @@
     {:else}
       <ul>
         {#each host.open_ports as port}
+          {@const target = getPortTarget(host.ip, port.port, port.service)}
           <li class="port-item">
-            <span>{port.port}</span>
-            <span>{port.service || 'unknown'}</span>
+            <div class="port-main">
+              <span class="port-number">{port.port}</span>
+              <span class="port-service">{port.service || 'unknown'}</span>
+            </div>
+
+            {#if target}
+              <a
+                class="port-link"
+                href={target.url}
+                target="_blank"
+                rel="noreferrer noopener"
+                title={target.url}
+              >
+                {target.label}
+              </a>
+            {/if}
           </li>
         {/each}
       </ul>
@@ -109,11 +180,40 @@
 
   .port-item {
     display: flex;
-    justify-content: space-between;
+    align-items: center;
     gap: 8px;
     border: 1px solid #000;
     padding: 4px 6px;
     margin-bottom: 6px;
+  }
+
+  .port-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .port-number {
+    min-width: 36px;
+  }
+
+  .port-service {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .port-link {
+    margin-left: auto;
+    color: inherit;
+    text-decoration: underline;
+  }
+
+  .port-link:hover {
+    color: #fff;
+    background: #000;
   }
 
   .plain-list {
