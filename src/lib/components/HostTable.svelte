@@ -205,6 +205,7 @@
 
   .table-header-container {
     padding-right: 16px;
+    border-bottom: 1.5px solid #000;
   }
 
   .table-body-container {

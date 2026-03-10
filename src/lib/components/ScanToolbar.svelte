@@ -91,7 +91,10 @@
           aria-label="Clear filter"
           onclick={() => onQueryChange?.('')}
         >
-          x
+          <svg viewBox="0 0 12 12" role="img" focusable="false" aria-hidden="true">
+            <line x1="2" y1="2" x2="10" y2="10" />
+            <line x1="10" y1="2" x2="2" y2="10" />
+          </svg>
         </button>
       {/if}
     </div>
@@ -104,7 +107,7 @@
     justify-content: space-between;
     gap: 12px;
     padding: 10px;
-    border-bottom: 1px solid #000;
+    border-bottom: 1.5px solid #000;
     flex-wrap: wrap;
     background: #fff;
   }
@@ -176,22 +179,39 @@
 
   .clear-search {
     position: absolute;
-    right: 4px;
+    right: 5px;
     top: 50%;
     transform: translateY(-50%);
-    min-width: 20px;
-    height: 20px;
-    border: 1px solid #000;
-    background: #fff;
-    font: inherit;
-    line-height: 1;
+    width: 18px;
+    height: 18px;
+    border: 1px solid transparent;
+    background: transparent;
     padding: 0;
     cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #000;
+  }
+
+  .clear-search svg {
+    width: 10px;
+    height: 10px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.4;
+    stroke-linecap: square;
   }
 
   .clear-search:hover {
     background: #000;
     color: #fff;
+    border-color: #000;
+  }
+
+  .clear-search:focus-visible {
+    border-color: #000;
+    outline: none;
   }
 
   .ports-control {

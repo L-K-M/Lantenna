@@ -148,7 +148,7 @@
   }
 
   .app-footer {
-    border-top: 1px solid #000;
+    border-top: 1.5px solid #000;
     padding: 4px 8px;
     min-height: 24px;
     display: flex;

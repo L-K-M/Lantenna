@@ -73,7 +73,7 @@
 <style>
   .inspector {
     width: 290px;
-    border-left: 1px solid #000;
+    border-left: 1.5px solid #000;
     padding: 10px;
     overflow-y: auto;
     background: #fff;
@@ -134,7 +134,7 @@
     .inspector {
       width: auto;
       border-left: none;
-      border-top: 1px solid #000;
+      border-top: 1.5px solid #000;
       max-height: 280px;
     }
   }
