@@ -205,7 +205,6 @@
 
   .table-header-container {
     padding-right: 16px;
-    border-bottom: 1px solid #000;
   }
 
   .table-body-container {
@@ -237,6 +236,7 @@
 
   th {
     font-weight: normal;
+    border-bottom: none;
   }
 
   .sort-button {

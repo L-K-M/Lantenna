@@ -116,6 +116,10 @@
     min-width: 0;
   }
 
+  .toolbar-group :global(.sys7-btn) {
+    margin-top: 2px;
+  }
+
   .toolbar-group.right {
     margin-left: auto;
   }
