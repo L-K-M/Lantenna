@@ -1,7 +1,9 @@
 <script lang="ts">
+  import { BalloonHelp, Button } from '@lkmc/system7-ui';
   import type { Host } from '$lib/types';
 
   export let host: Host | null = null;
+  export let onDeepScan: ((ip: string) => void) | undefined = undefined;
 
   function formatTime(iso: string): string {
     return new Date(iso).toLocaleString();
@@ -16,6 +18,12 @@
     <div class="kv"><span>Name</span><span>{host.name || 'Unknown'}</span></div>
     <div class="kv"><span>Reachable</span><span>{host.reachable ? 'Yes' : 'No'}</span></div>
     <div class="kv"><span>Last Seen</span><span>{formatTime(host.last_seen)}</span></div>
+
+    <div class="actions">
+      <BalloonHelp message="Run a deeper scan for this host">
+        <Button onclick={() => onDeepScan?.(host.ip)}>Deep Scan</Button>
+      </BalloonHelp>
+    </div>
 
     <h4>Fingerprint</h4>
     <div class="kv"><span>MAC</span><span>{fp?.mac_address || 'Unknown'}</span></div>
@@ -87,6 +95,10 @@
     gap: 10px;
     border-bottom: 1px dotted #000;
     padding: 4px 0;
+  }
+
+  .actions {
+    margin-top: 10px;
   }
 
   ul {

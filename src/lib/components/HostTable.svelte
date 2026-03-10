@@ -1,12 +1,71 @@
 <script lang="ts">
-  import { BalloonHelp, Button } from '@lkmc/system7-ui';
   import type { Host } from '$lib/types';
 
   export let hosts: Host[] = [];
   export let loading = false;
   export let selectedHostIp: string | null = null;
   export let onSelectHost: ((ip: string) => void) | undefined = undefined;
-  export let onDeepScan: ((ip: string) => void) | undefined = undefined;
+
+  type SortField = 'ip' | 'name' | 'fingerprint' | 'ports' | 'lastSeen';
+  type SortDirection = 'asc' | 'desc';
+
+  let sortField: SortField = 'ip';
+  let sortDirection: SortDirection = 'asc';
+
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+  $: sortedHosts = [...hosts].sort((a, b) => {
+    const result = compareHosts(a, b, sortField);
+    if (result !== 0) {
+      return sortDirection === 'asc' ? result : -result;
+    }
+
+    return ipToNumber(a.ip) - ipToNumber(b.ip);
+  });
+
+  function setSort(field: SortField) {
+    if (sortField === field) {
+      sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+      return;
+    }
+
+    sortField = field;
+    sortDirection = 'asc';
+  }
+
+  function ipToNumber(ip: string): number {
+    const parts = ip.split('.').map((part) => Number(part));
+    if (parts.length !== 4 || parts.some((part) => Number.isNaN(part))) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+
+    return parts[0] * 256 ** 3 + parts[1] * 256 ** 2 + parts[2] * 256 + parts[3];
+  }
+
+  function dateToNumber(iso: string): number {
+    const timestamp = Date.parse(iso);
+    if (Number.isNaN(timestamp)) {
+      return 0;
+    }
+    return timestamp;
+  }
+
+  function compareHosts(a: Host, b: Host, field: SortField): number {
+    switch (field) {
+      case 'ip':
+        return ipToNumber(a.ip) - ipToNumber(b.ip);
+      case 'name':
+        return collator.compare(a.name || '', b.name || '');
+      case 'fingerprint':
+        return collator.compare(formatFingerprint(a), formatFingerprint(b));
+      case 'ports':
+        return a.open_ports.length - b.open_ports.length;
+      case 'lastSeen':
+        return dateToNumber(a.last_seen) - dateToNumber(b.last_seen);
+      default:
+        return 0;
+    }
+  }
 
   function formatPorts(host: Host): string {
     if (host.open_ports.length === 0) {
@@ -51,12 +110,56 @@
     <table>
       <thead>
         <tr>
-          <th class="col-ip">IP</th>
-          <th class="col-name">Name</th>
-          <th class="col-fingerprint">Fingerprint</th>
-          <th class="col-ports">Open Ports</th>
-          <th class="col-seen">Last Seen</th>
-          <th class="col-actions">Actions</th>
+          <th class="col-ip">
+            <button
+              type="button"
+              class="sort-button"
+              class:sorted={sortField === 'ip'}
+              onclick={() => setSort('ip')}
+            >
+              IP
+            </button>
+          </th>
+          <th class="col-name">
+            <button
+              type="button"
+              class="sort-button"
+              class:sorted={sortField === 'name'}
+              onclick={() => setSort('name')}
+            >
+              Name
+            </button>
+          </th>
+          <th class="col-fingerprint">
+            <button
+              type="button"
+              class="sort-button"
+              class:sorted={sortField === 'fingerprint'}
+              onclick={() => setSort('fingerprint')}
+            >
+              Fingerprint
+            </button>
+          </th>
+          <th class="col-ports">
+            <button
+              type="button"
+              class="sort-button"
+              class:sorted={sortField === 'ports'}
+              onclick={() => setSort('ports')}
+            >
+              Open Ports
+            </button>
+          </th>
+          <th class="col-seen">
+            <button
+              type="button"
+              class="sort-button"
+              class:sorted={sortField === 'lastSeen'}
+              onclick={() => setSort('lastSeen')}
+            >
+              Last Seen
+            </button>
+          </th>
         </tr>
       </thead>
     </table>
@@ -67,14 +170,14 @@
       <tbody>
         {#if loading && hosts.length === 0}
           <tr>
-            <td colspan="6" class="placeholder">Scanning...</td>
+            <td colspan="5" class="placeholder">Scanning...</td>
           </tr>
         {:else if hosts.length === 0}
           <tr>
-            <td colspan="6" class="placeholder">No hosts yet. Start a scan.</td>
+            <td colspan="5" class="placeholder">No hosts yet. Start a scan.</td>
           </tr>
         {:else}
-          {#each hosts as host}
+          {#each sortedHosts as host}
             <!-- svelte-ignore a11y-click-events-have-key-events -->
             <!-- svelte-ignore a11y-no-static-element-interactions -->
             <tr class:selected={selectedHostIp === host.ip} onclick={() => onSelectHost?.(host.ip)}>
@@ -83,11 +186,6 @@
               <td class="col-fingerprint">{formatFingerprint(host)}</td>
               <td class="col-ports">{formatPorts(host)}</td>
               <td class="col-seen">{formatTime(host.last_seen)}</td>
-              <td class="col-actions">
-                <BalloonHelp message="Run a deeper scan for this host">
-                  <Button onclick={() => onDeepScan?.(host.ip)}>Deep Scan</Button>
-                </BalloonHelp>
-              </td>
             </tr>
           {/each}
         {/if}
@@ -131,37 +229,56 @@
     vertical-align: middle;
   }
 
+  td {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   th {
-    text-decoration: underline;
     font-weight: normal;
   }
 
+  .sort-button {
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-family: inherit !important;
+    font-size: inherit !important;
+    font-weight: inherit !important;
+    letter-spacing: normal !important;
+    font-feature-settings: normal !important;
+    line-height: inherit;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: none;
+  }
+
+  .sort-button.sorted {
+    text-decoration: underline;
+  }
+
   .col-ip {
-    width: 14%;
+    width: 16%;
   }
 
   .col-name {
-    width: 17%;
+    width: 18%;
   }
 
   .col-fingerprint {
-    width: 24%;
+    width: 30%;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
   .col-ports {
-    width: 25%;
+    width: 24%;
   }
 
   .col-seen {
-    width: 10%;
-  }
-
-  .col-actions {
-    width: 10%;
-    text-align: right;
+    width: 12%;
   }
 
   tr {
@@ -173,17 +290,9 @@
     color: #fff;
   }
 
-  tr:hover :global(.sys7-btn) {
-    border-color: #fff;
-  }
-
   tr.selected td {
     background: #000;
     color: #fff;
-  }
-
-  tr.selected :global(.sys7-btn) {
-    border-color: #fff;
   }
 
   .placeholder {

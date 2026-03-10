@@ -24,8 +24,7 @@
     loading,
     error,
     query,
-    selectedHostIp,
-    lastScanAt
+    selectedHostIp
   } = $scanStore);
 
   $: filteredHosts = hosts.filter((host) => {
@@ -38,6 +37,12 @@
   });
 
   $: selectedHost = hosts.find((host) => host.ip === selectedHostIp) || null;
+
+  $: footerStatus = scanning
+    ? progress
+      ? `${progress.scanned}/${progress.total} scanned, ${progress.found} hosts`
+      : 'Scanning...'
+    : 'Idle';
 
   const appWindow = getCurrentWindow();
   const windowManager = new WindowManager();
@@ -66,28 +71,6 @@
   function handleWindowDrag() {
     windowManager.startDragging();
   }
-
-  function exportJson() {
-    if (hosts.length === 0) {
-      return;
-    }
-
-    const payload = {
-      exported_at: new Date().toISOString(),
-      last_scan_at: lastScanAt,
-      hosts
-    };
-
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `lantenna-scan-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  }
 </script>
 
 <div class="window-frame" class:window-unfocused={!$windowFocused}>
@@ -111,15 +94,12 @@
         selectedInterface={selectedInterface}
         profile={portProfile}
         {scanning}
-        {progress}
         {query}
-        canExport={hosts.length > 0}
         onInterfaceChange={(name) => scanStore.setInterface(name)}
         onProfileChange={(profile) => scanStore.setProfile(profile)}
         onStart={() => scanStore.startScan()}
         onStop={() => scanStore.cancelScan()}
         onQueryChange={(value) => scanStore.setQuery(value)}
-        onExport={exportJson}
       />
 
       {#if error}
@@ -132,11 +112,12 @@
           loading={loading || scanning}
           {selectedHostIp}
           onSelectHost={(ip) => scanStore.setSelectedHost(ip)}
-          onDeepScan={(ip) => scanStore.refreshHostPorts(ip, 'deep')}
         />
-        <HostInspector host={selectedHost} />
+        <HostInspector host={selectedHost} onDeepScan={(ip) => scanStore.refreshHostPorts(ip, 'deep')} />
       </section>
     </main>
+
+    <footer class="app-footer">{footerStatus}</footer>
   {/if}
 </div>
 
@@ -164,6 +145,15 @@
     min-height: 0;
     display: flex;
     overflow: hidden;
+  }
+
+  .app-footer {
+    border-top: 1px solid #000;
+    padding: 4px 8px;
+    min-height: 24px;
+    display: flex;
+    align-items: center;
+    white-space: nowrap;
   }
 
   @media (max-width: 980px) {

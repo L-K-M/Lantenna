@@ -1,21 +1,18 @@
 <script lang="ts">
   import { BalloonHelp, Button, Dropdown } from '@lkmc/system7-ui';
-  import type { NetworkInterface, PortProfile, ScanProgress } from '$lib/types';
+  import type { NetworkInterface, PortProfile } from '$lib/types';
 
   export let interfaces: NetworkInterface[] = [];
   export let selectedInterface: string | null = null;
   export let profile: PortProfile = 'quick';
   export let scanning = false;
-  export let progress: ScanProgress | null = null;
   export let query = '';
-  export let canExport = false;
 
   export let onInterfaceChange: ((name: string) => void) | undefined = undefined;
   export let onProfileChange: ((profile: PortProfile) => void) | undefined = undefined;
   export let onStart: (() => void) | undefined = undefined;
   export let onStop: (() => void) | undefined = undefined;
   export let onQueryChange: ((value: string) => void) | undefined = undefined;
-  export let onExport: (() => void) | undefined = undefined;
 
   const profileOptions: { value: PortProfile; label: string }[] = [
     { value: 'quick', label: 'Quick' },
@@ -67,31 +64,37 @@
     {#if scanning}
       <Button onclick={onStop}>Stop Scan</Button>
     {:else}
-      <Button variant="primary" onclick={onStart} disabled={!selectedInterface}>Start Scan</Button>
+      <Button onclick={onStart} disabled={!selectedInterface}>Start Scan</Button>
     {/if}
 
-    <Button onclick={onExport} disabled={!canExport}>Export JSON</Button>
   </div>
 
   <div class="toolbar-group right">
     <div class="search-wrap">
+      <span class="search-icon" aria-hidden="true">
+        <svg viewBox="0 0 16 16" role="img" focusable="false">
+          <circle cx="6.5" cy="6.5" r="4.5" />
+          <line x1="9.8" y1="9.8" x2="14" y2="14" />
+        </svg>
+      </span>
       <input
         value={query}
         type="text"
         placeholder="Filter by IP or host name"
         oninput={(event) => onQueryChange?.((event.currentTarget as HTMLInputElement).value)}
       />
-    </div>
 
-    <BalloonHelp message="Scanned / total, with discovered hosts">
-      <div class="scan-meta">
-        {#if progress}
-          {progress.scanned}/{progress.total} scanned, {progress.found} hosts
-        {:else}
-          Idle
-        {/if}
-      </div>
-    </BalloonHelp>
+      {#if query.length > 0}
+        <button
+          type="button"
+          class="clear-search"
+          aria-label="Clear filter"
+          onclick={() => onQueryChange?.('')}
+        >
+          x
+        </button>
+      {/if}
+    </div>
   </div>
 </div>
 
@@ -135,19 +138,56 @@
 
   .search-wrap {
     min-width: 280px;
+    position: relative;
   }
 
   .search-wrap input {
     width: 100%;
     box-sizing: border-box;
+    padding-left: 26px;
+    padding-right: 28px;
   }
 
-  .scan-meta {
+  .search-icon {
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    width: 12px;
+    height: 12px;
+  }
+
+  .search-icon svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: #000;
+    stroke-width: 1.2;
+    stroke-linecap: square;
+  }
+
+  .clear-search {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    min-width: 20px;
+    height: 20px;
     border: 1px solid #000;
-    padding: 5px 8px 3px;
-    min-width: 180px;
-    text-align: center;
-    white-space: nowrap;
+    background: #fff;
+    font: inherit;
+    line-height: 1;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .clear-search:hover {
+    background: #000;
+    color: #fff;
   }
 
   .ports-control {
@@ -164,7 +204,7 @@
 
     .toolbar-group.right {
       margin-left: 0;
-      justify-content: space-between;
+      justify-content: flex-start;
     }
 
     .search-wrap {
