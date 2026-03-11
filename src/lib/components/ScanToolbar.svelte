@@ -23,13 +23,17 @@
   $: interfaceOptions =
     interfaces.length === 0
       ? [{ value: '', label: 'No interfaces found', disabled: true }]
-      : interfaces.map((item) => ({ value: item.name, label: interfaceLabel(item) }));
+      : interfaces.map((item) => ({ value: interfaceValue(item), label: interfaceLabel(item) }));
 
   const portsHelpText =
     'Quick: 22 common ports (20,21,22,23,53,80,110,135,139,143,443,445,515,548,631,3389,5000,5353,5900,8000,8080,8443). Standard: expanded common service list. Deep: all TCP ports 1-2048.';
 
   function interfaceLabel(item: NetworkInterface): string {
     return `${item.name} (${item.subnet})`;
+  }
+
+  function interfaceValue(item: NetworkInterface): string {
+    return `${item.name}|${item.ip}`;
   }
 </script>
 

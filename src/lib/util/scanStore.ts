@@ -26,6 +26,7 @@ type FavoriteHostSnapshots = Record<string, Host>;
 const FAVORITE_IPS_STORAGE_KEY = 'lantenna.favoriteIps';
 const FAVORITE_HOSTS_STORAGE_KEY = 'lantenna.favoriteHosts';
 const CUSTOM_NAMES_STORAGE_KEY = 'lantenna.customNames';
+const SELECTED_INTERFACE_STORAGE_KEY = 'lantenna.selectedInterface';
 
 function canUseStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
@@ -130,6 +131,107 @@ function saveCustomNames(customNames: Record<string, string>) {
   window.localStorage.setItem(CUSTOM_NAMES_STORAGE_KEY, JSON.stringify(customNames));
 }
 
+function loadSelectedInterfaceKey(): string | null {
+  if (!canUseStorage()) {
+    return null;
+  }
+
+  const raw = window.localStorage.getItem(SELECTED_INTERFACE_STORAGE_KEY);
+  return raw && raw.length > 0 ? raw : null;
+}
+
+function saveSelectedInterfaceKey(selectedInterface: string | null) {
+  if (!canUseStorage()) {
+    return;
+  }
+
+  if (!selectedInterface) {
+    window.localStorage.removeItem(SELECTED_INTERFACE_STORAGE_KEY);
+    return;
+  }
+
+  window.localStorage.setItem(SELECTED_INTERFACE_STORAGE_KEY, selectedInterface);
+}
+
+function interfaceKey(item: NetworkInterface): string {
+  return `${item.name}|${item.ip}`;
+}
+
+function splitInterfaceKey(value: string): { name: string; ip: string } {
+  const [name, ...rest] = value.split('|');
+  return {
+    name,
+    ip: rest.join('|')
+  };
+}
+
+function findInterfaceByKey(interfaces: NetworkInterface[], selectedInterface: string | null): NetworkInterface | null {
+  if (!selectedInterface) {
+    return null;
+  }
+
+  if (selectedInterface.includes('|')) {
+    const exact = interfaces.find((item) => interfaceKey(item) === selectedInterface);
+    if (exact) {
+      return exact;
+    }
+
+    const fallback = splitInterfaceKey(selectedInterface);
+    const nameMatches = interfaces.filter((item) => item.name === fallback.name);
+    return nameMatches.length === 1 ? nameMatches[0] : null;
+  }
+
+  const legacyMatches = interfaces.filter((item) => item.name === selectedInterface);
+  return legacyMatches.length === 1 ? legacyMatches[0] : null;
+}
+
+function isPrivateAddress(ip: string): boolean {
+  const [a, b] = ip.split('.').map((part) => Number(part));
+  if (Number.isNaN(a) || Number.isNaN(b)) {
+    return false;
+  }
+
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
+
+function isLinkLocalAddress(ip: string): boolean {
+  const [a, b] = ip.split('.').map((part) => Number(part));
+  if (Number.isNaN(a) || Number.isNaN(b)) {
+    return false;
+  }
+
+  return a === 169 && b === 254;
+}
+
+function pickDefaultInterface(interfaces: NetworkInterface[]): NetworkInterface | null {
+  const preferred = interfaces.filter(
+    (item) => isPrivateAddress(item.ip) && !isLinkLocalAddress(item.ip) && item.host_count > 0
+  );
+
+  if (preferred.length > 0) {
+    return [...preferred].sort((a, b) => {
+      const aDistance = Math.abs(a.host_count - 254);
+      const bDistance = Math.abs(b.host_count - 254);
+      return aDistance - bDistance || a.name.localeCompare(b.name) || a.ip.localeCompare(b.ip);
+    })[0];
+  }
+
+  return interfaces.find((item) => item.host_count > 0) || interfaces[0] || null;
+}
+
+function resolveSelectedInterfaceKey(
+  interfaces: NetworkInterface[],
+  preferredInterfaceKey: string | null
+): string | null {
+  const selected = findInterfaceByKey(interfaces, preferredInterfaceKey);
+  if (selected) {
+    return interfaceKey(selected);
+  }
+
+  const fallback = pickDefaultInterface(interfaces);
+  return fallback ? interfaceKey(fallback) : null;
+}
+
 function makeFallbackHost(ip: string): Host {
   return {
     ip,
@@ -170,10 +272,11 @@ const initialFavoriteIps = normalizeFavoriteIps(loadFavoriteIps());
 const initialFavoriteHostSnapshots = loadFavoriteHostSnapshots();
 const initialStaleFavoriteIps = [...initialFavoriteIps];
 const initialCustomNames = loadCustomNames();
+const initialSelectedInterface = loadSelectedInterfaceKey();
 
 const initialState: ScanStoreState = {
   interfaces: [],
-  selectedInterface: null,
+  selectedInterface: initialSelectedInterface,
   portProfile: 'quick',
   hosts: mergeStaleFavoritesIntoHosts([], initialStaleFavoriteIps, initialFavoriteHostSnapshots),
   customNames: initialCustomNames,
@@ -329,11 +432,13 @@ function createScanStore() {
           }
 
           const staleFavoriteIps = calculateStaleFavoriteIps(state.favoriteIps, knownHosts);
+          const selectedInterface = resolveSelectedInterfaceKey(interfaces, state.selectedInterface);
+          saveSelectedInterfaceKey(selectedInterface);
 
           return {
             ...state,
             interfaces,
-            selectedInterface: state.selectedInterface || interfaces[0]?.name || null,
+            selectedInterface,
             hosts: mergeStaleFavoritesIntoHosts(knownHosts, staleFavoriteIps, favoriteHostSnapshots),
             staleFavoriteIps,
             lastScanAt: previous?.completed_at || state.lastScanAt,
@@ -356,8 +461,9 @@ function createScanStore() {
       }
       listenersAttached = false;
     },
-    setInterface: (name: string) => {
-      update((state) => ({ ...state, selectedInterface: name }));
+    setInterface: (selectedInterface: string) => {
+      saveSelectedInterfaceKey(selectedInterface);
+      update((state) => ({ ...state, selectedInterface }));
     },
     setProfile: (profile: PortProfile) => {
       update((state) => ({ ...state, portProfile: profile }));
@@ -440,7 +546,9 @@ function createScanStore() {
       update((state) => ({ ...state, error: null }));
     },
     startScan: async () => {
-      if (!currentState.selectedInterface) {
+      const selectedInterface = findInterfaceByKey(currentState.interfaces, currentState.selectedInterface);
+
+      if (!selectedInterface) {
         notifications.add('Choose a network interface first.', 'error');
         return;
       }
@@ -466,17 +574,17 @@ function createScanStore() {
 
       try {
         const timeoutByProfile: Record<PortProfile, number> = {
-          quick: 220,
-          standard: 280,
-          deep: 320
+          quick: 350,
+          standard: 450,
+          deep: 600
         };
 
         await TauriService.startScan({
-          interface_name: currentState.selectedInterface,
-          subnet: null,
+          interface_name: selectedInterface.name,
+          subnet: selectedInterface.subnet,
           port_profile: currentState.portProfile,
           timeout_ms: timeoutByProfile[currentState.portProfile],
-          max_hosts: 512
+          max_hosts: selectedInterface.host_count > 0 ? Math.min(selectedInterface.host_count, 4096) : null
         });
         notifications.add('Scan started.', 'info');
       } catch (error) {

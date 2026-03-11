@@ -10,6 +10,7 @@ use if_addrs::{get_if_addrs, IfAddr};
 use ipnet::Ipv4Net;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Command;
 use std::str::FromStr;
@@ -28,18 +29,113 @@ fn available_workers() -> usize {
 
 fn host_concurrency_for_profile(profile: &PortProfile, workers: usize) -> usize {
     match profile {
-        PortProfile::Quick => (workers * 12).clamp(64, 192),
-        PortProfile::Standard => (workers * 10).clamp(32, 128),
-        PortProfile::Deep => (workers * 4).clamp(12, 48),
+        PortProfile::Quick => (workers * 3).clamp(12, 32),
+        PortProfile::Standard => (workers * 2).clamp(8, 24),
+        PortProfile::Deep => workers.clamp(4, 12),
     }
 }
 
 fn port_concurrency_for_profile(profile: &PortProfile, workers: usize) -> usize {
     match profile {
-        PortProfile::Quick => 64,
-        PortProfile::Standard => (workers * 16).clamp(64, 192),
-        PortProfile::Deep => (workers * 24).clamp(128, 320),
+        PortProfile::Quick => 12,
+        PortProfile::Standard => (workers * 2).clamp(12, 32),
+        PortProfile::Deep => (workers * 4).clamp(24, 64),
     }
+}
+
+fn select_interface<'a>(
+    interfaces: &'a [NetworkInterface],
+    interface_name: &str,
+    requested_subnet: Option<&str>,
+) -> Result<&'a NetworkInterface> {
+    let name_matches = interfaces
+        .iter()
+        .filter(|iface| iface.name == interface_name)
+        .collect::<Vec<&NetworkInterface>>();
+
+    if let Some(subnet) = requested_subnet {
+        if let Some(exact_match) = name_matches.iter().copied().find(|iface| iface.subnet == subnet)
+        {
+            return Ok(exact_match);
+        }
+    }
+
+    if let Some(first_name_match) = name_matches.first() {
+        return Ok(*first_name_match);
+    }
+
+    if let Some(subnet) = requested_subnet {
+        if let Some(subnet_match) = interfaces.iter().find(|iface| iface.subnet == subnet) {
+            return Ok(subnet_match);
+        }
+    }
+
+    anyhow::bail!("Interface '{}' not found", interface_name)
+}
+
+fn build_scan_targets(
+    network: Ipv4Net,
+    local_ip: Option<Ipv4Addr>,
+    max_hosts: usize,
+) -> Vec<Ipv4Addr> {
+    if max_hosts == 0 || network.prefix_len() >= 31 {
+        return Vec::new();
+    }
+
+    let first_host = ipv4_to_u32(network.network()).saturating_add(1);
+    let last_host = ipv4_to_u32(network.broadcast()).saturating_sub(1);
+
+    if first_host > last_host {
+        return Vec::new();
+    }
+
+    let total_hosts = (last_host - first_host + 1) as usize;
+    let target_count = max_hosts.min(total_hosts);
+    if target_count == 0 {
+        return Vec::new();
+    }
+
+    let preferred_host = local_ip
+        .map(ipv4_to_u32)
+        .filter(|ip| *ip >= first_host && *ip <= last_host)
+        .unwrap_or(first_host);
+
+    let window_len = target_count as u32;
+    let half_window = window_len / 2;
+    let max_window_start = last_host.saturating_sub(window_len.saturating_sub(1));
+
+    let mut window_start = preferred_host.saturating_sub(half_window);
+    if window_start < first_host {
+        window_start = first_host;
+    }
+    if window_start > max_window_start {
+        window_start = max_window_start;
+    }
+
+    let window_end = window_start + window_len - 1;
+
+    (window_start..=window_end)
+        .filter_map(|raw_ip| {
+            let ip = Ipv4Addr::from(raw_ip);
+            if local_ip == Some(ip) {
+                None
+            } else {
+                Some(ip)
+            }
+        })
+        .collect()
+}
+
+enum PortProbeOutcome {
+    Open(PortInfo),
+    Reachable,
+}
+
+fn is_reachable_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        ErrorKind::ConnectionRefused | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted
+    )
 }
 
 pub fn list_network_interfaces() -> Result<Vec<NetworkInterface>> {
@@ -97,23 +193,20 @@ where
 {
     let started_at = Utc::now().to_rfc3339();
     let interfaces = list_network_interfaces()?;
-    let selected = interfaces
-        .into_iter()
-        .find(|iface| iface.name == options.interface_name)
-        .with_context(|| format!("Interface '{}' not found", options.interface_name))?;
+    let selected = select_interface(&interfaces, &options.interface_name, options.subnet.as_deref())?;
 
     let subnet = options.subnet.clone().unwrap_or_else(|| selected.subnet.clone());
     options.subnet = Some(subnet.clone());
 
     let network = Ipv4Net::from_str(&subnet)
         .with_context(|| format!("Invalid subnet '{}'", subnet))?;
-    let max_hosts = options.max_hosts.unwrap_or(512).clamp(1, 4096);
+    let max_hosts = options
+        .max_hosts
+        .unwrap_or(selected.host_count as usize)
+        .clamp(1, 4096);
 
-    let targets: Vec<Ipv4Addr> = network
-        .hosts()
-        .filter(|ip| ip.to_string() != selected.ip)
-        .take(max_hosts)
-        .collect();
+    let local_ip = Ipv4Addr::from_str(&selected.ip).ok();
+    let targets = build_scan_targets(network, local_ip, max_hosts);
 
     if targets.is_empty() {
         anyhow::bail!("No target hosts found in subnet {}", subnet);
@@ -213,7 +306,7 @@ pub async fn scan_single_host(ip: String, profile: PortProfile, timeout_ms: u64)
     let timeout_duration = Duration::from_millis(timeout_ms.clamp(50, 5000));
     let port_concurrency = port_concurrency_for_profile(&profile, available_workers());
 
-    let open_ports = scan_open_ports(
+    let (open_ports, reachable) = scan_open_ports(
         parsed_ip,
         ports,
         timeout_duration,
@@ -226,7 +319,7 @@ pub async fn scan_single_host(ip: String, profile: PortProfile, timeout_ms: u64)
     Ok(Host {
         ip,
         name,
-        reachable: !open_ports.is_empty(),
+        reachable,
         open_ports,
         last_seen: Utc::now().to_rfc3339(),
         fingerprint: None,
@@ -240,8 +333,9 @@ async fn scan_host_internal(
     port_concurrency: usize,
     cancel_flag: Arc<AtomicBool>,
 ) -> Option<Host> {
-    let open_ports = scan_open_ports(ip, ports, timeout_duration, port_concurrency, cancel_flag).await;
-    if open_ports.is_empty() {
+    let (open_ports, reachable) =
+        scan_open_ports(ip, ports, timeout_duration, port_concurrency, cancel_flag).await;
+    if !reachable {
         return None;
     }
 
@@ -250,7 +344,7 @@ async fn scan_host_internal(
     Some(Host {
         ip: ip.to_string(),
         name,
-        reachable: true,
+        reachable,
         open_ports,
         last_seen: Utc::now().to_rfc3339(),
         fingerprint: None,
@@ -263,7 +357,7 @@ async fn scan_open_ports(
     timeout_duration: Duration,
     port_concurrency: usize,
     cancel_flag: Arc<AtomicBool>,
-) -> Vec<PortInfo> {
+) -> (Vec<PortInfo>, bool) {
     let concurrency = port_concurrency.clamp(1, 1024).min(ports.len().max(1));
 
     let mut stream = stream::iter(ports.iter().copied().map(|port| {
@@ -279,28 +373,39 @@ async fn scan_open_ports(
     .buffer_unordered(concurrency);
 
     let mut open_ports = Vec::new();
+    let mut reachable = false;
+
     while let Some(port) = stream.next().await {
         if cancel_flag.load(Ordering::Relaxed) {
             break;
         }
-        if let Some(port) = port {
-            open_ports.push(port);
+
+        match port {
+            Some(PortProbeOutcome::Open(port)) => {
+                reachable = true;
+                open_ports.push(port);
+            }
+            Some(PortProbeOutcome::Reachable) => {
+                reachable = true;
+            }
+            None => {}
         }
     }
 
     open_ports.sort_by_key(|item| item.port);
-    open_ports
+    (open_ports, reachable)
 }
 
-async fn scan_port(ip: Ipv4Addr, port: u16, timeout_duration: Duration) -> Option<PortInfo> {
+async fn scan_port(ip: Ipv4Addr, port: u16, timeout_duration: Duration) -> Option<PortProbeOutcome> {
     let socket = SocketAddr::new(IpAddr::V4(ip), port);
 
     match timeout(timeout_duration, TcpStream::connect(socket)).await {
-        Ok(Ok(_)) => Some(PortInfo {
+        Ok(Ok(_)) => Some(PortProbeOutcome::Open(PortInfo {
             port,
             state: "open".to_string(),
             service: service_name(port).map(ToString::to_string),
-        }),
+        })),
+        Ok(Err(error)) if is_reachable_error(&error) => Some(PortProbeOutcome::Reachable),
         _ => None,
     }
 }
