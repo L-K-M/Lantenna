@@ -9,7 +9,7 @@ use futures::{stream, StreamExt};
 use if_addrs::{get_if_addrs, IfAddr};
 use ipnet::Ipv4Net;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Command;
@@ -19,6 +19,7 @@ use std::sync::{
     Arc,
 };
 use tokio::net::TcpStream;
+use tokio::sync::Semaphore;
 use tokio::time::{timeout, Duration};
 
 fn available_workers() -> usize {
@@ -40,6 +41,14 @@ fn port_concurrency_for_profile(profile: &PortProfile, workers: usize) -> usize 
         PortProfile::Quick => 12,
         PortProfile::Standard => (workers * 2).clamp(12, 32),
         PortProfile::Deep => (workers * 4).clamp(24, 64),
+    }
+}
+
+fn global_connection_limit_for_profile(profile: &PortProfile, workers: usize) -> usize {
+    match profile {
+        PortProfile::Quick => (workers * 16).clamp(64, 128),
+        PortProfile::Standard => (workers * 12).clamp(48, 112),
+        PortProfile::Deep => (workers * 8).clamp(32, 96),
     }
 }
 
@@ -90,40 +99,71 @@ fn build_scan_targets(
     }
 
     let total_hosts = (last_host - first_host + 1) as usize;
-    let target_count = max_hosts.min(total_hosts);
+    let local_in_range = local_ip
+        .map(ipv4_to_u32)
+        .map(|ip| ip >= first_host && ip <= last_host)
+        .unwrap_or(false);
+    let available_hosts = total_hosts.saturating_sub(if local_in_range { 1 } else { 0 });
+    let target_count = max_hosts.min(available_hosts);
+
     if target_count == 0 {
         return Vec::new();
     }
 
-    let preferred_host = local_ip
-        .map(ipv4_to_u32)
-        .filter(|ip| *ip >= first_host && *ip <= last_host)
-        .unwrap_or(first_host);
-
-    let window_len = target_count as u32;
-    let half_window = window_len / 2;
-    let max_window_start = last_host.saturating_sub(window_len.saturating_sub(1));
-
-    let mut window_start = preferred_host.saturating_sub(half_window);
-    if window_start < first_host {
-        window_start = first_host;
-    }
-    if window_start > max_window_start {
-        window_start = max_window_start;
+    if target_count >= available_hosts {
+        return (first_host..=last_host)
+            .filter_map(|raw_ip| {
+                let ip = Ipv4Addr::from(raw_ip);
+                if local_ip == Some(ip) {
+                    None
+                } else {
+                    Some(ip)
+                }
+            })
+            .collect();
     }
 
-    let window_end = window_start + window_len - 1;
+    let mut selected_raw_ips = HashSet::with_capacity(target_count);
+    let mut targets = Vec::with_capacity(target_count);
 
-    (window_start..=window_end)
-        .filter_map(|raw_ip| {
+    for index in 0..target_count {
+        let offset = ((index as u128 * total_hosts as u128) / target_count as u128) as u32;
+        let raw_ip = first_host + offset.min(last_host - first_host);
+
+        if !selected_raw_ips.insert(raw_ip) {
+            continue;
+        }
+
+        let ip = Ipv4Addr::from(raw_ip);
+        if local_ip == Some(ip) {
+            continue;
+        }
+
+        targets.push(ip);
+    }
+
+    if targets.len() < target_count {
+        for raw_ip in first_host..=last_host {
+            if targets.len() == target_count {
+                break;
+            }
+
+            if selected_raw_ips.contains(&raw_ip) {
+                continue;
+            }
+
             let ip = Ipv4Addr::from(raw_ip);
             if local_ip == Some(ip) {
-                None
-            } else {
-                Some(ip)
+                continue;
             }
-        })
-        .collect()
+
+            selected_raw_ips.insert(raw_ip);
+            targets.push(ip);
+        }
+    }
+
+    targets.sort_by_key(|ip| ipv4_to_u32(*ip));
+    targets
 }
 
 enum PortProbeOutcome {
@@ -218,13 +258,16 @@ where
     let workers = available_workers();
     let host_concurrency = host_concurrency_for_profile(&options.port_profile, workers);
     let port_concurrency = port_concurrency_for_profile(&options.port_profile, workers);
+    let global_connection_limit = global_connection_limit_for_profile(&options.port_profile, workers);
+    let connection_semaphore = Arc::new(Semaphore::new(global_connection_limit));
 
     log::info!(
-        "scan config: profile={:?} workers={} hosts={} ports={} timeout_ms={}",
+        "scan config: profile={:?} workers={} hosts={} ports={} max_connections={} timeout_ms={}",
         options.port_profile,
         workers,
         host_concurrency,
         port_concurrency,
+        global_connection_limit,
         timeout_ms
     );
 
@@ -232,6 +275,7 @@ where
     let mut scanned = 0usize;
     let mut found = 0usize;
     let mut hosts = Vec::new();
+    let mut unreachable_targets = Vec::new();
 
     on_progress(ScanProgress {
         scanned,
@@ -244,14 +288,22 @@ where
     let mut stream = stream::iter(targets.into_iter().map(|ip| {
         let ports = ports.clone();
         let cancel_flag = cancel_flag.clone();
+        let connection_semaphore = connection_semaphore.clone();
         async move {
-            let current_ip = ip.to_string();
             if cancel_flag.load(Ordering::Relaxed) {
-                return (current_ip, None);
+                return (ip, None);
             }
 
-            let host = scan_host_internal(ip, ports, timeout_duration, port_concurrency, cancel_flag).await;
-            (current_ip, host)
+            let host = scan_host_internal(
+                ip,
+                ports,
+                timeout_duration,
+                port_concurrency,
+                connection_semaphore,
+                cancel_flag,
+            )
+            .await;
+            (ip, host)
         }
     }))
     .buffer_unordered(host_concurrency);
@@ -263,20 +315,57 @@ where
             found += 1;
             on_host(host.clone());
             hosts.push(host);
+        } else {
+            unreachable_targets.push(current_ip);
         }
 
         let cancelled = cancel_flag.load(Ordering::Relaxed);
+        let current_ip_text = current_ip.to_string();
 
         on_progress(ScanProgress {
             scanned,
             total,
             found,
             running: !cancelled,
-            current_ip: Some(current_ip),
+            current_ip: Some(current_ip_text),
         });
 
         if cancelled {
             break;
+        }
+    }
+
+    let cancelled = cancel_flag.load(Ordering::Relaxed);
+    if !cancelled && !unreachable_targets.is_empty() {
+        let arp_table = read_arp_table().await;
+        let arp_ips = arp_table
+            .keys()
+            .filter_map(|ip| Ipv4Addr::from_str(ip).ok())
+            .collect::<HashSet<Ipv4Addr>>();
+
+        let discovered_via_arp = unreachable_targets
+            .into_iter()
+            .filter(|ip| arp_ips.contains(ip))
+            .collect::<Vec<Ipv4Addr>>();
+
+        for ip in discovered_via_arp {
+            if cancel_flag.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let name = resolve_hostname_with_timeout(ip, Duration::from_millis(250)).await;
+            let host = Host {
+                ip: ip.to_string(),
+                name,
+                reachable: true,
+                open_ports: Vec::new(),
+                last_seen: Utc::now().to_rfc3339(),
+                fingerprint: None,
+            };
+
+            found += 1;
+            on_host(host.clone());
+            hosts.push(host);
         }
     }
 
@@ -304,13 +393,16 @@ pub async fn scan_single_host(ip: String, profile: PortProfile, timeout_ms: u64)
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let ports = Arc::new(ports_for_profile(&profile));
     let timeout_duration = Duration::from_millis(timeout_ms.clamp(50, 5000));
-    let port_concurrency = port_concurrency_for_profile(&profile, available_workers());
+    let workers = available_workers();
+    let port_concurrency = port_concurrency_for_profile(&profile, workers);
+    let connection_semaphore = Arc::new(Semaphore::new(global_connection_limit_for_profile(&profile, workers)));
 
     let (open_ports, reachable) = scan_open_ports(
         parsed_ip,
         ports,
         timeout_duration,
         port_concurrency,
+        connection_semaphore,
         cancel_flag,
     )
     .await;
@@ -331,10 +423,18 @@ async fn scan_host_internal(
     ports: Arc<Vec<u16>>,
     timeout_duration: Duration,
     port_concurrency: usize,
+    connection_semaphore: Arc<Semaphore>,
     cancel_flag: Arc<AtomicBool>,
 ) -> Option<Host> {
-    let (open_ports, reachable) =
-        scan_open_ports(ip, ports, timeout_duration, port_concurrency, cancel_flag).await;
+    let (open_ports, reachable) = scan_open_ports(
+        ip,
+        ports,
+        timeout_duration,
+        port_concurrency,
+        connection_semaphore,
+        cancel_flag,
+    )
+    .await;
     if !reachable {
         return None;
     }
@@ -356,18 +456,20 @@ async fn scan_open_ports(
     ports: Arc<Vec<u16>>,
     timeout_duration: Duration,
     port_concurrency: usize,
+    connection_semaphore: Arc<Semaphore>,
     cancel_flag: Arc<AtomicBool>,
 ) -> (Vec<PortInfo>, bool) {
     let concurrency = port_concurrency.clamp(1, 1024).min(ports.len().max(1));
 
     let mut stream = stream::iter(ports.iter().copied().map(|port| {
         let cancel_flag = cancel_flag.clone();
+        let connection_semaphore = connection_semaphore.clone();
         async move {
             if cancel_flag.load(Ordering::Relaxed) {
                 return None;
             }
 
-            scan_port(ip, port, timeout_duration).await
+            scan_port(ip, port, timeout_duration, connection_semaphore).await
         }
     }))
     .buffer_unordered(concurrency);
@@ -396,8 +498,14 @@ async fn scan_open_ports(
     (open_ports, reachable)
 }
 
-async fn scan_port(ip: Ipv4Addr, port: u16, timeout_duration: Duration) -> Option<PortProbeOutcome> {
+async fn scan_port(
+    ip: Ipv4Addr,
+    port: u16,
+    timeout_duration: Duration,
+    connection_semaphore: Arc<Semaphore>,
+) -> Option<PortProbeOutcome> {
     let socket = SocketAddr::new(IpAddr::V4(ip), port);
+    let _permit = connection_semaphore.acquire_owned().await.ok()?;
 
     match timeout(timeout_duration, TcpStream::connect(socket)).await {
         Ok(Ok(_)) => Some(PortProbeOutcome::Open(PortInfo {
