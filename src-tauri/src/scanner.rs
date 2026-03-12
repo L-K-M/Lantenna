@@ -8,6 +8,7 @@ use chrono::Utc;
 use futures::{stream, StreamExt};
 use if_addrs::{get_if_addrs, IfAddr};
 use ipnet::Ipv4Net;
+use ndb_oui::OuiDb;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
@@ -16,7 +17,7 @@ use std::process::Command;
 use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, OnceLock,
 };
 use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
@@ -653,11 +654,12 @@ async fn build_fingerprint(
         }
 
         if vendor.is_none() {
-            if let Some(local_vendor) = local_oui_vendor(oui_value) {
-                let vendor_value = local_vendor.to_string();
-                pending_vendor_cache.insert(oui_value.clone(), vendor_value.clone());
-                vendor = Some(vendor_value);
-                sources.push("oui-local".to_string());
+            if let Some(mac) = mac_address.as_deref() {
+                if let Some(local_vendor) = local_oui_vendor(mac) {
+                    pending_vendor_cache.insert(oui_value.clone(), local_vendor.clone());
+                    vendor = Some(local_vendor);
+                    sources.push("oui-local".to_string());
+                }
             }
         }
     }
@@ -871,26 +873,16 @@ async fn read_arp_table() -> HashMap<String, String> {
     .unwrap_or_default()
 }
 
-fn local_oui_vendor(oui: &str) -> Option<&'static str> {
-    match oui {
-        "00:1C:B3" | "28:CF:E9" | "3C:15:C2" | "60:F8:1D" | "A4:5E:60" | "F0:18:98" => {
-            Some("Apple")
-        }
-        "00:1B:63" | "00:26:BB" | "34:97:F6" | "5C:51:4F" | "7C:2F:80" | "FC:FB:FB" => {
-            Some("Samsung")
-        }
-        "00:1A:11" | "00:1C:42" | "00:25:9C" | "48:2C:A0" | "9C:B6:D0" => Some("Intel"),
-        "00:50:56" | "00:0C:29" => Some("VMware"),
-        "08:00:27" => Some("Oracle VirtualBox"),
-        "52:54:00" => Some("QEMU/KVM"),
-        "B8:27:EB" | "DC:A6:32" | "E4:5F:01" => Some("Raspberry Pi"),
-        "00:17:88" | "A0:63:91" | "F4:F5:D8" => Some("Cisco"),
-        "00:04:20" | "00:0F:66" | "9C:93:4E" => Some("Dell"),
-        "3C:52:82" | "A4:8E:5D" | "B4:2E:99" => Some("HP"),
-        "00:14:22" | "00:1A:2B" | "B8:AE:ED" => Some("ASUSTek")
-        ,
-        _ => None,
-    }
+fn local_oui_database() -> &'static OuiDb {
+    static DB: OnceLock<OuiDb> = OnceLock::new();
+    DB.get_or_init(OuiDb::bundled)
+}
+
+fn local_oui_vendor(mac: &str) -> Option<String> {
+    let normalized_mac = normalize_mac(mac)?;
+    let entry = local_oui_database().lookup(&normalized_mac)?;
+
+    first_non_empty(vec![entry.vendor_detail.clone(), Some(entry.vendor.clone())])
 }
 
 async fn lookup_vendor_via_maclookup(mac: &str) -> Option<String> {
