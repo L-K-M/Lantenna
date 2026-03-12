@@ -19,9 +19,10 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, OnceLock,
 };
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, Semaphore};
-use tokio::time::{timeout, Duration};
+use tokio::time::{sleep, timeout, Duration};
 
 fn available_workers() -> usize {
     std::thread::available_parallelism()
@@ -177,6 +178,10 @@ fn is_reachable_error(error: &std::io::Error) -> bool {
         error.kind(),
         ErrorKind::ConnectionRefused | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted
     )
+}
+
+fn is_transient_probe_error(error: &std::io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(23 | 24 | 55 | 10024 | 10055))
 }
 
 pub fn list_network_interfaces() -> Result<Vec<NetworkInterface>> {
@@ -500,18 +505,69 @@ async fn scan_port(
     timeout_duration: Duration,
     connection_semaphore: Arc<Semaphore>,
 ) -> Option<PortProbeOutcome> {
+    const MAX_CONNECT_ATTEMPTS: usize = 2;
+
     let socket = SocketAddr::new(IpAddr::V4(ip), port);
     let _permit = connection_semaphore.acquire_owned().await.ok()?;
 
-    match timeout(timeout_duration, TcpStream::connect(socket)).await {
-        Ok(Ok(_)) => Some(PortProbeOutcome::Open(PortInfo {
-            port,
-            state: "open".to_string(),
-            service: service_name(port).map(ToString::to_string),
-        })),
-        Ok(Err(error)) if is_reachable_error(&error) => Some(PortProbeOutcome::Reachable),
-        _ => None,
+    for attempt in 1..=MAX_CONNECT_ATTEMPTS {
+        match timeout(timeout_duration, TcpStream::connect(socket)).await {
+            Ok(Ok(mut stream)) => {
+                if let Err(error) = stream.shutdown().await {
+                    log::debug!(
+                        "graceful TCP shutdown failed for {}:{}: {}",
+                        ip,
+                        port,
+                        error
+                    );
+                }
+
+                return Some(PortProbeOutcome::Open(PortInfo {
+                    port,
+                    state: "open".to_string(),
+                    service: service_name(port).map(ToString::to_string),
+                }));
+            }
+            Ok(Err(error)) if is_reachable_error(&error) => {
+                return Some(PortProbeOutcome::Reachable);
+            }
+            Ok(Err(error)) if is_transient_probe_error(&error) && attempt < MAX_CONNECT_ATTEMPTS => {
+                log::warn!(
+                    "transient TCP probe error for {}:{} on attempt {}/{}: {}; retrying",
+                    ip,
+                    port,
+                    attempt,
+                    MAX_CONNECT_ATTEMPTS,
+                    error
+                );
+                sleep(Duration::from_millis(20)).await;
+            }
+            Ok(Err(error)) => {
+                if is_transient_probe_error(&error) {
+                    log::warn!(
+                        "transient TCP probe error for {}:{} after {} attempts: {}",
+                        ip,
+                        port,
+                        MAX_CONNECT_ATTEMPTS,
+                        error
+                    );
+                } else {
+                    log::debug!(
+                        "unexpected TCP probe error for {}:{} kind={:?} os={:?} message={}",
+                        ip,
+                        port,
+                        error.kind(),
+                        error.raw_os_error(),
+                        error
+                    );
+                }
+                return None;
+            }
+            Err(_) => return None,
+        }
     }
+
+    None
 }
 
 async fn resolve_hostname(ip: Ipv4Addr) -> Option<String> {

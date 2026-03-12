@@ -1,2 +1,0 @@
-- Scanning should show a progress bar
-- While scanning, results should start showing up in the UI instead of waiting for the entire scan to finish
