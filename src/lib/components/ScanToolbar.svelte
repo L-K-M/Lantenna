@@ -1,15 +1,17 @@
 <script lang="ts">
   import { BalloonHelp, Button, Dropdown } from '@lkmc/system7-ui';
-  import type { NetworkInterface, PortProfile } from '$lib/types';
+  import type { DiscoveryMode, NetworkInterface, PortProfile } from '$lib/types';
 
   export let interfaces: NetworkInterface[] = [];
   export let selectedInterface: string | null = null;
   export let profile: PortProfile = 'quick';
+  export let discoveryMode: DiscoveryMode = 'hybrid';
   export let scanning = false;
   export let query = '';
 
   export let onInterfaceChange: ((name: string) => void) | undefined = undefined;
   export let onProfileChange: ((profile: PortProfile) => void) | undefined = undefined;
+  export let onDiscoveryModeChange: ((mode: DiscoveryMode) => void) | undefined = undefined;
   export let onStart: (() => void) | undefined = undefined;
   export let onStop: (() => void) | undefined = undefined;
   export let onQueryChange: ((value: string) => void) | undefined = undefined;
@@ -19,6 +21,10 @@
     { value: 'standard', label: 'Standard' },
     { value: 'deep', label: 'Deep' }
   ];
+  const discoveryOptions: { value: DiscoveryMode; label: string }[] = [
+    { value: 'hybrid', label: 'Hybrid (TCP + ICMP)' },
+    { value: 'tcp', label: 'TCP only' }
+  ];
 
   $: interfaceOptions =
     interfaces.length === 0
@@ -26,7 +32,9 @@
       : interfaces.map((item) => ({ value: interfaceValue(item), label: interfaceLabel(item) }));
 
   const portsHelpText =
-    'Quick: 22 common ports (20,21,22,23,53,80,110,135,139,143,443,445,515,548,631,3389,5000,5353,5900,8000,8080,8443). Standard: expanded common service list. Deep: all TCP ports 1-2048.';
+    'Quick: 22 common ports (20,21,22,23,53,80,110,135,139,143,443,445,515,548,631,3389,5000,5353,5900,8000,8080,8443). Standard: expanded common service list. Deep: all TCP ports 1-2048. Large subnets are capped to 4096 hosts per run.';
+  const discoveryHelpText =
+    'TCP only is fastest but can miss hosts that silently drop probes. Hybrid also runs ICMP checks for unreachable targets and improves discovery coverage.';
 
   function interfaceLabel(item: NetworkInterface): string {
     return `${item.name} (${item.subnet})`;
@@ -60,6 +68,21 @@
             value={profile}
             options={profileOptions}
             onchange={(value) => onProfileChange?.(value as PortProfile)}
+          />
+        </div>
+      </div>
+    </BalloonHelp>
+
+    <BalloonHelp message={discoveryHelpText} delay={300}>
+      <div class="discovery-control">
+        <label for="discovery-select">Discovery</label>
+        <div class="dropdown-wrap discovery-dropdown">
+          <Dropdown
+            id="discovery-select"
+            disabled={scanning}
+            value={discoveryMode}
+            options={discoveryOptions}
+            onchange={(value) => onDiscoveryModeChange?.(value as DiscoveryMode)}
           />
         </div>
       </div>
@@ -147,6 +170,10 @@
     min-width: 170px;
   }
 
+  .discovery-dropdown :global(.sys7-dropdown) {
+    min-width: 190px;
+  }
+
   .search-wrap {
     min-width: 280px;
     position: relative;
@@ -219,6 +246,12 @@
   }
 
   .ports-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .discovery-control {
     display: inline-flex;
     align-items: center;
     gap: 8px;

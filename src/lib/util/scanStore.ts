@@ -1,13 +1,22 @@
 import { writable } from 'svelte/store';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { TauriService } from '$lib/tauri';
-import type { Host, NetworkInterface, PortProfile, ScanErrorPayload, ScanProgress, ScanResult } from '$lib/types';
+import type {
+  DiscoveryMode,
+  Host,
+  NetworkInterface,
+  PortProfile,
+  ScanErrorPayload,
+  ScanProgress,
+  ScanResult
+} from '$lib/types';
 import { notifications } from './notifications';
 
 interface ScanStoreState {
   interfaces: NetworkInterface[];
   selectedInterface: string | null;
   portProfile: PortProfile;
+  discoveryMode: DiscoveryMode;
   hosts: Host[];
   newHostIps: string[];
   customNames: Record<string, string>;
@@ -28,6 +37,7 @@ const FAVORITE_IPS_STORAGE_KEY = 'lantenna.favoriteIps';
 const FAVORITE_HOSTS_STORAGE_KEY = 'lantenna.favoriteHosts';
 const CUSTOM_NAMES_STORAGE_KEY = 'lantenna.customNames';
 const SELECTED_INTERFACE_STORAGE_KEY = 'lantenna.selectedInterface';
+const MAX_SCAN_HOSTS = 4096;
 
 function canUseStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
@@ -279,6 +289,7 @@ const initialState: ScanStoreState = {
   interfaces: [],
   selectedInterface: initialSelectedInterface,
   portProfile: 'quick',
+  discoveryMode: 'hybrid',
   hosts: mergeStaleFavoritesIntoHosts([], initialStaleFavoriteIps, initialFavoriteHostSnapshots),
   newHostIps: [],
   customNames: initialCustomNames,
@@ -409,6 +420,7 @@ function createScanStore() {
     unlisteners.push(
       await listen<ScanResult>('scan-complete', (event) => {
         const completedTarget = scanTargetKey(event.payload.options.interface_name, event.payload.options.subnet);
+        const wasCancelled = event.payload.cancelled;
 
         update((state) => {
           const scannedHosts = sortHosts(event.payload.hosts);
@@ -444,12 +456,19 @@ function createScanStore() {
           };
         });
 
-        latestScanTarget = completedTarget;
-        latestScanHostIps = uniqueSortedIps(event.payload.hosts.map((host) => host.ip));
+        if (!wasCancelled) {
+          latestScanTarget = completedTarget;
+          latestScanHostIps = uniqueSortedIps(event.payload.hosts.map((host) => host.ip));
+        }
         activeComparisonEnabled = false;
         activeBaselineIps = new Set();
 
-        notifications.add(`Scan complete: ${event.payload.hosts.length} hosts found.`, 'success');
+        notifications.add(
+          wasCancelled
+            ? `Scan cancelled: ${event.payload.hosts.length} hosts discovered before stop.`
+            : `Scan complete: ${event.payload.hosts.length} hosts found.`,
+          wasCancelled ? 'info' : 'success'
+        );
       })
     );
 
@@ -495,6 +514,7 @@ function createScanStore() {
             ...state,
             interfaces,
             selectedInterface,
+            discoveryMode: previous?.options.discovery_mode || state.discoveryMode,
             hosts: mergeStaleFavoritesIntoHosts(knownHosts, staleFavoriteIps, favoriteHostSnapshots),
             staleFavoriteIps,
             newHostIps: [],
@@ -524,6 +544,9 @@ function createScanStore() {
     },
     setProfile: (profile: PortProfile) => {
       update((state) => ({ ...state, portProfile: profile }));
+    },
+    setDiscoveryMode: (mode: DiscoveryMode) => {
+      update((state) => ({ ...state, discoveryMode: mode }));
     },
     setQuery: (query: string) => {
       update((state) => ({ ...state, query }));
@@ -610,6 +633,19 @@ function createScanStore() {
         return;
       }
 
+      const previousHosts = currentState.hosts;
+      const previousStaleFavoriteIps = currentState.staleFavoriteIps;
+      const previousNewHostIps = currentState.newHostIps;
+      const previousProgress = currentState.progress;
+      const maxHosts = selectedInterface.host_count > 0 ? Math.min(selectedInterface.host_count, MAX_SCAN_HOSTS) : null;
+
+      if (selectedInterface.host_count > MAX_SCAN_HOSTS) {
+        notifications.add(
+          `Large subnet detected (${selectedInterface.host_count} hosts). Scanning first ${MAX_SCAN_HOSTS} hosts.`,
+          'info'
+        );
+      }
+
       activeComparisonEnabled = scanTargetMatches(latestScanTarget, selectedInterface.name, selectedInterface.subnet);
       activeBaselineIps = new Set(activeComparisonEnabled ? latestScanHostIps : []);
 
@@ -644,15 +680,24 @@ function createScanStore() {
           interface_name: selectedInterface.name,
           subnet: selectedInterface.subnet,
           port_profile: currentState.portProfile,
+          discovery_mode: currentState.discoveryMode,
           timeout_ms: timeoutByProfile[currentState.portProfile],
-          max_hosts: selectedInterface.host_count > 0 ? Math.min(selectedInterface.host_count, 4096) : null
+          max_hosts: maxHosts
         });
         notifications.add('Scan started.', 'info');
       } catch (error) {
         activeComparisonEnabled = false;
         activeBaselineIps = new Set();
         const message = error instanceof Error ? error.message : 'Failed to start scan';
-        update((next) => ({ ...next, scanning: false, error: message }));
+        update((next) => ({
+          ...next,
+          scanning: false,
+          error: message,
+          hosts: previousHosts,
+          staleFavoriteIps: previousStaleFavoriteIps,
+          newHostIps: previousNewHostIps,
+          progress: previousProgress
+        }));
         notifications.add(message, 'error');
       }
     },
@@ -660,7 +705,7 @@ function createScanStore() {
       try {
         await TauriService.cancelScan();
         update((state) => ({ ...state, scanning: false }));
-        notifications.add('Scan cancelled.', 'info');
+        notifications.add('Stopping scan...', 'info');
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to cancel scan';
         notifications.add(message, 'error');

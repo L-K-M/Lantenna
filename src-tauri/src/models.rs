@@ -49,11 +49,24 @@ pub enum PortProfile {
     Deep,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DiscoveryMode {
+    Tcp,
+    Hybrid,
+}
+
+fn default_discovery_mode() -> DiscoveryMode {
+    DiscoveryMode::Hybrid
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanOptions {
     pub interface_name: String,
     pub subnet: Option<String>,
     pub port_profile: PortProfile,
+    #[serde(default = "default_discovery_mode")]
+    pub discovery_mode: DiscoveryMode,
     pub timeout_ms: Option<u64>,
     pub max_hosts: Option<usize>,
 }
@@ -71,6 +84,8 @@ pub struct ScanProgress {
 pub struct ScanResult {
     pub started_at: String,
     pub completed_at: Option<String>,
+    #[serde(default)]
+    pub cancelled: bool,
     pub hosts: Vec<Host>,
     pub options: ScanOptions,
 }

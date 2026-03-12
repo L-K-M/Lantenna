@@ -8,7 +8,16 @@ use std::sync::Arc;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let storage = storage::Storage::new().expect("Failed to initialize storage");
+    let storage = match storage::Storage::new() {
+        Ok(storage) => storage,
+        Err(error) => {
+            log::error!(
+                "Failed to initialize persistent storage ({}). Falling back to in-memory storage.",
+                error
+            );
+            storage::Storage::in_memory()
+        }
+    };
     let app_state = AppState {
         storage: Arc::new(storage),
         scan_manager: Arc::new(ScanManager::new()),

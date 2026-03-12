@@ -1,6 +1,6 @@
 use crate::models::{
-    DeviceFingerprint, Host, NetworkInterface, PortInfo, PortProfile, ScanOptions, ScanProgress,
-    ScanResult,
+    DeviceFingerprint, DiscoveryMode, Host, NetworkInterface, PortInfo, PortProfile, ScanOptions,
+    ScanProgress, ScanResult,
 };
 use crate::storage::Storage;
 use anyhow::{Context, Result};
@@ -13,7 +13,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::process::Command;
+use std::process::Command as StdCommand;
 use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -21,6 +21,7 @@ use std::sync::{
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
+use tokio::process::Command as TokioCommand;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::{sleep, timeout, Duration};
 
@@ -268,8 +269,9 @@ where
     let connection_semaphore = Arc::new(Semaphore::new(global_connection_limit));
 
     log::info!(
-        "scan config: profile={:?} workers={} hosts={} ports={} max_connections={} timeout_ms={}",
+        "scan config: profile={:?} discovery={:?} workers={} hosts={} ports={} max_connections={} timeout_ms={}",
         options.port_profile,
+        options.discovery_mode,
         workers,
         host_concurrency,
         port_concurrency,
@@ -343,6 +345,11 @@ where
 
     let cancelled = cancel_flag.load(Ordering::Relaxed);
     if !cancelled && !unreachable_targets.is_empty() {
+        let mut discovered_ips = hosts
+            .iter()
+            .filter_map(|host| Ipv4Addr::from_str(&host.ip).ok())
+            .collect::<HashSet<Ipv4Addr>>();
+
         let arp_table = read_arp_table().await;
         let arp_ips = arp_table
             .keys()
@@ -350,9 +357,14 @@ where
             .collect::<HashSet<Ipv4Addr>>();
 
         let discovered_via_arp = unreachable_targets
-            .into_iter()
-            .filter(|ip| arp_ips.contains(ip))
+            .iter()
+            .copied()
+            .filter(|ip| arp_ips.contains(ip) && !discovered_ips.contains(ip))
             .collect::<Vec<Ipv4Addr>>();
+
+        for ip in &discovered_via_arp {
+            discovered_ips.insert(*ip);
+        }
 
         for ip in discovered_via_arp {
             if cancel_flag.load(Ordering::Relaxed) {
@@ -360,17 +372,35 @@ where
             }
 
             let name = resolve_hostname_with_timeout(ip, Duration::from_millis(250)).await;
-            let host = Host {
-                ip: ip.to_string(),
-                name,
-                reachable: true,
-                open_ports: Vec::new(),
-                last_seen: Utc::now().to_rfc3339(),
-                fingerprint: None,
-            };
-
+            let host = discovered_host(ip, name);
             on_host(host.clone());
             hosts.push(host);
+        }
+
+        if options.discovery_mode == DiscoveryMode::Hybrid {
+            let icmp_candidates = unreachable_targets
+                .into_iter()
+                .filter(|ip| !discovered_ips.contains(ip))
+                .collect::<Vec<Ipv4Addr>>();
+
+            let icmp_timeout = Duration::from_millis(timeout_ms.clamp(200, 1200));
+            let discovered_via_icmp =
+                discover_hosts_via_icmp(icmp_candidates, icmp_timeout, cancel_flag.clone()).await;
+
+            for ip in discovered_via_icmp {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                if !discovered_ips.insert(ip) {
+                    continue;
+                }
+
+                let name = resolve_hostname_with_timeout(ip, Duration::from_millis(250)).await;
+                let host = discovered_host(ip, name);
+                on_host(host.clone());
+                hosts.push(host);
+            }
         }
     }
 
@@ -379,6 +409,7 @@ where
     Ok(ScanResult {
         started_at,
         completed_at: Some(Utc::now().to_rfc3339()),
+        cancelled,
         hosts,
         options,
     })
@@ -413,6 +444,106 @@ pub async fn scan_single_host(ip: String, profile: PortProfile, timeout_ms: u64)
         last_seen: Utc::now().to_rfc3339(),
         fingerprint: None,
     })
+}
+
+fn discovered_host(ip: Ipv4Addr, name: Option<String>) -> Host {
+    Host {
+        ip: ip.to_string(),
+        name,
+        reachable: true,
+        open_ports: Vec::new(),
+        last_seen: Utc::now().to_rfc3339(),
+        fingerprint: None,
+    }
+}
+
+async fn discover_hosts_via_icmp(
+    targets: Vec<Ipv4Addr>,
+    probe_timeout: Duration,
+    cancel_flag: Arc<AtomicBool>,
+) -> Vec<Ipv4Addr> {
+    if targets.is_empty() {
+        return Vec::new();
+    }
+
+    let concurrency = available_workers().clamp(4, 24);
+    let mut discovered = Vec::new();
+
+    let mut stream = stream::iter(targets.into_iter().map(|ip| {
+        let cancel_flag = cancel_flag.clone();
+        async move {
+            if cancel_flag.load(Ordering::Relaxed) {
+                return None;
+            }
+
+            if ping_host(ip, probe_timeout).await {
+                Some(ip)
+            } else {
+                None
+            }
+        }
+    }))
+    .buffer_unordered(concurrency);
+
+    while let Some(result) = stream.next().await {
+        if cancel_flag.load(Ordering::Relaxed) {
+            break;
+        }
+
+        if let Some(ip) = result {
+            discovered.push(ip);
+        }
+    }
+
+    discovered.sort_by_key(|ip| ipv4_to_u32(*ip));
+    discovered
+}
+
+async fn ping_host(ip: Ipv4Addr, timeout_duration: Duration) -> bool {
+    let ip_text = ip.to_string();
+    let mut command = TokioCommand::new("ping");
+
+    #[cfg(target_os = "windows")]
+    {
+        command
+            .arg("-n")
+            .arg("1")
+            .arg("-w")
+            .arg(timeout_duration.as_millis().to_string())
+            .arg(&ip_text);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        command
+            .arg("-c")
+            .arg("1")
+            .arg("-W")
+            .arg(timeout_duration.as_millis().to_string())
+            .arg(&ip_text);
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        let seconds = timeout_duration.as_secs().clamp(1, 5);
+        command
+            .arg("-c")
+            .arg("1")
+            .arg("-W")
+            .arg(seconds.to_string())
+            .arg(&ip_text);
+    }
+
+    command.kill_on_drop(true);
+
+    match timeout(timeout_duration + Duration::from_millis(300), command.status()).await {
+        Ok(Ok(status)) => status.success(),
+        Ok(Err(error)) => {
+            log::debug!("icmp probe failed for {}: {}", ip, error);
+            false
+        }
+        Err(_) => false,
+    }
 }
 
 async fn scan_host_internal(
@@ -951,10 +1082,10 @@ async fn read_arp_table() -> HashMap<String, String> {
         let mut table = HashMap::new();
 
         #[cfg(target_os = "windows")]
-        let output = Command::new("arp").arg("-a").output();
+        let output = StdCommand::new("arp").arg("-a").output();
 
         #[cfg(not(target_os = "windows"))]
-        let output = Command::new("arp").arg("-an").output();
+        let output = StdCommand::new("arp").arg("-an").output();
 
         let Ok(output) = output else {
             return table;
@@ -1313,4 +1444,68 @@ fn ipv4_to_u32(ip: Ipv4Addr) -> u32 {
 
 fn parse_ipv4_or_zero(value: &str) -> Ipv4Addr {
     Ipv4Addr::from_str(value).unwrap_or(Ipv4Addr::new(0, 0, 0, 0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn iface(name: &str, ip: &str, subnet: &str) -> NetworkInterface {
+        NetworkInterface {
+            name: name.to_string(),
+            ip: ip.to_string(),
+            cidr: 24,
+            subnet: subnet.to_string(),
+            host_count: 254,
+        }
+    }
+
+    #[test]
+    fn build_scan_targets_excludes_local_address() {
+        let network = Ipv4Net::from_str("192.168.10.0/29").expect("valid CIDR");
+        let local_ip = Some(Ipv4Addr::new(192, 168, 10, 3));
+
+        let targets = build_scan_targets(network, local_ip, 16);
+
+        assert_eq!(targets.len(), 5);
+        assert!(!targets.contains(&Ipv4Addr::new(192, 168, 10, 3)));
+        assert_eq!(targets.first().copied(), Some(Ipv4Addr::new(192, 168, 10, 1)));
+        assert_eq!(targets.last().copied(), Some(Ipv4Addr::new(192, 168, 10, 6)));
+    }
+
+    #[test]
+    fn build_scan_targets_respects_max_hosts() {
+        let network = Ipv4Net::from_str("10.0.0.0/24").expect("valid CIDR");
+
+        let targets = build_scan_targets(network, None, 10);
+
+        assert_eq!(targets.len(), 10);
+        assert!(targets.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn select_interface_prefers_exact_subnet_match() {
+        let interfaces = vec![
+            iface("en0", "192.168.1.5", "192.168.1.0/24"),
+            iface("en0", "10.0.0.8", "10.0.0.0/24"),
+            iface("en1", "172.16.0.2", "172.16.0.0/24"),
+        ];
+
+        let selected =
+            select_interface(&interfaces, "en0", Some("10.0.0.0/24")).expect("interface exists");
+
+        assert_eq!(selected.ip, "10.0.0.8");
+    }
+
+    #[test]
+    fn normalize_mac_accepts_short_segments() {
+        let normalized = normalize_mac("a:b:c:d:e:f");
+        assert_eq!(normalized.as_deref(), Some("0A:0B:0C:0D:0E:0F"));
+    }
+
+    #[test]
+    fn extract_mac_ignores_incomplete_arp_lines() {
+        let line = "? (192.168.1.10) at (incomplete) on en0 ifscope [ethernet]";
+        assert_eq!(extract_mac_from_arp_line(line), None);
+    }
 }

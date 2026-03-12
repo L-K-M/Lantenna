@@ -1,4 +1,5 @@
 export type PortProfile = 'quick' | 'standard' | 'deep';
+export type DiscoveryMode = 'tcp' | 'hybrid';
 
 export interface NetworkInterface {
   name: string;
@@ -41,6 +42,7 @@ export interface ScanOptions {
   interface_name: string;
   subnet: string | null;
   port_profile: PortProfile;
+  discovery_mode: DiscoveryMode;
   timeout_ms: number | null;
   max_hosts: number | null;
 }
@@ -56,6 +58,7 @@ export interface ScanProgress {
 export interface ScanResult {
   started_at: string;
   completed_at: string | null;
+  cancelled: boolean;
   hosts: Host[];
   options: ScanOptions;
 }
