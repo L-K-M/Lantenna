@@ -25,5 +25,7 @@ ipnet = "2.10"
 futures = "0.3"
 dns-lookup = "2.0"
 ndb-oui = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+open = "5"
 log = "0.4"
 env_logger = "0.11"

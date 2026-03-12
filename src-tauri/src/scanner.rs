@@ -827,10 +827,43 @@ fn normalize_mac(mac: &str) -> Option<String> {
     Some(normalized_parts.join(":"))
 }
 
+fn extract_ipv4_from_arp_line(line: &str) -> Option<Ipv4Addr> {
+    line.split_whitespace().find_map(|token| {
+        let candidate = token.trim_matches(|ch: char| !(ch.is_ascii_digit() || ch == '.'));
+        if candidate.is_empty() {
+            return None;
+        }
+
+        Ipv4Addr::from_str(candidate).ok()
+    })
+}
+
+fn extract_mac_from_arp_line(line: &str) -> Option<String> {
+    line.split_whitespace().find_map(|token| {
+        if token.to_ascii_lowercase().contains("incomplete") {
+            return None;
+        }
+
+        let candidate =
+            token.trim_matches(|ch: char| !(ch.is_ascii_hexdigit() || ch == ':' || ch == '-'));
+        if candidate.is_empty() {
+            return None;
+        }
+
+        normalize_mac(candidate)
+    })
+}
+
 async fn read_arp_table() -> HashMap<String, String> {
     tokio::task::spawn_blocking(move || {
         let mut table = HashMap::new();
+
+        #[cfg(target_os = "windows")]
+        let output = Command::new("arp").arg("-a").output();
+
+        #[cfg(not(target_os = "windows"))]
         let output = Command::new("arp").arg("-an").output();
+
         let Ok(output) = output else {
             return table;
         };
@@ -841,30 +874,19 @@ async fn read_arp_table() -> HashMap<String, String> {
 
         let content = String::from_utf8_lossy(&output.stdout);
         for line in content.lines() {
-            let Some(start_ip) = line.find('(') else {
-                continue;
-            };
-            let Some(end_ip) = line[start_ip + 1..].find(')') else {
+            let Some(ip) = extract_ipv4_from_arp_line(line) else {
                 continue;
             };
 
-            let ip = line[start_ip + 1..start_ip + 1 + end_ip].trim();
-            if ip.is_empty() {
+            if ip.is_unspecified() {
                 continue;
             }
 
-            let Some(at_pos) = line.find(" at ") else {
+            let Some(mac) = extract_mac_from_arp_line(line) else {
                 continue;
             };
-            let remainder = &line[at_pos + 4..];
-            let mac_candidate = remainder.split_whitespace().next().unwrap_or("");
-            if mac_candidate.contains("incomplete") {
-                continue;
-            }
 
-            if let Some(mac) = normalize_mac(mac_candidate) {
-                table.insert(ip.to_string(), mac);
-            }
+            table.insert(ip.to_string(), mac);
         }
 
         table
@@ -885,120 +907,110 @@ fn local_oui_vendor(mac: &str) -> Option<String> {
     first_non_empty(vec![entry.vendor_detail.clone(), Some(entry.vendor.clone())])
 }
 
-async fn lookup_vendor_via_maclookup(mac: &str) -> Option<String> {
-    let mac = mac.to_string();
-    tokio::task::spawn_blocking(move || {
-        let url = format!("https://api.maclookup.app/v2/macs/{}", mac);
-        let output = Command::new("curl")
-            .arg("-sS")
-            .arg("--max-time")
-            .arg("2")
-            .arg(url)
-            .output()
-            .ok()?;
-
-        if !output.status.success() {
-            return None;
-        }
-
-        let body = String::from_utf8(output.stdout).ok()?;
-        let value: Value = serde_json::from_str(&body).ok()?;
-
-        first_non_empty(vec![
-            string_at_path(&value, &["company"]),
-            string_at_path(&value, &["vendor"]),
-            string_at_path(&value, &["organization"]),
-            string_at_path(&value, &["vendorDetails", "companyName"]),
-            string_at_path(&value, &["vendorDetails", "company"]),
-            string_at_path(&value, &["vendorDetails", "organizationName"]),
-            string_at_path(&value, &["blockDetails", "organizationName"]),
-        ])
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(2))
+            .user_agent("lantenna/0.1")
+            .build()
+            .expect("failed to build HTTP client")
     })
-    .await
-    .ok()
-    .flatten()
+}
+
+async fn lookup_vendor_via_maclookup(mac: &str) -> Option<String> {
+    let url = format!("https://api.maclookup.app/v2/macs/{}", mac);
+    let response = http_client()
+        .get(url)
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await
+        .ok()?;
+
+    if !response.status().is_success() {
+        return None;
+    }
+
+    let value: Value = response.json().await.ok()?;
+
+    first_non_empty(vec![
+        string_at_path(&value, &["company"]),
+        string_at_path(&value, &["vendor"]),
+        string_at_path(&value, &["organization"]),
+        string_at_path(&value, &["vendorDetails", "companyName"]),
+        string_at_path(&value, &["vendorDetails", "company"]),
+        string_at_path(&value, &["vendorDetails", "organizationName"]),
+        string_at_path(&value, &["blockDetails", "organizationName"]),
+    ])
 }
 
 async fn lookup_fingerbank(mac: &str, hostname: Option<&str>) -> Option<FingerbankFingerprint> {
     let api_key = std::env::var("FINGERBANK_API_KEY").ok()?;
-    let mac = mac.to_string();
-    let hostname = hostname.map(str::to_string);
 
-    tokio::task::spawn_blocking(move || {
-        let mut command = Command::new("curl");
-        command
-            .arg("-sS")
-            .arg("--max-time")
-            .arg("3")
-            .arg("--get")
-            .arg("https://api.fingerbank.org/api/v2/combinations/interrogate")
-            .arg("--data-urlencode")
-            .arg(format!("key={}", api_key))
-            .arg("--data-urlencode")
-            .arg(format!("mac={}", mac));
+    let mut request = http_client()
+        .get("https://api.fingerbank.org/api/v2/combinations/interrogate")
+        .query(&[("key", api_key.as_str()), ("mac", mac)]);
 
-        if let Some(hostname) = hostname {
-            command
-                .arg("--data-urlencode")
-                .arg(format!("hostname={}", hostname));
-        }
+    if let Some(hostname) = hostname {
+        request = request.query(&[("hostname", hostname)]);
+    }
 
-        let output = command.output().ok()?;
-        if !output.status.success() {
-            return None;
-        }
+    let response = request
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await
+        .ok()?;
 
-        let body = String::from_utf8(output.stdout).ok()?;
-        let value: Value = serde_json::from_str(&body).ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
 
-        let confidence = number_at_paths(
-            &value,
-            vec![
-                vec!["score"],
-                vec!["confidence"],
-                vec!["device", "score"],
-                vec!["device", "confidence"],
-            ],
-        )
-        .map(|score| score.clamp(0.0, 100.0).round() as u8);
+    let value: Value = response.json().await.ok()?;
 
-        let vendor = first_non_empty(vec![
-            string_at_path(&value, &["device", "manufacturer", "name"]),
-            string_at_path(&value, &["manufacturer", "name"]),
-            string_at_path(&value, &["manufacturer"]),
-            string_at_path(&value, &["vendor"]),
-        ]);
+    let confidence = number_at_paths(
+        &value,
+        vec![
+            vec!["score"],
+            vec!["confidence"],
+            vec!["device", "score"],
+            vec!["device", "confidence"],
+        ],
+    )
+    .map(|score| score.clamp(0.0, 100.0).round() as u8);
 
-        let model = first_non_empty(vec![
-            string_at_path(&value, &["device", "name"]),
-            string_at_path(&value, &["device", "model"]),
-            string_at_path(&value, &["device", "version"]),
-        ]);
+    let vendor = first_non_empty(vec![
+        string_at_path(&value, &["device", "manufacturer", "name"]),
+        string_at_path(&value, &["manufacturer", "name"]),
+        string_at_path(&value, &["manufacturer"]),
+        string_at_path(&value, &["vendor"]),
+    ]);
 
-        let os_guess = first_non_empty(vec![
-            string_at_path(&value, &["os", "name"]),
-            string_at_path(&value, &["operating_system", "name"]),
-            string_at_path(&value, &["device", "os_name"]),
-        ]);
+    let model = first_non_empty(vec![
+        string_at_path(&value, &["device", "name"]),
+        string_at_path(&value, &["device", "model"]),
+        string_at_path(&value, &["device", "version"]),
+    ]);
 
-        let device_type = first_non_empty(vec![
-            string_at_path(&value, &["device", "type_name"]),
-            string_at_path(&value, &["device", "type"]),
-            string_at_path(&value, &["device", "device_type"]),
-        ]);
+    let os_guess = first_non_empty(vec![
+        string_at_path(&value, &["os", "name"]),
+        string_at_path(&value, &["operating_system", "name"]),
+        string_at_path(&value, &["device", "os_name"]),
+    ]);
 
-        Some(FingerbankFingerprint {
-            vendor: vendor.clone(),
-            manufacturer: vendor,
-            model,
-            device_type,
-            os_guess,
-            confidence,
-        })
+    let device_type = first_non_empty(vec![
+        string_at_path(&value, &["device", "type_name"]),
+        string_at_path(&value, &["device", "type"]),
+        string_at_path(&value, &["device", "device_type"]),
+    ]);
+
+    Some(FingerbankFingerprint {
+        vendor: vendor.clone(),
+        manufacturer: vendor,
+        model,
+        device_type,
+        os_guess,
+        confidence,
     })
-    .await
-    .ok()
-    .flatten()
 }
 
 fn infer_device_profile(host: &Host) -> (

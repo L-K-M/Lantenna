@@ -21,10 +21,8 @@ pub struct Storage {
 
 impl Storage {
     pub fn new() -> Result<Self> {
-        let app_support = dirs::home_dir()
-            .context("Failed to get home directory")?
-            .join("Library")
-            .join("Application Support")
+        let app_support = dirs::data_dir()
+            .context("Failed to get platform data directory")?
             .join("Lantenna");
 
         fs::create_dir_all(&app_support).context("Failed to create application support directory")?;

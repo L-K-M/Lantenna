@@ -3,7 +3,6 @@ use crate::models::{
 };
 use crate::scanner;
 use crate::storage::Storage;
-use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -165,30 +164,7 @@ pub async fn open_external_url(url: String) -> Result<(), String> {
         return Err("Unsupported URL scheme".to_string());
     }
 
-    #[cfg(target_os = "macos")]
-    let status = Command::new("open")
-        .arg(&url)
-        .status()
-        .map_err(|error| error.to_string())?;
-
-    #[cfg(target_os = "linux")]
-    let status = Command::new("xdg-open")
-        .arg(&url)
-        .status()
-        .map_err(|error| error.to_string())?;
-
-    #[cfg(target_os = "windows")]
-    let status = Command::new("cmd")
-        .args(["/C", "start", "", &url])
-        .status()
-        .map_err(|error| error.to_string())?;
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    return Err("Unsupported platform".to_string());
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err("Failed to launch external URL".to_string())
-    }
+    open::that(&url)
+        .map_err(|error| error.to_string())
+        .map(|_| ())
 }
