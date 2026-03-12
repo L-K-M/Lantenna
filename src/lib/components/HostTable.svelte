@@ -18,10 +18,12 @@
   export let selectedHostIp: string | null = null;
   export let customNames: Record<string, string> = {};
   export let favoriteIps: string[] = [];
+  export let hiddenIps: string[] = [];
   export let staleFavoriteIps: string[] = [];
   export let newHostIps: string[] = [];
   export let onSelectHost: ((ip: string) => void) | undefined = undefined;
   export let onToggleFavorite: ((ip: string) => void) | undefined = undefined;
+  export let onToggleHidden: ((ip: string) => void) | undefined = undefined;
 
   type SortField = 'ip' | 'favorite' | 'name' | 'fingerprint' | 'ports' | 'lastSeen';
   type SortDirection = 'asc' | 'desc';
@@ -31,14 +33,30 @@
     label: string;
   }
 
+  interface ContextMenuState {
+    open: boolean;
+    x: number;
+    y: number;
+    ip: string;
+  }
+
   let sortField: SortField = 'favorite';
   let sortDirection: SortDirection = 'asc';
 
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
   $: favoriteSet = new Set(favoriteIps);
+  $: hiddenSet = new Set(hiddenIps);
   $: staleFavoriteSet = new Set(staleFavoriteIps);
   $: newHostSet = new Set(newHostIps);
+
+  let contextMenu: ContextMenuState = {
+    open: false,
+    x: 0,
+    y: 0,
+    ip: ''
+  };
+  let contextMenuElement: HTMLDivElement | null = null;
 
   $: sortedHosts = [...hosts].sort((a, b) => {
     const result = compareHosts(a, b, sortField, favoriteSet);
@@ -162,6 +180,78 @@
 
   function favoriteLabel(ip: string): string {
     return favoriteSet.has(ip) ? `Unfavorite ${ip}` : `Favorite ${ip}`;
+  }
+
+  function hiddenLabel(ip: string): string {
+    return hiddenSet.has(ip) ? `Unhide ${ip}` : `Hide ${ip}`;
+  }
+
+  function closeContextMenu() {
+    if (!contextMenu.open) {
+      return;
+    }
+
+    contextMenu = {
+      open: false,
+      x: 0,
+      y: 0,
+      ip: ''
+    };
+  }
+
+  function selectHost(ip: string) {
+    closeContextMenu();
+    onSelectHost?.(ip);
+  }
+
+  function openContextMenu(event: MouseEvent, ip: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    onSelectHost?.(ip);
+
+    const menuWidth = 170;
+    const menuHeight = 34;
+    const maxX = Math.max(8, window.innerWidth - menuWidth - 8);
+    const maxY = Math.max(8, window.innerHeight - menuHeight - 8);
+
+    contextMenu = {
+      open: true,
+      x: Math.min(event.clientX, maxX),
+      y: Math.min(event.clientY, maxY),
+      ip
+    };
+  }
+
+  function toggleHiddenFromContextMenu(ip: string) {
+    onToggleHidden?.(ip);
+    closeContextMenu();
+  }
+
+  function handleWindowPointerDown(event: MouseEvent) {
+    if (!contextMenu.open) {
+      return;
+    }
+
+    const target = event.target;
+    if (contextMenuElement && target instanceof Node && contextMenuElement.contains(target)) {
+      return;
+    }
+
+    closeContextMenu();
+  }
+
+  function handleWindowContextMenu(event: MouseEvent) {
+    if (event.defaultPrevented) {
+      return;
+    }
+
+    closeContextMenu();
+  }
+
+  function handleWindowKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      closeContextMenu();
+    }
   }
 
   function displayName(host: Host): string {
@@ -313,6 +403,14 @@
   }
 </script>
 
+<svelte:window
+  on:mousedown={handleWindowPointerDown}
+  on:contextmenu={handleWindowContextMenu}
+  on:keydown={handleWindowKeydown}
+  on:resize={closeContextMenu}
+  on:blur={closeContextMenu}
+/>
+
 <div class="table-wrap">
   <div class="table-header-container">
     <table>
@@ -407,9 +505,11 @@
             <!-- svelte-ignore a11y-no-static-element-interactions -->
             <tr
               class:selected={selectedHostIp === host.ip}
+              class:hidden-entry={hiddenSet.has(host.ip)}
               class:stale={staleFavoriteSet.has(host.ip)}
               class:new-entry={newHostSet.has(host.ip)}
-              onclick={() => onSelectHost?.(host.ip)}
+              onclick={() => selectHost(host.ip)}
+              oncontextmenu={(event) => openContextMenu(event, host.ip)}
             >
               <td class="col-ip">
                 <div class="ip-cell">
@@ -444,7 +544,26 @@
       </tbody>
     </table>
   </div>
+
 </div>
+
+{#if contextMenu.open}
+  <div
+    class="context-menu"
+    bind:this={contextMenuElement}
+    role="menu"
+    style={`left: ${contextMenu.x}px; top: ${contextMenu.y}px;`}
+  >
+    <button
+      type="button"
+      class="context-menu-item"
+      role="menuitem"
+      onclick={() => toggleHiddenFromContextMenu(contextMenu.ip)}
+    >
+      {hiddenLabel(contextMenu.ip)}
+    </button>
+  </div>
+{/if}
 
 <style>
   .table-wrap {
@@ -649,6 +768,11 @@
     background: #fff7bf;
   }
 
+  tr.hidden-entry:not(:hover):not(.selected) td {
+    color: #666;
+    background: #f4f4f4;
+  }
+
   tr:hover td {
     background: #000;
     color: #fff;
@@ -682,5 +806,37 @@
     color: #666;
     font-style: italic;
     padding: 24px 8px;
+  }
+
+  .context-menu {
+    position: fixed;
+    z-index: 3000;
+    min-width: 170px;
+    border: 1px solid #000;
+    background: #fff;
+    box-shadow: 2px 2px 0 #000;
+    padding: 2px;
+  }
+
+  .context-menu-item {
+    width: 100%;
+    border: none;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    padding: 5px 8px;
+    font-family: 'Sysfont', 'Chicago', 'Impact', sans-serif !important;
+    font-size: 18px !important;
+    font-weight: 400;
+    letter-spacing: 1px;
+    font-feature-settings: 'liga' off, 'clig' off, 'calt' off;
+    cursor: pointer;
+  }
+
+  .context-menu-item:hover,
+  .context-menu-item:focus-visible {
+    background: #000;
+    color: #fff;
+    outline: none;
   }
 </style>

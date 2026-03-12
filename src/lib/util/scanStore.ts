@@ -21,6 +21,8 @@ interface ScanStoreState {
   newHostIps: string[];
   customNames: Record<string, string>;
   favoriteIps: string[];
+  hiddenIps: string[];
+  showHiddenEntries: boolean;
   staleFavoriteIps: string[];
   progress: ScanProgress | null;
   scanning: boolean;
@@ -35,6 +37,7 @@ type FavoriteHostSnapshots = Record<string, Host>;
 
 const FAVORITE_IPS_STORAGE_KEY = 'lantenna.favoriteIps';
 const FAVORITE_HOSTS_STORAGE_KEY = 'lantenna.favoriteHosts';
+const HIDDEN_IPS_STORAGE_KEY = 'lantenna.hiddenIps';
 const CUSTOM_NAMES_STORAGE_KEY = 'lantenna.customNames';
 const SELECTED_INTERFACE_STORAGE_KEY = 'lantenna.selectedInterface';
 const MAX_SCAN_HOSTS = 4096;
@@ -109,12 +112,42 @@ function loadFavoriteIps(): string[] {
   }
 }
 
+function loadHiddenIps(): string[] {
+  if (!canUseStorage()) {
+    return [];
+  }
+
+  try {
+    const raw = window.localStorage.getItem(HIDDEN_IPS_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter((item): item is string => typeof item === 'string');
+  } catch {
+    return [];
+  }
+}
+
 function saveFavoriteIps(favoriteIps: string[]) {
   if (!canUseStorage()) {
     return;
   }
 
   window.localStorage.setItem(FAVORITE_IPS_STORAGE_KEY, JSON.stringify(favoriteIps));
+}
+
+function saveHiddenIps(hiddenIps: string[]) {
+  if (!canUseStorage()) {
+    return;
+  }
+
+  window.localStorage.setItem(HIDDEN_IPS_STORAGE_KEY, JSON.stringify(hiddenIps));
 }
 
 function loadFavoriteHostSnapshots(): FavoriteHostSnapshots {
@@ -147,8 +180,8 @@ function saveFavoriteHostSnapshots(snapshots: FavoriteHostSnapshots) {
   window.localStorage.setItem(FAVORITE_HOSTS_STORAGE_KEY, JSON.stringify(snapshots));
 }
 
-function normalizeFavoriteIps(favoriteIps: string[]): string[] {
-  const unique = Array.from(new Set(favoriteIps));
+function normalizeIpList(ips: string[]): string[] {
+  const unique = Array.from(new Set(ips));
   return unique.sort((a, b) => ipToNumber(a) - ipToNumber(b));
 }
 
@@ -323,7 +356,8 @@ function calculateStaleFavoriteIps(favoriteIps: string[], hosts: Host[]): string
   return favoriteIps.filter((ip) => !visibleIps.has(ip));
 }
 
-const initialFavoriteIps = normalizeFavoriteIps(loadFavoriteIps());
+const initialFavoriteIps = normalizeIpList(loadFavoriteIps());
+const initialHiddenIps = normalizeIpList(loadHiddenIps());
 const initialFavoriteHostSnapshots = loadFavoriteHostSnapshots();
 const initialStaleFavoriteIps = [...initialFavoriteIps];
 const initialCustomNames = loadCustomNames();
@@ -337,6 +371,8 @@ const initialState: ScanStoreState = {
   newHostIps: [],
   customNames: initialCustomNames,
   favoriteIps: initialFavoriteIps,
+  hiddenIps: initialHiddenIps,
+  showHiddenEntries: false,
   staleFavoriteIps: initialStaleFavoriteIps,
   progress: null,
   scanning: false,
@@ -617,7 +653,7 @@ function createScanStore() {
         const currentlyFavorite = state.favoriteIps.includes(ip);
 
         if (currentlyFavorite) {
-          const favoriteIps = normalizeFavoriteIps(state.favoriteIps.filter((item) => item !== ip));
+          const favoriteIps = normalizeIpList(state.favoriteIps.filter((item) => item !== ip));
           const staleFavoriteIps = state.staleFavoriteIps.filter((item) => item !== ip);
 
           const snapshots = { ...favoriteHostSnapshots };
@@ -639,7 +675,7 @@ function createScanStore() {
           };
         }
 
-        const favoriteIps = normalizeFavoriteIps([...state.favoriteIps, ip]);
+        const favoriteIps = normalizeIpList([...state.favoriteIps, ip]);
         const staleFavoriteIps = state.staleFavoriteIps.includes(ip)
           ? state.staleFavoriteIps
           : state.hosts.some((host) => host.ip === ip)
@@ -660,6 +696,44 @@ function createScanStore() {
           hosts: mergeStaleFavoritesIntoHosts(state.hosts, staleFavoriteIps, favoriteHostSnapshots)
         };
       });
+    },
+    toggleHidden: (ip: string) => {
+      update((state) => {
+        const currentlyHidden = state.hiddenIps.includes(ip);
+
+        if (currentlyHidden) {
+          const hiddenIps = normalizeIpList(state.hiddenIps.filter((item) => item !== ip));
+          saveHiddenIps(hiddenIps);
+
+          return {
+            ...state,
+            hiddenIps
+          };
+        }
+
+        const hiddenIps = normalizeIpList([...state.hiddenIps, ip]);
+        saveHiddenIps(hiddenIps);
+
+        return {
+          ...state,
+          hiddenIps,
+          selectedHostIp: state.showHiddenEntries
+            ? state.selectedHostIp
+            : state.selectedHostIp === ip
+              ? null
+              : state.selectedHostIp
+        };
+      });
+    },
+    setShowHiddenEntries: (showHiddenEntries: boolean) => {
+      update((state) => ({
+        ...state,
+        showHiddenEntries,
+        selectedHostIp:
+          !showHiddenEntries && state.selectedHostIp && state.hiddenIps.includes(state.selectedHostIp)
+            ? null
+            : state.selectedHostIp
+      }));
     },
     setSelectedHost: (ip: string | null) => {
       update((state) => ({ ...state, selectedHostIp: ip }));

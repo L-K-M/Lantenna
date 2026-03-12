@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { ErrorBanner, Notification, TitleBar } from '@lkmc/system7-ui';
+  import { Checkbox, ErrorBanner, Notification, TitleBar } from '@lkmc/system7-ui';
 
   import HostInspector from '$lib/components/HostInspector.svelte';
   import HostTable from '$lib/components/HostTable.svelte';
@@ -22,6 +22,8 @@
     newHostIps,
     customNames,
     favoriteIps,
+    hiddenIps,
+    showHiddenEntries,
     staleFavoriteIps,
     progress,
     scanning,
@@ -31,7 +33,9 @@
     selectedHostIp
   } = $scanStore);
 
-  $: filteredHosts = hosts.filter((host) => {
+  $: hiddenSet = new Set(hiddenIps);
+
+  $: queryMatchedHosts = hosts.filter((host) => {
     if (!query.trim()) {
       return true;
     }
@@ -45,7 +49,15 @@
     );
   });
 
-  $: selectedHost = hosts.find((host) => host.ip === selectedHostIp) || null;
+  $: hiddenCount = hosts.filter((host) => hiddenSet.has(host.ip)).length;
+
+  $: visibleHosts = showHiddenEntries ? hosts : hosts.filter((host) => !hiddenSet.has(host.ip));
+
+  $: filteredHosts = showHiddenEntries
+    ? queryMatchedHosts
+    : queryMatchedHosts.filter((host) => !hiddenSet.has(host.ip));
+
+  $: selectedHost = visibleHosts.find((host) => host.ip === selectedHostIp) || null;
 
   $: footerStatus = scanning
     ? progress
@@ -122,10 +134,12 @@
           {selectedHostIp}
           {customNames}
           {favoriteIps}
+          {hiddenIps}
           {staleFavoriteIps}
           {newHostIps}
           onSelectHost={(ip) => scanStore.setSelectedHost(ip)}
           onToggleFavorite={(ip) => scanStore.toggleFavorite(ip)}
+          onToggleHidden={(ip) => scanStore.toggleHidden(ip)}
         />
         <HostInspector
           host={selectedHost}
@@ -136,7 +150,18 @@
       </section>
     </main>
 
-    <footer class="app-footer">{footerStatus}</footer>
+    <footer class="app-footer">
+      <span>{footerStatus}</span>
+      {#if hiddenCount > 0}
+        <div class="hidden-footer-toggle">
+          <Checkbox
+            checked={showHiddenEntries}
+            label="Show hidden entries"
+            onchange={(checked) => scanStore.setShowHiddenEntries(checked)}
+          />
+        </div>
+      {/if}
+    </footer>
   {/if}
 </div>
 
@@ -173,6 +198,13 @@
     display: flex;
     align-items: center;
     white-space: nowrap;
+    gap: 12px;
+  }
+
+  .hidden-footer-toggle {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
   }
 
   @media (max-width: 980px) {
