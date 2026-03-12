@@ -19,6 +19,7 @@
   export let customNames: Record<string, string> = {};
   export let favoriteIps: string[] = [];
   export let staleFavoriteIps: string[] = [];
+  export let newHostIps: string[] = [];
   export let onSelectHost: ((ip: string) => void) | undefined = undefined;
   export let onToggleFavorite: ((ip: string) => void) | undefined = undefined;
 
@@ -37,6 +38,7 @@
 
   $: favoriteSet = new Set(favoriteIps);
   $: staleFavoriteSet = new Set(staleFavoriteIps);
+  $: newHostSet = new Set(newHostIps);
 
   $: sortedHosts = [...hosts].sort((a, b) => {
     const result = compareHosts(a, b, sortField, favoriteSet);
@@ -135,11 +137,22 @@
       return 'Not fingerprinted yet';
     }
 
-    const vendor = fp.vendor || fp.manufacturer || 'Unknown vendor';
-    const kind = fp.device_type || fp.os_guess || fp.model_guess || 'Unknown type';
+    const vendor = normalizeFingerprintText(fp.vendor || fp.manufacturer || 'Unknown vendor');
+    const kind = normalizeFingerprintText(fp.device_type || fp.os_guess || fp.model_guess || 'Unknown type');
     const confidence = Number.isFinite(fp.confidence) ? `${fp.confidence}%` : 'n/a';
 
     return `${vendor} • ${kind} (${confidence})`;
+  }
+
+  function normalizeFingerprintText(value: string): string {
+    return value
+      .normalize('NFKC')
+      .replace(/[\u0000-\u001F\u007F]/g, '')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/\s+([,.;:!?])/g, '$1')
+      .replace(/([,.;:!?])(\S)/g, '$1 $2')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   function toggleFavorite(event: MouseEvent, ip: string) {
@@ -395,6 +408,7 @@
             <tr
               class:selected={selectedHostIp === host.ip}
               class:stale={staleFavoriteSet.has(host.ip)}
+              class:new-entry={newHostSet.has(host.ip)}
               onclick={() => onSelectHost?.(host.ip)}
             >
               <td class="col-ip">
@@ -413,6 +427,9 @@
                   </button>
                   <img class="device-icon" src={hostIcon.src} alt="" aria-hidden="true" title={hostIcon.label} />
                   <span class="ip-text">{host.ip}</span>
+                  {#if newHostSet.has(host.ip)}
+                    <span class="new-badge">NEW</span>
+                  {/if}
                 </div>
               </td>
               <td class="col-name">
@@ -602,12 +619,27 @@
     text-overflow: ellipsis;
   }
 
+  .new-badge {
+    font-size: 9px;
+    line-height: 1;
+    letter-spacing: 0.2px;
+    border: 1px solid #000;
+    padding: 1px 3px;
+    background: #fff7bf;
+    color: #000;
+    flex: 0 0 auto;
+  }
+
   tr {
     cursor: pointer;
   }
 
   tr.stale td {
     color: #777;
+  }
+
+  tr.new-entry:not(:hover):not(.selected) td {
+    background: #fff7bf;
   }
 
   tr:hover td {
@@ -624,6 +656,13 @@
   tr:hover .favorite-toggle svg,
   tr.selected .favorite-toggle svg {
     stroke: #fff;
+  }
+
+  tr:hover .new-badge,
+  tr.selected .new-badge {
+    background: #fff;
+    color: #000;
+    border-color: #fff;
   }
 
   tr:hover .favorite-toggle.active svg,

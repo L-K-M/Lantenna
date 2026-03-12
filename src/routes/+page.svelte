@@ -19,6 +19,7 @@
     selectedInterface,
     portProfile,
     hosts,
+    newHostIps,
     customNames,
     favoriteIps,
     staleFavoriteIps,
@@ -122,6 +123,7 @@
           {customNames}
           {favoriteIps}
           {staleFavoriteIps}
+          {newHostIps}
           onSelectHost={(ip) => scanStore.setSelectedHost(ip)}
           onToggleFavorite={(ip) => scanStore.toggleFavorite(ip)}
         />

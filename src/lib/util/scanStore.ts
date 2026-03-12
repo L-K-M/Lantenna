@@ -9,6 +9,7 @@ interface ScanStoreState {
   selectedInterface: string | null;
   portProfile: PortProfile;
   hosts: Host[];
+  newHostIps: string[];
   customNames: Record<string, string>;
   favoriteIps: string[];
   staleFavoriteIps: string[];
@@ -279,6 +280,7 @@ const initialState: ScanStoreState = {
   selectedInterface: initialSelectedInterface,
   portProfile: 'quick',
   hosts: mergeStaleFavoritesIntoHosts([], initialStaleFavoriteIps, initialFavoriteHostSnapshots),
+  newHostIps: [],
   customNames: initialCustomNames,
   favoriteIps: initialFavoriteIps,
   staleFavoriteIps: initialStaleFavoriteIps,
@@ -304,6 +306,31 @@ function sortHosts(hosts: Host[]): Host[] {
   return [...hosts].sort((a, b) => ipToNumber(a.ip) - ipToNumber(b.ip));
 }
 
+function sortIps(ips: string[]): string[] {
+  return [...ips].sort((a, b) => ipToNumber(a) - ipToNumber(b));
+}
+
+function uniqueSortedIps(ips: string[]): string[] {
+  return sortIps(Array.from(new Set(ips)));
+}
+
+function scanTargetKey(interfaceName: string, subnet?: string | null): string {
+  return `${interfaceName}|${subnet || ''}`;
+}
+
+function scanTargetMatches(previousTarget: string | null, interfaceName: string, subnet?: string | null): boolean {
+  if (!previousTarget) {
+    return false;
+  }
+
+  const exactTarget = scanTargetKey(interfaceName, subnet);
+  if (previousTarget === exactTarget) {
+    return true;
+  }
+
+  return previousTarget === `${interfaceName}|` || previousTarget === interfaceName;
+}
+
 function upsertHost(hosts: Host[], host: Host): Host[] {
   const index = hosts.findIndex((item) => item.ip === host.ip);
   if (index >= 0) {
@@ -319,6 +346,10 @@ function createScanStore() {
   const { subscribe, update } = writable<ScanStoreState>(initialState);
   let currentState = initialState;
   let favoriteHostSnapshots: FavoriteHostSnapshots = { ...initialFavoriteHostSnapshots };
+  let latestScanTarget: string | null = null;
+  let latestScanHostIps: string[] = [];
+  let activeComparisonEnabled = false;
+  let activeBaselineIps = new Set<string>();
 
   function rememberFavoriteHost(host: Host, favoriteIps: string[]) {
     if (!favoriteIps.includes(host.ip)) {
@@ -350,11 +381,16 @@ function createScanStore() {
           rememberFavoriteHost(event.payload, state.favoriteIps);
           const staleFavoriteIps = state.staleFavoriteIps.filter((ip) => ip !== event.payload.ip);
           const hosts = upsertHost(state.hosts, event.payload);
+          const shouldMarkNew = activeComparisonEnabled && !activeBaselineIps.has(event.payload.ip);
+          const newHostIps = shouldMarkNew
+            ? uniqueSortedIps([...state.newHostIps, event.payload.ip])
+            : state.newHostIps;
 
           return {
             ...state,
             hosts: mergeStaleFavoritesIntoHosts(hosts, staleFavoriteIps, favoriteHostSnapshots),
-            staleFavoriteIps
+            staleFavoriteIps,
+            newHostIps
           };
         });
       })
@@ -372,8 +408,16 @@ function createScanStore() {
 
     unlisteners.push(
       await listen<ScanResult>('scan-complete', (event) => {
+        const completedTarget = scanTargetKey(event.payload.options.interface_name, event.payload.options.subnet);
+
         update((state) => {
           const scannedHosts = sortHosts(event.payload.hosts);
+          const completedHostIps = uniqueSortedIps(scannedHosts.map((host) => host.ip));
+
+          const newHostIps = activeComparisonEnabled
+            ? completedHostIps.filter((ip) => !activeBaselineIps.has(ip))
+            : [];
+
           for (const host of scannedHosts) {
             rememberFavoriteHost(host, state.favoriteIps);
           }
@@ -384,6 +428,7 @@ function createScanStore() {
             ...state,
             hosts: mergeStaleFavoritesIntoHosts(scannedHosts, staleFavoriteIps, favoriteHostSnapshots),
             staleFavoriteIps,
+            newHostIps,
             scanning: false,
             progress: state.progress
               ? { ...state.progress, running: false, current_ip: null }
@@ -398,13 +443,21 @@ function createScanStore() {
             error: null
           };
         });
+
+        latestScanTarget = completedTarget;
+        latestScanHostIps = uniqueSortedIps(event.payload.hosts.map((host) => host.ip));
+        activeComparisonEnabled = false;
+        activeBaselineIps = new Set();
+
         notifications.add(`Scan complete: ${event.payload.hosts.length} hosts found.`, 'success');
       })
     );
 
     unlisteners.push(
       await listen<ScanErrorPayload>('scan-error', (event) => {
-        update((state) => ({ ...state, scanning: false, error: event.payload.message }));
+        activeComparisonEnabled = false;
+        activeBaselineIps = new Set();
+        update((state) => ({ ...state, scanning: false, error: event.payload.message, newHostIps: [] }));
         notifications.add(event.payload.message, 'error');
       })
     );
@@ -425,6 +478,9 @@ function createScanStore() {
           TauriService.getScanResults()
         ]);
 
+        latestScanTarget = previous ? scanTargetKey(previous.options.interface_name, previous.options.subnet) : null;
+        latestScanHostIps = previous ? uniqueSortedIps(previous.hosts.map((host) => host.ip)) : [];
+
         update((state) => {
           const knownHosts = previous ? sortHosts(previous.hosts) : [];
           for (const host of knownHosts) {
@@ -441,6 +497,7 @@ function createScanStore() {
             selectedInterface,
             hosts: mergeStaleFavoritesIntoHosts(knownHosts, staleFavoriteIps, favoriteHostSnapshots),
             staleFavoriteIps,
+            newHostIps: [],
             lastScanAt: previous?.completed_at || state.lastScanAt,
             loading: false,
             error: null
@@ -553,6 +610,9 @@ function createScanStore() {
         return;
       }
 
+      activeComparisonEnabled = scanTargetMatches(latestScanTarget, selectedInterface.name, selectedInterface.subnet);
+      activeBaselineIps = new Set(activeComparisonEnabled ? latestScanHostIps : []);
+
       update((next) => {
         const staleFavoriteIps = [...next.favoriteIps];
 
@@ -562,6 +622,7 @@ function createScanStore() {
           error: null,
           hosts: mergeStaleFavoritesIntoHosts([], staleFavoriteIps, favoriteHostSnapshots),
           staleFavoriteIps,
+          newHostIps: [],
           progress: {
             scanned: 0,
             total: 0,
@@ -588,6 +649,8 @@ function createScanStore() {
         });
         notifications.add('Scan started.', 'info');
       } catch (error) {
+        activeComparisonEnabled = false;
+        activeBaselineIps = new Set();
         const message = error instanceof Error ? error.message : 'Failed to start scan';
         update((next) => ({ ...next, scanning: false, error: message }));
         notifications.add(message, 'error');
