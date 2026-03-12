@@ -572,9 +572,9 @@
   }
 
   .col-ip {
-    width: 160px;
-    min-width: 160px;
-    max-width: 160px;
+    width: 200px;
+    min-width: 200px;
+    max-width: 200px;
   }
 
   .col-name {
@@ -619,15 +619,22 @@
     text-overflow: ellipsis;
   }
 
+  .ip-text {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
   .new-badge {
-    font-size: 9px;
-    line-height: 1;
-    letter-spacing: 0.2px;
+    font-size: 10px;
+    line-height: 1.1;
+    letter-spacing: 0.25px;
     border: 1px solid #000;
-    padding: 1px 3px;
+    padding: 1px 4px;
     background: #fff7bf;
     color: #000;
     flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
   }
 
   tr {

@@ -30,7 +30,8 @@ impl Storage {
             .context("Failed to get platform data directory")?
             .join("Lantenna");
 
-        fs::create_dir_all(&app_support).context("Failed to create application support directory")?;
+        fs::create_dir_all(&app_support)
+            .context("Failed to create application support directory")?;
 
         let file_path = app_support.join("scan_results.json");
         let mut data = load_stored_data(&file_path);
@@ -162,8 +163,12 @@ fn quarantine_corrupt_scan_file(file_path: &PathBuf) -> Result<()> {
     match fs::rename(file_path, &backup_path) {
         Ok(_) => Ok(()),
         Err(rename_error) => {
-            fs::copy(file_path, &backup_path)
-                .with_context(|| format!("Failed to copy corrupt file after rename error: {}", rename_error))?;
+            fs::copy(file_path, &backup_path).with_context(|| {
+                format!(
+                    "Failed to copy corrupt file after rename error: {}",
+                    rename_error
+                )
+            })?;
             fs::remove_file(file_path).context("Failed to remove corrupt scan file")?;
             Ok(())
         }

@@ -66,7 +66,10 @@ fn select_interface<'a>(
         .collect::<Vec<&NetworkInterface>>();
 
     if let Some(subnet) = requested_subnet {
-        if let Some(exact_match) = name_matches.iter().copied().find(|iface| iface.subnet == subnet)
+        if let Some(exact_match) = name_matches
+            .iter()
+            .copied()
+            .find(|iface| iface.subnet == subnet)
         {
             return Ok(exact_match);
         }
@@ -219,9 +222,9 @@ pub fn list_network_interfaces() -> Result<Vec<NetworkInterface>> {
     }
 
     interfaces.sort_by(|a, b| {
-        a.name
-            .cmp(&b.name)
-            .then_with(|| ipv4_to_u32(parse_ipv4_or_zero(&a.ip)).cmp(&ipv4_to_u32(parse_ipv4_or_zero(&b.ip))))
+        a.name.cmp(&b.name).then_with(|| {
+            ipv4_to_u32(parse_ipv4_or_zero(&a.ip)).cmp(&ipv4_to_u32(parse_ipv4_or_zero(&b.ip)))
+        })
     });
     interfaces.dedup_by(|a, b| a.name == b.name && a.ip == b.ip);
 
@@ -240,13 +243,20 @@ where
 {
     let started_at = Utc::now().to_rfc3339();
     let interfaces = list_network_interfaces()?;
-    let selected = select_interface(&interfaces, &options.interface_name, options.subnet.as_deref())?;
+    let selected = select_interface(
+        &interfaces,
+        &options.interface_name,
+        options.subnet.as_deref(),
+    )?;
 
-    let subnet = options.subnet.clone().unwrap_or_else(|| selected.subnet.clone());
+    let subnet = options
+        .subnet
+        .clone()
+        .unwrap_or_else(|| selected.subnet.clone());
     options.subnet = Some(subnet.clone());
 
-    let network = Ipv4Net::from_str(&subnet)
-        .with_context(|| format!("Invalid subnet '{}'", subnet))?;
+    let network =
+        Ipv4Net::from_str(&subnet).with_context(|| format!("Invalid subnet '{}'", subnet))?;
     let max_hosts = options
         .max_hosts
         .unwrap_or(selected.host_count as usize)
@@ -265,7 +275,8 @@ where
     let workers = available_workers();
     let host_concurrency = host_concurrency_for_profile(&options.port_profile, workers);
     let port_concurrency = port_concurrency_for_profile(&options.port_profile, workers);
-    let global_connection_limit = global_connection_limit_for_profile(&options.port_profile, workers);
+    let global_connection_limit =
+        global_connection_limit_for_profile(&options.port_profile, workers);
     let connection_semaphore = Arc::new(Semaphore::new(global_connection_limit));
 
     log::info!(
@@ -404,7 +415,9 @@ where
         }
     }
 
-    hosts.sort_by(|a, b| ipv4_to_u32(parse_ipv4_or_zero(&a.ip)).cmp(&ipv4_to_u32(parse_ipv4_or_zero(&b.ip))));
+    hosts.sort_by(|a, b| {
+        ipv4_to_u32(parse_ipv4_or_zero(&a.ip)).cmp(&ipv4_to_u32(parse_ipv4_or_zero(&b.ip)))
+    });
 
     Ok(ScanResult {
         started_at,
@@ -416,14 +429,16 @@ where
 }
 
 pub async fn scan_single_host(ip: String, profile: PortProfile, timeout_ms: u64) -> Result<Host> {
-    let parsed_ip = Ipv4Addr::from_str(&ip)
-        .with_context(|| format!("Invalid IPv4 address '{}'", ip))?;
+    let parsed_ip =
+        Ipv4Addr::from_str(&ip).with_context(|| format!("Invalid IPv4 address '{}'", ip))?;
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let ports = Arc::new(ports_for_profile(&profile));
     let timeout_duration = Duration::from_millis(timeout_ms.clamp(50, 5000));
     let workers = available_workers();
     let port_concurrency = port_concurrency_for_profile(&profile, workers);
-    let connection_semaphore = Arc::new(Semaphore::new(global_connection_limit_for_profile(&profile, workers)));
+    let connection_semaphore = Arc::new(Semaphore::new(global_connection_limit_for_profile(
+        &profile, workers,
+    )));
 
     let (open_ports, reachable) = scan_open_ports(
         parsed_ip,
@@ -536,7 +551,12 @@ async fn ping_host(ip: Ipv4Addr, timeout_duration: Duration) -> bool {
 
     command.kill_on_drop(true);
 
-    match timeout(timeout_duration + Duration::from_millis(300), command.status()).await {
+    match timeout(
+        timeout_duration + Duration::from_millis(300),
+        command.status(),
+    )
+    .await
+    {
         Ok(Ok(status)) => status.success(),
         Ok(Err(error)) => {
             log::debug!("icmp probe failed for {}: {}", ip, error);
@@ -662,7 +682,9 @@ async fn scan_port(
             Ok(Err(error)) if is_reachable_error(&error) => {
                 return Some(PortProbeOutcome::Reachable);
             }
-            Ok(Err(error)) if is_transient_probe_error(&error) && attempt < MAX_CONNECT_ATTEMPTS => {
+            Ok(Err(error))
+                if is_transient_probe_error(&error) && attempt < MAX_CONNECT_ATTEMPTS =>
+            {
                 log::warn!(
                     "transient TCP probe error for {}:{} on attempt {}/{}: {}; retrying",
                     ip,
@@ -720,9 +742,12 @@ fn enrichment_concurrency() -> usize {
     available_workers().clamp(2, 12)
 }
 
-async fn snapshot_pending_vendors(pending_vendor_cache: &SharedVendorCache) -> Vec<(String, String)> {
+async fn snapshot_pending_vendors(
+    pending_vendor_cache: &SharedVendorCache,
+) -> Vec<(String, String)> {
     let cache = pending_vendor_cache.lock().await;
-    cache.iter()
+    cache
+        .iter()
         .map(|(oui, vendor)| (oui.clone(), vendor.clone()))
         .collect()
 }
@@ -804,8 +829,11 @@ async fn enrich_host_internal(
     storage: &Arc<Storage>,
     pending_vendor_cache: SharedVendorCache,
 ) -> (Host, Option<(String, DeviceFingerprint)>) {
-    let mac_address = mac_from_arp
-        .or_else(|| host.fingerprint.as_ref().and_then(|item| item.mac_address.clone()));
+    let mac_address = mac_from_arp.or_else(|| {
+        host.fingerprint
+            .as_ref()
+            .and_then(|item| item.mac_address.clone())
+    });
 
     let primary_key = fingerprint_cache_key(mac_address.as_deref(), &host.ip);
     if let Ok(Some(mut cached)) = storage.get_cached_fingerprint(&primary_key) {
@@ -929,7 +957,7 @@ async fn build_fingerprint(
     }
 
     let (heuristic_type, heuristic_os, heuristic_model, heuristic_notes, heuristic_boost) =
-        infer_device_profile(host);
+        infer_device_profile(host, vendor.as_deref(), manufacturer.as_deref());
 
     if device_type.is_none() {
         device_type = heuristic_type;
@@ -1127,7 +1155,10 @@ fn local_oui_vendor(mac: &str) -> Option<String> {
     let normalized_mac = normalize_mac(mac)?;
     let entry = local_oui_database().lookup(&normalized_mac)?;
 
-    first_non_empty(vec![entry.vendor_detail.clone(), Some(entry.vendor.clone())])
+    first_non_empty(vec![
+        entry.vendor_detail.clone(),
+        Some(entry.vendor.clone()),
+    ])
 }
 
 fn http_client() -> &'static reqwest::Client {
@@ -1236,80 +1267,245 @@ async fn lookup_fingerbank(mac: &str, hostname: Option<&str>) -> Option<Fingerba
     })
 }
 
-fn infer_device_profile(host: &Host) -> (
+fn infer_device_profile(
+    host: &Host,
+    vendor_hint: Option<&str>,
+    manufacturer_hint: Option<&str>,
+) -> (
     Option<String>,
     Option<String>,
     Option<String>,
     Vec<String>,
     u8,
 ) {
-    let ports = host.open_ports.iter().map(|item| item.port).collect::<Vec<u16>>();
+    let ports = host
+        .open_ports
+        .iter()
+        .map(|item| item.port)
+        .collect::<HashSet<u16>>();
     let mut notes = Vec::new();
     let mut confidence_boost = 0u8;
+    let mut inferred_type = None;
+    let mut inferred_os = None;
+    let mut inferred_model = None;
 
-    let contains = |port: u16| ports.contains(&port);
+    let host_hints = normalize_hint_text(host.name.as_deref().unwrap_or_default());
+    let vendor_hints = normalize_hint_text(vendor_hint.unwrap_or_default());
+    let manufacturer_hints = normalize_hint_text(manufacturer_hint.unwrap_or_default());
+    let hint_text = format!("{} {} {}", host_hints, vendor_hints, manufacturer_hints);
 
-    if contains(9100) || contains(515) || contains(631) {
-        confidence_boost = confidence_boost.saturating_add(18);
+    let contains_hint = |needles: &[&str]| contains_any_hint(&hint_text, needles);
+
+    let has = |port: u16| ports.contains(&port);
+    let has_any = |group: &[u16]| group.iter().any(|port| ports.contains(port));
+
+    if has_any(&[9100, 515, 631])
+        || contains_hint(&[
+            "printer",
+            "laserjet",
+            "deskjet",
+            "officejet",
+            "epson",
+            "brother",
+            "canon",
+            "xerox",
+        ])
+    {
+        set_if_none(&mut inferred_type, "Printer");
+        confidence_boost = confidence_boost.saturating_add(24);
         notes.push("printer signature detected (IPP/LPD/JetDirect)".to_string());
-        return (
-            Some("Printer".to_string()),
-            None,
-            None,
-            notes,
-            confidence_boost,
-        );
     }
 
-    if contains(445) || contains(139) || contains(3389) {
+    if has_any(&[37777, 37778])
+        || contains_hint(&[
+            "dahua",
+            "amcrest",
+            "hikvision",
+            "qsee",
+            "surveillance",
+            "nvr",
+            "dvr",
+        ])
+    {
+        set_if_none(&mut inferred_type, "Camera/NVR");
+        set_if_none(&mut inferred_model, "Dahua/Amcrest-style DVR/NVR");
+        confidence_boost = confidence_boost.saturating_add(24);
+        notes.push("DVR/NVR signature detected (ports 37777/37778)".to_string());
+    }
+
+    if has_any(&[554, 8554])
+        || contains_hint(&[
+            "camera",
+            "ipcam",
+            "onvif",
+            "webcam",
+            "reolink",
+            "axis",
+            "hikvision",
+            "dahua",
+        ])
+    {
+        set_if_none(&mut inferred_type, "Camera");
+        confidence_boost = confidence_boost.saturating_add(16);
+        notes.push("RTSP/ONVIF profile suggests camera device".to_string());
+    }
+
+    if has_any(&[8291, 8728, 8729]) || contains_hint(&["mikrotik", "routeros", "winbox"]) {
+        set_if_none(&mut inferred_type, "Network appliance");
+        set_if_none(&mut inferred_model, "MikroTik RouterOS device");
+        confidence_boost = confidence_boost.saturating_add(24);
+        notes.push("MikroTik signature detected (Winbox/API ports)".to_string());
+    }
+
+    if has(32400) || contains_hint(&["plex media server", "plex"]) {
+        set_if_none(&mut inferred_type, "Media server");
+        set_if_none(&mut inferred_model, "Plex Media Server");
+        confidence_boost = confidence_boost.saturating_add(20);
+        notes.push("Plex signature detected (port 32400)".to_string());
+    }
+
+    if has(62078)
+        || (contains_hint(&["iphone", "ipad", "ios", "apple watch"]) && has_any(&[5353, 62078]))
+    {
+        set_if_none(&mut inferred_type, "Mobile device");
+        set_if_none(&mut inferred_os, "Apple iOS/iPadOS family");
+        set_if_none(&mut inferred_model, "Apple mobile device");
+        confidence_boost = confidence_boost.saturating_add(24);
+        notes.push("Apple mobile sync signature detected (port 62078)".to_string());
+    }
+
+    if (has_any(&[5000, 5001]) && contains_hint(&["synology", "diskstation", "dsm", "nas"]))
+        || (has_any(&[5000, 5001]) && has_any(&[445, 139]))
+    {
+        set_if_none(&mut inferred_type, "NAS/Storage");
+        if contains_hint(&["synology", "diskstation", "dsm"]) {
+            set_if_none(&mut inferred_model, "Synology NAS (DSM)");
+        }
+        confidence_boost = confidence_boost.saturating_add(18);
+        notes.push("NAS management + file sharing signature detected".to_string());
+    }
+
+    if has_any(&[7000, 7001, 3689]) && has(5353) {
+        set_if_none(&mut inferred_type, "Apple device");
+        set_if_none(&mut inferred_os, "Apple OS family");
+        confidence_boost = confidence_boost.saturating_add(16);
+        notes.push("Bonjour/AirPlay-style Apple service profile detected".to_string());
+    }
+
+    if has_any(&[6443, 2375]) {
+        set_if_none(&mut inferred_type, "Server/Container host");
+        if has(6443) {
+            set_if_none(&mut inferred_model, "Kubernetes-capable host");
+        }
+        confidence_boost = confidence_boost.saturating_add(12);
+        notes.push("container/orchestration management ports detected".to_string());
+    }
+
+    if has_any(&[3306, 5432, 27017, 6379, 9200]) {
+        set_if_none(&mut inferred_type, "Server/Database host");
+        confidence_boost = confidence_boost.saturating_add(10);
+        notes.push("database/search service ports detected".to_string());
+    }
+
+    if contains_hint(&["raspberrypi", "raspberry pi", "raspi", "rpi"]) {
+        set_if_none(&mut inferred_type, "Single-board computer");
+        set_if_none(&mut inferred_os, "Linux-like");
+        set_if_none(&mut inferred_model, "Raspberry Pi");
+        confidence_boost = confidence_boost.saturating_add(18);
+        notes.push("hostname/vendor hints indicate Raspberry Pi".to_string());
+    }
+
+    if contains_hint(&[
+        "fritzbox",
+        "openwrt",
+        "dd wrt",
+        "router",
+        "gateway",
+        "access point",
+    ]) || (has_any(&[53, 67, 68, 1900]) && has_any(&[80, 443, 8080, 8443, 5000, 5001]))
+    {
+        set_if_none(&mut inferred_type, "Network device");
+        confidence_boost = confidence_boost.saturating_add(14);
+        notes.push("gateway/router service profile detected".to_string());
+    }
+
+    if contains_hint(&[
+        "vmware",
+        "virtualbox",
+        "hyper v",
+        "qemu",
+        "xen",
+        "parallels",
+    ]) {
+        set_if_none(&mut inferred_type, "Virtual machine");
+        confidence_boost = confidence_boost.saturating_add(14);
+        notes.push("virtualization vendor signature detected".to_string());
+    }
+
+    if has_any(&[445, 139, 3389]) {
+        set_if_none(&mut inferred_type, "Workstation/Server");
+        set_if_none(&mut inferred_os, "Windows-like");
         confidence_boost = confidence_boost.saturating_add(16);
         notes.push("SMB/RDP ports suggest a Windows host".to_string());
-        return (
-            Some("Workstation/Server".to_string()),
-            Some("Windows-like".to_string()),
-            None,
-            notes,
-            confidence_boost,
-        );
     }
 
-    if contains(548) || contains(5353) || contains(62078) {
-        confidence_boost = confidence_boost.saturating_add(16);
-        notes.push("AFP/mDNS ports suggest an Apple device".to_string());
-        return (
-            Some("Apple device".to_string()),
-            Some("Apple OS family".to_string()),
-            None,
-            notes,
-            confidence_boost,
-        );
+    if has_any(&[548, 5353, 62078]) {
+        set_if_none(&mut inferred_type, "Apple device");
+        set_if_none(&mut inferred_os, "Apple OS family");
+        confidence_boost = confidence_boost.saturating_add(14);
+        notes.push("AFP/mDNS/mobile sync ports suggest an Apple device".to_string());
     }
 
-    if contains(22) && !(contains(445) || contains(139)) {
+    if has(22) && !has_any(&[445, 139]) {
+        set_if_none(&mut inferred_type, "Workstation/Server");
+        set_if_none(&mut inferred_os, "Linux/Unix-like");
         confidence_boost = confidence_boost.saturating_add(12);
         notes.push("SSH-first profile suggests Linux/Unix".to_string());
-        return (
-            Some("Workstation/Server".to_string()),
-            Some("Linux/Unix-like".to_string()),
-            None,
-            notes,
-            confidence_boost,
-        );
     }
 
-    if contains(1900) || contains(5000) || contains(8080) {
-        confidence_boost = confidence_boost.saturating_add(10);
-        notes.push("UPnP/HTTP-alt ports suggest IoT or media device".to_string());
-        return (
-            Some("IoT/Media device".to_string()),
-            None,
-            None,
-            notes,
-            confidence_boost,
-        );
+    if has_any(&[1883, 8883]) || contains_hint(&["esphome", "tasmota", "shelly", "zigbee", "zwave"])
+    {
+        set_if_none(&mut inferred_type, "IoT device");
+        confidence_boost = confidence_boost.saturating_add(12);
+        notes.push("IoT/messaging profile detected (MQTT or IoT naming)".to_string());
     }
 
-    (None, None, None, notes, confidence_boost)
+    (
+        inferred_type,
+        inferred_os,
+        inferred_model,
+        notes,
+        confidence_boost,
+    )
+}
+
+fn set_if_none(slot: &mut Option<String>, value: &str) {
+    if slot.is_none() {
+        *slot = Some(value.to_string());
+    }
+}
+
+fn normalize_hint_text(value: &str) -> String {
+    let lowered = value
+        .to_lowercase()
+        .replace('-', " ")
+        .replace('_', " ")
+        .replace('.', " ");
+
+    lowered
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == ' ' {
+                ch
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+}
+
+fn contains_any_hint(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| haystack.contains(needle))
 }
 
 fn first_non_empty(values: Vec<Option<String>>) -> Option<String> {
@@ -1359,20 +1555,40 @@ fn number_at_paths(value: &Value, paths: Vec<Vec<&str>>) -> Option<f64> {
     None
 }
 
+fn append_signature_ports(mut ports: Vec<u16>, extras: &[u16]) -> Vec<u16> {
+    for port in extras {
+        if !ports.contains(port) {
+            ports.push(*port);
+        }
+    }
+
+    ports.sort_unstable();
+    ports
+}
+
 fn ports_for_profile(profile: &PortProfile) -> Vec<u16> {
     match profile {
-        PortProfile::Quick => vec![
-            20, 21, 22, 23, 53, 80, 110, 139, 143, 443, 445, 515, 548, 631, 135, 3389, 5000,
-            5353, 5900, 8000, 8080, 8443,
-        ],
-        PortProfile::Standard => vec![
-            20, 21, 22, 23, 25, 53, 67, 68, 69, 80, 88, 110, 111, 119, 123, 135, 137, 138, 139,
-            143, 161, 389, 443, 445, 465, 500, 514, 515, 548, 587, 631, 636, 873, 993, 995, 1080,
-            1194, 1433, 1521, 1723, 1812, 1900, 2049, 2375, 3000, 3306, 3389, 5000, 5060, 5353,
-            5432, 5672, 5900, 6379, 6443, 7001, 8000, 8080, 8081, 8443, 8888, 9000, 9090, 9200,
-            27017,
-        ],
-        PortProfile::Deep => (1..=2048).collect(),
+        PortProfile::Quick => append_signature_ports(
+            vec![
+                20, 21, 22, 23, 53, 80, 110, 139, 143, 443, 445, 515, 548, 631, 135, 3389, 5000,
+                5353, 5900, 8000, 8080, 8443,
+            ],
+            &[554, 5001, 62078, 32400],
+        ),
+        PortProfile::Standard => append_signature_ports(
+            vec![
+                20, 21, 22, 23, 25, 53, 67, 68, 69, 80, 88, 110, 111, 119, 123, 135, 137, 138, 139,
+                143, 161, 389, 443, 445, 465, 500, 514, 515, 548, 587, 631, 636, 873, 993, 995,
+                1080, 1194, 1433, 1521, 1723, 1812, 1900, 2049, 2375, 3000, 3306, 3389, 5000, 5060,
+                5353, 5432, 5672, 5900, 6379, 6443, 7001, 8000, 8080, 8081, 8443, 8888, 9000, 9090,
+                9200, 27017,
+            ],
+            &[554, 5001, 62078, 32400, 8291, 8728, 8729, 37777, 37778],
+        ),
+        PortProfile::Deep => append_signature_ports(
+            (1..=2048).collect(),
+            &[5000, 5001, 62078, 32400, 8291, 8728, 8729, 37777, 37778],
+        ),
     }
 }
 
@@ -1400,6 +1616,7 @@ fn service_name(port: u16) -> Option<&'static str> {
         500 => Some("isakmp"),
         515 => Some("printer"),
         548 => Some("afp"),
+        554 => Some("rtsp"),
         587 => Some("smtp-submission"),
         631 => Some("ipp"),
         636 => Some("ldaps"),
@@ -1412,20 +1629,29 @@ fn service_name(port: u16) -> Option<&'static str> {
         2049 => Some("nfs"),
         2375 => Some("docker"),
         3000 => Some("dev-http"),
+        32400 => Some("plex"),
         3306 => Some("mysql"),
         3389 => Some("rdp"),
+        37777 => Some("dvr-command"),
+        37778 => Some("dvr-media"),
         5000 => Some("upnp/http"),
+        5001 => Some("management-https"),
         5060 => Some("sip"),
         5353 => Some("mdns"),
         5432 => Some("postgres"),
         5672 => Some("amqp"),
         5900 => Some("vnc"),
+        62078 => Some("iphone-sync"),
         6379 => Some("redis"),
         6443 => Some("k8s-api"),
         7001 => Some("weblogic"),
         8000 => Some("http-alt"),
         8080 => Some("http-proxy"),
+        8291 => Some("mikrotik-winbox"),
+        8728 => Some("mikrotik-api"),
+        8729 => Some("mikrotik-api-ssl"),
         8443 => Some("https-alt"),
+        8554 => Some("rtsp-alt"),
         9000 => Some("app"),
         9090 => Some("metrics"),
         9200 => Some("elasticsearch"),
@@ -1460,6 +1686,24 @@ mod tests {
         }
     }
 
+    fn host(ip: &str, name: Option<&str>, ports: &[u16]) -> Host {
+        Host {
+            ip: ip.to_string(),
+            name: name.map(|value| value.to_string()),
+            reachable: true,
+            open_ports: ports
+                .iter()
+                .map(|port| PortInfo {
+                    port: *port,
+                    state: "open".to_string(),
+                    service: service_name(*port).map(|value| value.to_string()),
+                })
+                .collect(),
+            last_seen: Utc::now().to_rfc3339(),
+            fingerprint: None,
+        }
+    }
+
     #[test]
     fn build_scan_targets_excludes_local_address() {
         let network = Ipv4Net::from_str("192.168.10.0/29").expect("valid CIDR");
@@ -1469,8 +1713,14 @@ mod tests {
 
         assert_eq!(targets.len(), 5);
         assert!(!targets.contains(&Ipv4Addr::new(192, 168, 10, 3)));
-        assert_eq!(targets.first().copied(), Some(Ipv4Addr::new(192, 168, 10, 1)));
-        assert_eq!(targets.last().copied(), Some(Ipv4Addr::new(192, 168, 10, 6)));
+        assert_eq!(
+            targets.first().copied(),
+            Some(Ipv4Addr::new(192, 168, 10, 1))
+        );
+        assert_eq!(
+            targets.last().copied(),
+            Some(Ipv4Addr::new(192, 168, 10, 6))
+        );
     }
 
     #[test]
@@ -1507,5 +1757,48 @@ mod tests {
     fn extract_mac_ignores_incomplete_arp_lines() {
         let line = "? (192.168.1.10) at (incomplete) on en0 ifscope [ethernet]";
         assert_eq!(extract_mac_from_arp_line(line), None);
+    }
+
+    #[test]
+    fn profile_ports_include_high_signal_fingerprinting_targets() {
+        let quick_ports = ports_for_profile(&PortProfile::Quick);
+        let standard_ports = ports_for_profile(&PortProfile::Standard);
+        let deep_ports = ports_for_profile(&PortProfile::Deep);
+
+        assert!(quick_ports.contains(&62078));
+        assert!(quick_ports.contains(&32400));
+
+        assert!(standard_ports.contains(&8291));
+        assert!(standard_ports.contains(&37777));
+
+        assert!(deep_ports.contains(&5000));
+        assert!(deep_ports.contains(&32400));
+        assert!(deep_ports.contains(&37777));
+    }
+
+    #[test]
+    fn infer_device_profile_identifies_mikrotik_signature() {
+        let sample = host("192.168.88.1", Some("routeros-gateway"), &[8291, 8728]);
+
+        let (device_type, os_guess, model_guess, _notes, boost) =
+            infer_device_profile(&sample, Some("MikroTik"), None);
+
+        assert_eq!(device_type.as_deref(), Some("Network appliance"));
+        assert_eq!(model_guess.as_deref(), Some("MikroTik RouterOS device"));
+        assert!(os_guess.is_none());
+        assert!(boost >= 20);
+    }
+
+    #[test]
+    fn infer_device_profile_identifies_apple_mobile_signature() {
+        let sample = host("192.168.1.25", Some("iPhone"), &[62078, 5353]);
+
+        let (device_type, os_guess, model_guess, _notes, boost) =
+            infer_device_profile(&sample, Some("Apple"), None);
+
+        assert_eq!(device_type.as_deref(), Some("Mobile device"));
+        assert_eq!(os_guess.as_deref(), Some("Apple iOS/iPadOS family"));
+        assert_eq!(model_guess.as_deref(), Some("Apple mobile device"));
+        assert!(boost >= 20);
     }
 }

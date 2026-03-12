@@ -92,7 +92,8 @@ pub async fn start_scan(
         match result {
             Ok(scan_result) => {
                 let mut scan_result = scan_result;
-                scan_result.hosts = scanner::enrich_hosts_with_cache(scan_result.hosts, storage.clone()).await;
+                scan_result.hosts =
+                    scanner::enrich_hosts_with_cache(scan_result.hosts, storage.clone()).await;
 
                 if let Err(error) = storage.save_scan_result(scan_result.clone()) {
                     log::error!("Failed to persist scan result: {}", error);

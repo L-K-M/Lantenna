@@ -26,7 +26,7 @@
       : interfaces.map((item) => ({ value: interfaceValue(item), label: interfaceLabel(item) }));
 
   const approachHelpText =
-    'Fast\n- Scans 22 common TCP ports\n- Uses TCP-only discovery\n- Fastest option, but can miss silent hosts and less common services\n\nBalanced (recommended)\n- Scans an expanded common-port set\n- Uses hybrid discovery (TCP + ICMP fallback)\n- Best default for most networks\n\nThorough\n- Scans TCP ports 1-2048\n- Uses hybrid discovery (TCP + ICMP fallback)\n- Slowest, but most complete\n\nNote: very large subnets are capped to 4096 hosts per scan.';
+    'Fast\n- Scans a focused set of common TCP ports plus a few high-signal fingerprint ports\n- Uses TCP-only discovery\n- Fastest option, but can miss silent hosts and uncommon services\n\nBalanced (recommended)\n- Scans an expanded service-port set plus extra device-signature ports\n- Uses hybrid discovery (TCP + ICMP fallback)\n- Best default for most networks\n\nThorough\n- Scans TCP ports 1-2048 plus additional high-signal ports above 2048\n- Uses hybrid discovery (TCP + ICMP fallback)\n- Slowest, but most complete\n\nNote: very large subnets are capped to 4096 hosts per scan.';
 
   function interfaceLabel(item: NetworkInterface): string {
     return `${item.name} (${item.subnet})`;
@@ -236,7 +236,7 @@
   }
 
   .toolbar :global(.balloon) {
-    width: 300px;
+    width: 450px;
     max-width: calc(100vw - 64px);
     white-space: normal;
   }
