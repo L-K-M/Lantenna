@@ -8,7 +8,7 @@ Lantenna is a Tauri-based Mac OS X program that scans the local LAN and displays
 
 ```bash
 # Clone the repository
-cd obtainintosh
+cd Lantenna
 
 # Install dependencies
 npm install
