@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -42,8 +42,15 @@ impl Storage {
         })
     }
 
+    fn lock_data(&self) -> MutexGuard<'_, StoredData> {
+        self.data.lock().unwrap_or_else(|poisoned| {
+            log::warn!("Storage lock poisoned; continuing with inner value");
+            poisoned.into_inner()
+        })
+    }
+
     fn save(&self) -> Result<()> {
-        let data = self.data.lock().unwrap();
+        let data = self.lock_data();
         let json = serde_json::to_string_pretty(&*data).context("Failed to serialize scan data")?;
 
         let temp_path = self.file_path.with_extension("json.tmp");
@@ -54,19 +61,19 @@ impl Storage {
     }
 
     pub fn get_latest_scan(&self) -> Result<Option<ScanResult>> {
-        let data = self.data.lock().unwrap();
+        let data = self.lock_data();
         Ok(data.latest_scan.clone())
     }
 
     pub fn save_scan_result(&self, result: ScanResult) -> Result<()> {
-        let mut data = self.data.lock().unwrap();
+        let mut data = self.lock_data();
         data.latest_scan = Some(result);
         drop(data);
         self.save()
     }
 
     pub fn get_cached_fingerprint(&self, key: &str) -> Result<Option<DeviceFingerprint>> {
-        let data = self.data.lock().unwrap();
+        let data = self.lock_data();
         Ok(data.fingerprint_cache.get(key).cloned())
     }
 
@@ -75,7 +82,7 @@ impl Storage {
             return Ok(());
         }
 
-        let mut data = self.data.lock().unwrap();
+        let mut data = self.lock_data();
         for (key, fingerprint) in entries {
             data.fingerprint_cache.insert(key, fingerprint);
         }
@@ -85,7 +92,7 @@ impl Storage {
     }
 
     pub fn get_cached_vendor(&self, oui: &str) -> Result<Option<String>> {
-        let data = self.data.lock().unwrap();
+        let data = self.lock_data();
         Ok(data.oui_vendor_cache.get(oui).cloned())
     }
 
@@ -94,7 +101,7 @@ impl Storage {
             return Ok(());
         }
 
-        let mut data = self.data.lock().unwrap();
+        let mut data = self.lock_data();
         for (oui, vendor) in entries {
             data.oui_vendor_cache.insert(oui, vendor);
         }

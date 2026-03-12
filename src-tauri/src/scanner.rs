@@ -20,7 +20,7 @@ use std::sync::{
     Arc, OnceLock,
 };
 use tokio::net::TcpStream;
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, Semaphore};
 use tokio::time::{timeout, Duration};
 
 fn available_workers() -> usize {
@@ -364,21 +364,12 @@ where
                 fingerprint: None,
             };
 
-            found += 1;
             on_host(host.clone());
             hosts.push(host);
         }
     }
 
     hosts.sort_by(|a, b| ipv4_to_u32(parse_ipv4_or_zero(&a.ip)).cmp(&ipv4_to_u32(parse_ipv4_or_zero(&b.ip))));
-
-    on_progress(ScanProgress {
-        scanned,
-        total,
-        found,
-        running: false,
-        current_ip: None,
-    });
 
     Ok(ScanResult {
         started_at,
@@ -433,10 +424,14 @@ async fn scan_host_internal(
         timeout_duration,
         port_concurrency,
         connection_semaphore,
-        cancel_flag,
+        cancel_flag.clone(),
     )
     .await;
     if !reachable {
+        return None;
+    }
+
+    if cancel_flag.load(Ordering::Relaxed) {
         return None;
     }
 
@@ -532,25 +527,57 @@ async fn resolve_hostname_with_timeout(ip: Ipv4Addr, max_wait: Duration) -> Opti
     timeout(max_wait, resolve_hostname(ip)).await.ok().flatten()
 }
 
-pub async fn enrich_hosts_with_cache(hosts: Vec<Host>, storage: Arc<Storage>) -> Vec<Host> {
-    let arp_table = read_arp_table().await;
-    let mut enriched_hosts = Vec::with_capacity(hosts.len());
-    let mut new_fingerprints = Vec::new();
-    let mut new_vendors: HashMap<String, String> = HashMap::new();
+type SharedVendorCache = Arc<Mutex<HashMap<String, String>>>;
 
-    for host in hosts {
-        let mac = arp_table.get(&host.ip).cloned();
-        let (enriched_host, cache_entry) =
-            enrich_host_internal(host, mac, &storage, &mut new_vendors).await;
+fn enrichment_concurrency() -> usize {
+    available_workers().clamp(2, 12)
+}
+
+async fn snapshot_pending_vendors(pending_vendor_cache: &SharedVendorCache) -> Vec<(String, String)> {
+    let cache = pending_vendor_cache.lock().await;
+    cache.iter()
+        .map(|(oui, vendor)| (oui.clone(), vendor.clone()))
+        .collect()
+}
+
+pub async fn enrich_hosts_with_cache(hosts: Vec<Host>, storage: Arc<Storage>) -> Vec<Host> {
+    let arp_table = Arc::new(read_arp_table().await);
+    let pending_vendor_cache: SharedVendorCache = Arc::new(Mutex::new(HashMap::new()));
+    let concurrency = enrichment_concurrency().min(hosts.len().max(1));
+
+    let mut indexed_hosts = Vec::with_capacity(hosts.len());
+    let mut new_fingerprints = Vec::new();
+
+    let mut stream = stream::iter(hosts.into_iter().enumerate().map(|(index, host)| {
+        let storage = storage.clone();
+        let arp_table = arp_table.clone();
+        let pending_vendor_cache = pending_vendor_cache.clone();
+        async move {
+            let mac = arp_table.get(&host.ip).cloned();
+            let (enriched_host, cache_entry) =
+                enrich_host_internal(host, mac, &storage, pending_vendor_cache).await;
+            (index, enriched_host, cache_entry)
+        }
+    }))
+    .buffer_unordered(concurrency);
+
+    while let Some((index, enriched_host, cache_entry)) = stream.next().await {
+        indexed_hosts.push((index, enriched_host));
 
         if let Some(entry) = cache_entry {
             new_fingerprints.push(entry);
         }
-
-        enriched_hosts.push(enriched_host);
     }
 
-    if let Err(error) = storage.cache_vendors(new_vendors.into_iter().collect()) {
+    indexed_hosts.sort_by_key(|(index, _)| *index);
+    let enriched_hosts = indexed_hosts
+        .into_iter()
+        .map(|(_, host)| host)
+        .collect::<Vec<Host>>();
+
+    let new_vendors = snapshot_pending_vendors(&pending_vendor_cache).await;
+
+    if let Err(error) = storage.cache_vendors(new_vendors) {
         log::warn!("Failed to persist OUI vendor cache: {}", error);
     }
 
@@ -564,10 +591,10 @@ pub async fn enrich_hosts_with_cache(hosts: Vec<Host>, storage: Arc<Storage>) ->
 pub async fn enrich_host_with_cache(host: Host, storage: Arc<Storage>) -> Host {
     let arp_table = read_arp_table().await;
     let mac = arp_table.get(&host.ip).cloned();
-    let mut new_vendors = HashMap::new();
+    let pending_vendor_cache: SharedVendorCache = Arc::new(Mutex::new(HashMap::new()));
 
     let (enriched_host, cache_entry) =
-        enrich_host_internal(host, mac, &storage, &mut new_vendors).await;
+        enrich_host_internal(host, mac, &storage, pending_vendor_cache.clone()).await;
 
     if let Some((key, fingerprint)) = cache_entry {
         if let Err(error) = storage.cache_fingerprints(vec![(key, fingerprint)]) {
@@ -575,7 +602,9 @@ pub async fn enrich_host_with_cache(host: Host, storage: Arc<Storage>) -> Host {
         }
     }
 
-    if let Err(error) = storage.cache_vendors(new_vendors.into_iter().collect()) {
+    let new_vendors = snapshot_pending_vendors(&pending_vendor_cache).await;
+
+    if let Err(error) = storage.cache_vendors(new_vendors) {
         log::warn!("Failed to persist OUI vendor cache: {}", error);
     }
 
@@ -586,7 +615,7 @@ async fn enrich_host_internal(
     mut host: Host,
     mac_from_arp: Option<String>,
     storage: &Arc<Storage>,
-    pending_vendor_cache: &mut HashMap<String, String>,
+    pending_vendor_cache: SharedVendorCache,
 ) -> (Host, Option<(String, DeviceFingerprint)>) {
     let mac_address = mac_from_arp
         .or_else(|| host.fingerprint.as_ref().and_then(|item| item.mac_address.clone()));
@@ -626,7 +655,7 @@ async fn build_fingerprint(
     host: &Host,
     mac_address: Option<String>,
     storage: &Arc<Storage>,
-    pending_vendor_cache: &mut HashMap<String, String>,
+    pending_vendor_cache: SharedVendorCache,
 ) -> DeviceFingerprint {
     let mut sources = Vec::new();
     let mut notes = Vec::new();
@@ -639,7 +668,10 @@ async fn build_fingerprint(
 
     let mut vendor = None;
     if let Some(ref oui_value) = oui {
-        if let Some(cached_vendor) = pending_vendor_cache.get(oui_value) {
+        if let Some(cached_vendor) = {
+            let cache = pending_vendor_cache.lock().await;
+            cache.get(oui_value).cloned()
+        } {
             vendor = Some(cached_vendor.clone());
             sources.push("oui-cache".to_string());
         }
@@ -656,7 +688,10 @@ async fn build_fingerprint(
         if vendor.is_none() {
             if let Some(mac) = mac_address.as_deref() {
                 if let Some(local_vendor) = local_oui_vendor(mac) {
-                    pending_vendor_cache.insert(oui_value.clone(), local_vendor.clone());
+                    {
+                        let mut cache = pending_vendor_cache.lock().await;
+                        cache.insert(oui_value.clone(), local_vendor.clone());
+                    }
                     vendor = Some(local_vendor);
                     sources.push("oui-local".to_string());
                 }
@@ -668,7 +703,8 @@ async fn build_fingerprint(
         if let Some(ref mac) = mac_address {
             if let Some(lookup_vendor) = lookup_vendor_via_maclookup(mac).await {
                 if let Some(ref oui_value) = oui {
-                    pending_vendor_cache.insert(oui_value.clone(), lookup_vendor.clone());
+                    let mut cache = pending_vendor_cache.lock().await;
+                    cache.insert(oui_value.clone(), lookup_vendor.clone());
                 }
                 vendor = Some(lookup_vendor);
                 sources.push("maclookup-app".to_string());
