@@ -1,29 +1,23 @@
 <script lang="ts">
   import { BalloonHelp, Button, Dropdown } from '@lkmc/system7-ui';
-  import type { DiscoveryMode, NetworkInterface, PortProfile } from '$lib/types';
+  import type { NetworkInterface, ScanApproach } from '$lib/types';
 
   export let interfaces: NetworkInterface[] = [];
   export let selectedInterface: string | null = null;
-  export let profile: PortProfile = 'quick';
-  export let discoveryMode: DiscoveryMode = 'hybrid';
+  export let approach: ScanApproach = 'balanced';
   export let scanning = false;
   export let query = '';
 
   export let onInterfaceChange: ((name: string) => void) | undefined = undefined;
-  export let onProfileChange: ((profile: PortProfile) => void) | undefined = undefined;
-  export let onDiscoveryModeChange: ((mode: DiscoveryMode) => void) | undefined = undefined;
+  export let onApproachChange: ((approach: ScanApproach) => void) | undefined = undefined;
   export let onStart: (() => void) | undefined = undefined;
   export let onStop: (() => void) | undefined = undefined;
   export let onQueryChange: ((value: string) => void) | undefined = undefined;
 
-  const profileOptions: { value: PortProfile; label: string }[] = [
-    { value: 'quick', label: 'Quick' },
-    { value: 'standard', label: 'Standard' },
-    { value: 'deep', label: 'Deep' }
-  ];
-  const discoveryOptions: { value: DiscoveryMode; label: string }[] = [
-    { value: 'hybrid', label: 'Hybrid (TCP + ICMP)' },
-    { value: 'tcp', label: 'TCP only' }
+  const approachOptions: { value: ScanApproach; label: string }[] = [
+    { value: 'fast', label: 'Fast' },
+    { value: 'balanced', label: 'Balanced' },
+    { value: 'thorough', label: 'Thorough' }
   ];
 
   $: interfaceOptions =
@@ -31,10 +25,8 @@
       ? [{ value: '', label: 'No interfaces found', disabled: true }]
       : interfaces.map((item) => ({ value: interfaceValue(item), label: interfaceLabel(item) }));
 
-  const portsHelpText =
-    'Quick: 22 common ports (20,21,22,23,53,80,110,135,139,143,443,445,515,548,631,3389,5000,5353,5900,8000,8080,8443). Standard: expanded common service list. Deep: all TCP ports 1-2048. Large subnets are capped to 4096 hosts per run.';
-  const discoveryHelpText =
-    'TCP only is fastest but can miss hosts that silently drop probes. Hybrid also runs ICMP checks for unreachable targets and improves discovery coverage.';
+  const approachHelpText =
+    'Fast\n- Scans 22 common TCP ports\n- Uses TCP-only discovery\n- Fastest option, but can miss silent hosts and less common services\n\nBalanced (recommended)\n- Scans an expanded common-port set\n- Uses hybrid discovery (TCP + ICMP fallback)\n- Best default for most networks\n\nThorough\n- Scans TCP ports 1-2048\n- Uses hybrid discovery (TCP + ICMP fallback)\n- Slowest, but most complete\n\nNote: very large subnets are capped to 4096 hosts per scan.';
 
   function interfaceLabel(item: NetworkInterface): string {
     return `${item.name} (${item.subnet})`;
@@ -47,7 +39,7 @@
 
 <div class="toolbar">
   <div class="toolbar-group">
-    <label for="interface-select">Interface</label>
+    <label class="visually-hidden" for="interface-select">Interface</label>
     <div class="dropdown-wrap interface-dropdown">
       <Dropdown
         id="interface-select"
@@ -58,31 +50,16 @@
       />
     </div>
 
-    <BalloonHelp message={portsHelpText} delay={300}>
-      <div class="ports-control">
-        <label for="profile-select">Ports</label>
-        <div class="dropdown-wrap profile-dropdown">
+    <BalloonHelp message={approachHelpText} delay={300}>
+      <div class="approach-control">
+        <label class="visually-hidden" for="approach-select">Approach</label>
+        <div class="dropdown-wrap approach-dropdown">
           <Dropdown
-            id="profile-select"
+            id="approach-select"
             disabled={scanning}
-            value={profile}
-            options={profileOptions}
-            onchange={(value) => onProfileChange?.(value as PortProfile)}
-          />
-        </div>
-      </div>
-    </BalloonHelp>
-
-    <BalloonHelp message={discoveryHelpText} delay={300}>
-      <div class="discovery-control">
-        <label for="discovery-select">Discovery</label>
-        <div class="dropdown-wrap discovery-dropdown">
-          <Dropdown
-            id="discovery-select"
-            disabled={scanning}
-            value={discoveryMode}
-            options={discoveryOptions}
-            onchange={(value) => onDiscoveryModeChange?.(value as DiscoveryMode)}
+            value={approach}
+            options={approachOptions}
+            onchange={(value) => onApproachChange?.(value as ScanApproach)}
           />
         </div>
       </div>
@@ -158,6 +135,17 @@
     white-space: nowrap;
   }
 
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    border: 0;
+  }
+
   input {
     min-width: 160px;
   }
@@ -166,12 +154,8 @@
     min-width: 220px;
   }
 
-  .profile-dropdown :global(.sys7-dropdown) {
-    min-width: 170px;
-  }
-
-  .discovery-dropdown :global(.sys7-dropdown) {
-    min-width: 190px;
+  .approach-dropdown :global(.sys7-dropdown) {
+    min-width: 120px;
   }
 
   .search-wrap {
@@ -245,16 +229,21 @@
     outline: none;
   }
 
-  .ports-control {
+  .approach-control {
     display: inline-flex;
     align-items: center;
     gap: 8px;
   }
 
-  .discovery-control {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
+  .toolbar :global(.balloon) {
+    width: 300px;
+    max-width: calc(100vw - 64px);
+    white-space: normal;
+  }
+
+  .toolbar :global(.balloon .balloon-content) {
+    white-space: pre-line;
+    line-height: 1.15;
   }
 
   @media (max-width: 980px) {

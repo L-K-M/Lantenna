@@ -6,7 +6,6 @@
   import HostInspector from '$lib/components/HostInspector.svelte';
   import HostTable from '$lib/components/HostTable.svelte';
   import ScanToolbar from '$lib/components/ScanToolbar.svelte';
-  import type { DiscoveryMode } from '$lib/types';
 
   import { WindowManager } from '$lib/windowManager';
   import { notifications } from '$lib/util/notifications';
@@ -18,8 +17,7 @@
   $: ({
     interfaces,
     selectedInterface,
-    portProfile,
-    discoveryMode,
+    scanApproach,
     hosts,
     newHostIps,
     customNames,
@@ -103,13 +101,11 @@
       <ScanToolbar
         interfaces={interfaces}
         selectedInterface={selectedInterface}
-        profile={portProfile}
-        discoveryMode={discoveryMode}
+        approach={scanApproach}
         {scanning}
         {query}
         onInterfaceChange={(name) => scanStore.setInterface(name)}
-        onProfileChange={(profile) => scanStore.setProfile(profile)}
-        onDiscoveryModeChange={(mode: DiscoveryMode) => scanStore.setDiscoveryMode(mode)}
+        onApproachChange={(approach) => scanStore.setScanApproach(approach)}
         onStart={() => scanStore.startScan()}
         onStop={() => scanStore.cancelScan()}
         onQueryChange={(value) => scanStore.setQuery(value)}

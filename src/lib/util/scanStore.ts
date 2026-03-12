@@ -6,6 +6,7 @@ import type {
   Host,
   NetworkInterface,
   PortProfile,
+  ScanApproach,
   ScanErrorPayload,
   ScanProgress,
   ScanResult
@@ -15,8 +16,7 @@ import { notifications } from './notifications';
 interface ScanStoreState {
   interfaces: NetworkInterface[];
   selectedInterface: string | null;
-  portProfile: PortProfile;
-  discoveryMode: DiscoveryMode;
+  scanApproach: ScanApproach;
   hosts: Host[];
   newHostIps: string[];
   customNames: Record<string, string>;
@@ -38,6 +38,50 @@ const FAVORITE_HOSTS_STORAGE_KEY = 'lantenna.favoriteHosts';
 const CUSTOM_NAMES_STORAGE_KEY = 'lantenna.customNames';
 const SELECTED_INTERFACE_STORAGE_KEY = 'lantenna.selectedInterface';
 const MAX_SCAN_HOSTS = 4096;
+
+interface ScanApproachSettings {
+  portProfile: PortProfile;
+  discoveryMode: DiscoveryMode;
+  timeoutMs: number;
+}
+
+const DEFAULT_SCAN_APPROACH: ScanApproach = 'balanced';
+
+function approachToSettings(approach: ScanApproach): ScanApproachSettings {
+  switch (approach) {
+    case 'fast':
+      return {
+        portProfile: 'quick',
+        discoveryMode: 'tcp',
+        timeoutMs: 350
+      };
+    case 'thorough':
+      return {
+        portProfile: 'deep',
+        discoveryMode: 'hybrid',
+        timeoutMs: 600
+      };
+    case 'balanced':
+    default:
+      return {
+        portProfile: 'standard',
+        discoveryMode: 'hybrid',
+        timeoutMs: 450
+      };
+  }
+}
+
+function settingsToApproach(portProfile: PortProfile, discoveryMode: DiscoveryMode): ScanApproach {
+  if (portProfile === 'deep') {
+    return 'thorough';
+  }
+
+  if (portProfile === 'quick' || discoveryMode === 'tcp') {
+    return 'fast';
+  }
+
+  return 'balanced';
+}
 
 function canUseStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
@@ -288,8 +332,7 @@ const initialSelectedInterface = loadSelectedInterfaceKey();
 const initialState: ScanStoreState = {
   interfaces: [],
   selectedInterface: initialSelectedInterface,
-  portProfile: 'quick',
-  discoveryMode: 'hybrid',
+  scanApproach: DEFAULT_SCAN_APPROACH,
   hosts: mergeStaleFavoritesIntoHosts([], initialStaleFavoriteIps, initialFavoriteHostSnapshots),
   newHostIps: [],
   customNames: initialCustomNames,
@@ -514,7 +557,9 @@ function createScanStore() {
             ...state,
             interfaces,
             selectedInterface,
-            discoveryMode: previous?.options.discovery_mode || state.discoveryMode,
+            scanApproach: previous
+              ? settingsToApproach(previous.options.port_profile, previous.options.discovery_mode)
+              : state.scanApproach,
             hosts: mergeStaleFavoritesIntoHosts(knownHosts, staleFavoriteIps, favoriteHostSnapshots),
             staleFavoriteIps,
             newHostIps: [],
@@ -542,11 +587,8 @@ function createScanStore() {
       saveSelectedInterfaceKey(selectedInterface);
       update((state) => ({ ...state, selectedInterface }));
     },
-    setProfile: (profile: PortProfile) => {
-      update((state) => ({ ...state, portProfile: profile }));
-    },
-    setDiscoveryMode: (mode: DiscoveryMode) => {
-      update((state) => ({ ...state, discoveryMode: mode }));
+    setScanApproach: (scanApproach: ScanApproach) => {
+      update((state) => ({ ...state, scanApproach }));
     },
     setQuery: (query: string) => {
       update((state) => ({ ...state, query }));
@@ -670,18 +712,14 @@ function createScanStore() {
       });
 
       try {
-        const timeoutByProfile: Record<PortProfile, number> = {
-          quick: 350,
-          standard: 450,
-          deep: 600
-        };
+        const scanSettings = approachToSettings(currentState.scanApproach);
 
         await TauriService.startScan({
           interface_name: selectedInterface.name,
           subnet: selectedInterface.subnet,
-          port_profile: currentState.portProfile,
-          discovery_mode: currentState.discoveryMode,
-          timeout_ms: timeoutByProfile[currentState.portProfile],
+          port_profile: scanSettings.portProfile,
+          discovery_mode: scanSettings.discoveryMode,
+          timeout_ms: scanSettings.timeoutMs,
           max_hosts: maxHosts
         });
         notifications.add('Scan started.', 'info');
