@@ -243,7 +243,7 @@
 
   .toolbar :global(.balloon .balloon-content) {
     white-space: pre-line;
-    line-height: 1.15;
+    line-height: 0.95;
   }
 
   @media (max-width: 980px) {
