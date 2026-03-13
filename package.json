@@ -13,7 +13,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@lkmc/system7-ui": "^0.1.4",
+    "@lkmc/system7-ui": "^0.1.5",
     "@tauri-apps/api": "^2"
   },
   "devDependencies": {

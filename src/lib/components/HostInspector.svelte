@@ -290,16 +290,6 @@
       </div>
     </div>
 
-    <div class="actions">
-      <BalloonHelp
-        message={deepScanBalloonMessage}
-        markdown
-        delay={300}
-      >
-        <Button onclick={() => onDeepScan?.(host.ip)}>Deep Scan</Button>
-      </BalloonHelp>
-    </div>
-
     <h4>Fingerprint</h4>
     <div class="kv">
       <span>MAC</span>
@@ -380,6 +370,16 @@
         {/each}
       </ul>
     {/if}
+
+    <div class="actions">
+      <BalloonHelp
+        message={deepScanBalloonMessage}
+        markdown
+        delay={300}
+      >
+        <Button onclick={() => onDeepScan?.(host.ip)}>Deep Scan</Button>
+      </BalloonHelp>
+    </div>
   {:else}
     <h3>Host Details</h3>
     <p class="empty">Select a host row to inspect details.</p>
@@ -457,14 +457,15 @@
   }
 
   .actions {
-    margin-top: 10px;
+    margin-top: 12px;
     position: relative;
     z-index: 30;
+    display: flex;
+    justify-content: flex-end;
   }
 
   .actions :global(.balloon) {
-    width: min(32ch, calc(100vw - 64px));
-    max-width: min(32ch, calc(100vw - 64px));
+    max-width: min(28ch, calc(100vw - 64px));
   }
 
   .actions :global(.balloon .balloon-content.markdown-content) {
