@@ -25,8 +25,11 @@
       ? [{ value: '', label: 'No interfaces found', disabled: true }]
       : interfaces.map((item) => ({ value: interfaceValue(item), label: interfaceLabel(item) }));
 
+  const interfaceHelpText =
+    '**Interface**\n- Choose the adapter connected to the network you want to scan.\n- If there are multiple entries with the same name, pick the one with the matching subnet.\n- Scans are limited to the selected interface subnet.';
+
   const approachHelpText =
-    'Fast\n- Scans a focused set of common TCP ports plus a few high-signal fingerprint ports\n- Uses TCP-only discovery\n- Fastest option, but can miss silent hosts and uncommon services\n\nBalanced (recommended)\n- Scans an expanded service-port set plus extra device-signature ports\n- Uses hybrid discovery (TCP + ICMP fallback)\n- Best default for most networks\n\nThorough\n- Scans TCP ports 1-2048 plus additional high-signal ports above 2048\n- Uses hybrid discovery (TCP + ICMP fallback)\n- Slowest, but most complete\n\nNote: very large subnets are capped to 4096 hosts per scan.';
+    '**Fast**\n- Focused common TCP ports + a few high-signal fingerprint ports\n- TCP-only discovery\n- Fastest, lower coverage\n\n**Balanced** (recommended)\n- Expanded service-port set + extra device-signature ports\n- Hybrid discovery (TCP + ICMP fallback)\n- Best default for most networks\n\n**Thorough**\n- TCP ports `1-2048` + additional high-signal ports above `2048`\n- Hybrid discovery (TCP + ICMP fallback)\n- Slowest, highest coverage\n\n*Note: very large subnets are capped to 4096 hosts per scan.*';
 
   function interfaceLabel(item: NetworkInterface): string {
     return `${item.name} (${item.subnet})`;
@@ -39,18 +42,22 @@
 
 <div class="toolbar">
   <div class="toolbar-group">
-    <label class="visually-hidden" for="interface-select">Interface</label>
-    <div class="dropdown-wrap interface-dropdown">
-      <Dropdown
-        id="interface-select"
-        disabled={scanning}
-        value={selectedInterface ?? ''}
-        options={interfaceOptions}
-        onchange={(value) => onInterfaceChange?.(value)}
-      />
-    </div>
+    <BalloonHelp message={interfaceHelpText} markdown delay={300}>
+      <div class="interface-control">
+        <label class="visually-hidden" for="interface-select">Interface</label>
+        <div class="dropdown-wrap interface-dropdown">
+          <Dropdown
+            id="interface-select"
+            disabled={scanning}
+            value={selectedInterface ?? ''}
+            options={interfaceOptions}
+            onchange={(value) => onInterfaceChange?.(value)}
+          />
+        </div>
+      </div>
+    </BalloonHelp>
 
-    <BalloonHelp message={approachHelpText} delay={300}>
+    <BalloonHelp message={approachHelpText} markdown delay={300}>
       <div class="approach-control">
         <label class="visually-hidden" for="approach-select">Approach</label>
         <div class="dropdown-wrap approach-dropdown">
@@ -235,6 +242,12 @@
     gap: 8px;
   }
 
+  .interface-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
   .toolbar :global(.balloon) {
     width: 450px;
     max-width: calc(100vw - 64px);
@@ -244,6 +257,11 @@
   .toolbar :global(.balloon .balloon-content) {
     white-space: pre-line;
     line-height: 0.95;
+  }
+
+  .toolbar :global(.balloon .balloon-content.markdown-content) {
+    white-space: normal;
+    line-height: 1;
   }
 
   @media (max-width: 980px) {

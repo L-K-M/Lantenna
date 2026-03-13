@@ -94,3 +94,11 @@ pub struct ScanResult {
 pub struct ScanErrorPayload {
     pub message: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemColors {
+    pub accent_color: Option<String>,
+    pub accent_text_color: Option<String>,
+    pub highlight_color: Option<String>,
+    pub highlight_text_color: Option<String>,
+}

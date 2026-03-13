@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { Host, NetworkInterface, PortProfile, ScanOptions, ScanResult } from './types';
+import type { Host, NetworkInterface, PortProfile, ScanOptions, ScanResult, SystemColors } from './types';
 
 export class TauriService {
   static async getNetworkInterfaces(): Promise<NetworkInterface[]> {
@@ -24,5 +24,9 @@ export class TauriService {
 
   static async openExternalUrl(url: string): Promise<void> {
     await invoke('open_external_url', { url });
+  }
+
+  static async getSystemColors(): Promise<SystemColors> {
+    return await invoke('get_system_colors');
   }
 }

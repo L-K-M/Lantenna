@@ -162,6 +162,49 @@
     return customNames[hostValue.ip]?.trim() || hostValue.name || 'Unknown';
   }
 
+  async function copyValue(label: string, rawValue: string | null | undefined) {
+    const value = (rawValue || '').trim();
+    if (!value || value.toLowerCase() === 'unknown') {
+      notifications.add(`No ${label.toLowerCase()} available to copy.`, 'info');
+      return;
+    }
+
+    try {
+      await writeClipboardText(value);
+      notifications.add(`${label} copied.`, 'success');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `Failed to copy ${label.toLowerCase()}`;
+      notifications.add(message, 'error');
+    }
+  }
+
+  async function writeClipboardText(value: string) {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+
+    if (typeof document === 'undefined') {
+      throw new Error('Clipboard is not available');
+    }
+
+    const textArea = document.createElement('textarea');
+    textArea.value = value;
+    textArea.setAttribute('readonly', 'true');
+    textArea.style.position = 'fixed';
+    textArea.style.opacity = '0';
+    textArea.style.pointerEvents = 'none';
+    document.body.appendChild(textArea);
+    textArea.select();
+
+    const copied = document.execCommand('copy');
+    document.body.removeChild(textArea);
+
+    if (!copied) {
+      throw new Error('Clipboard write was blocked by the system');
+    }
+  }
+
   function saveCustomName() {
     if (!host) {
       return;
@@ -169,15 +212,6 @@
 
     customNameDraft = customNameDraft.trim();
     onSetCustomName?.(host.ip, customNameDraft);
-  }
-
-  function clearCustomName() {
-    if (!host) {
-      return;
-    }
-
-    customNameDraft = '';
-    onSetCustomName?.(host.ip, '');
   }
 
   function handleCustomNameKeydown(event: KeyboardEvent) {
@@ -192,9 +226,46 @@
   {#if host}
     {@const fp = host.fingerprint}
     {@const displayHostName = displayName(host)}
+    {@const macAddress = fp?.mac_address || 'Unknown'}
     <h3>Host Details</h3>
-    <div class="kv"><span>IP</span><span>{host.ip}</span></div>
-    <div class="kv"><span>Name</span><span>{displayHostName}</span></div>
+    <div class="kv">
+      <span>IP</span>
+      <span class="kv-value">
+        <span class="copyable-text">{host.ip}</span>
+        <button
+          type="button"
+          class="copy-inline"
+          title="Copy IP address"
+          aria-label="Copy IP address"
+          onclick={() => copyValue('IP address', host.ip)}
+        >
+          <svg viewBox="0 0 16 16" role="img" focusable="false" aria-hidden="true">
+            <rect x="5" y="2" width="9" height="11" rx="0.5" ry="0.5" />
+            <rect x="2" y="5" width="9" height="9" rx="0.5" ry="0.5" />
+          </svg>
+        </button>
+      </span>
+    </div>
+    <div class="kv">
+      <span>Name</span>
+      <span class="kv-value">
+        <span class="copyable-text">{displayHostName}</span>
+        {#if displayHostName !== 'Unknown'}
+          <button
+            type="button"
+            class="copy-inline"
+            title="Copy host name"
+            aria-label="Copy host name"
+            onclick={() => copyValue('Host name', displayHostName)}
+          >
+            <svg viewBox="0 0 16 16" role="img" focusable="false" aria-hidden="true">
+              <rect x="5" y="2" width="9" height="11" rx="0.5" ry="0.5" />
+              <rect x="2" y="5" width="9" height="9" rx="0.5" ry="0.5" />
+            </svg>
+          </button>
+        {/if}
+      </span>
+    </div>
     {#if selectedCustomName && host.name && host.name !== selectedCustomName}
       <div class="kv"><span>Detected Name</span><span>{host.name}</span></div>
     {/if}
@@ -211,21 +282,48 @@
           placeholder="Set a friendly device name"
           onkeydown={handleCustomNameKeydown}
         />
-        <Button onclick={saveCustomName}>Save</Button>
-        {#if selectedCustomName || customNameDraft.trim()}
-          <Button onclick={clearCustomName}>Clear</Button>
-        {/if}
+        <Button variant="icon" title="Save friendly name" onclick={saveCustomName}>
+          <svg class="save-name-icon" viewBox="0 0 16 16" role="img" focusable="false" aria-hidden="true">
+            <rect x="2" y="1.5" width="12" height="13" fill="none" stroke="currentColor" stroke-width="1.2" />
+            <rect x="4" y="3" width="6" height="4" fill="none" stroke="currentColor" stroke-width="1.2" />
+            <rect x="4" y="9" width="8" height="4" fill="none" stroke="currentColor" stroke-width="1.2" />
+            <line x1="10.5" y1="3" x2="10.5" y2="7" stroke="currentColor" stroke-width="1.2" />
+          </svg>
+        </Button>
       </div>
     </div>
 
     <div class="actions">
-      <BalloonHelp message="Run a deeper scan for this host">
+      <BalloonHelp
+        message="**Deep Scan**\n- Scans this host with the deep profile (`1-2048`)\n- Refreshes open ports and fingerprint hints"
+        markdown
+        delay={300}
+      >
         <Button onclick={() => onDeepScan?.(host.ip)}>Deep Scan</Button>
       </BalloonHelp>
     </div>
 
     <h4>Fingerprint</h4>
-    <div class="kv"><span>MAC</span><span>{fp?.mac_address || 'Unknown'}</span></div>
+    <div class="kv">
+      <span>MAC</span>
+      <span class="kv-value">
+        <span class="copyable-text">{macAddress}</span>
+        {#if fp?.mac_address}
+          <button
+            type="button"
+            class="copy-inline"
+            title="Copy MAC address"
+            aria-label="Copy MAC address"
+            onclick={() => copyValue('MAC address', fp?.mac_address)}
+          >
+            <svg viewBox="0 0 16 16" role="img" focusable="false" aria-hidden="true">
+              <rect x="5" y="2" width="9" height="11" rx="0.5" ry="0.5" />
+              <rect x="2" y="5" width="9" height="9" rx="0.5" ry="0.5" />
+            </svg>
+          </button>
+        {/if}
+      </span>
+    </div>
     <div class="kv"><span>Vendor</span><span>{fp?.vendor || fp?.manufacturer || 'Unknown'}</span></div>
     <div class="kv"><span>Type</span><span>{fp?.device_type || 'Unknown'}</span></div>
     <div class="kv"><span>OS</span><span>{fp?.os_guess || 'Unknown'}</span></div>
@@ -299,6 +397,8 @@
     padding: 10px;
     overflow-y: auto;
     background: #fff;
+    position: relative;
+    z-index: 20;
   }
 
   h3,
@@ -317,6 +417,61 @@
     gap: 10px;
     border-bottom: 1px dotted #000;
     padding: 4px 0;
+  }
+
+  .kv-value {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    min-width: 0;
+    max-width: 65%;
+  }
+
+  .copyable-text {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
+  }
+
+  .copy-inline {
+    border: none;
+    background: transparent;
+    color: #000;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+
+  .copy-inline svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.3;
+    stroke-linejoin: round;
+  }
+
+  .copy-inline:hover,
+  .copy-inline:focus-visible {
+    opacity: 0.7;
+    outline: 1px dotted #000;
+    outline-offset: 1px;
+  }
+
+  .save-name-icon {
+    width: 14px;
+    height: 14px;
+    display: block;
   }
 
   .actions {

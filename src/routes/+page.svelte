@@ -7,12 +7,19 @@
   import HostTable from '$lib/components/HostTable.svelte';
   import ScanToolbar from '$lib/components/ScanToolbar.svelte';
 
+  import { TauriService } from '$lib/tauri';
   import { WindowManager } from '$lib/windowManager';
   import { notifications } from '$lib/util/notifications';
   import { scanStore } from '$lib/util/scanStore';
   import { windowFocused } from '$lib/util/windowState';
 
   let isWindowShaded = false;
+  let systemAccentColor: string | null = null;
+  let systemAccentTextColor: string | null = null;
+  let systemHighlightColor: string | null = null;
+  let systemHighlightTextColor: string | null = null;
+
+  const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
   $: ({
     interfaces,
@@ -65,11 +72,21 @@
       : 'Scanning...'
     : 'Idle';
 
+  $: windowStyle = [
+    systemAccentColor ? `--system-accent-color: ${systemAccentColor}` : '',
+    systemAccentTextColor ? `--system-accent-text-color: ${systemAccentTextColor}` : '',
+    systemHighlightColor ? `--system-highlight-color: ${systemHighlightColor}` : '',
+    systemHighlightTextColor ? `--system-highlight-text-color: ${systemHighlightTextColor}` : ''
+  ]
+    .filter((value) => value.length > 0)
+    .join('; ');
+
   const appWindow = getCurrentWindow();
   const windowManager = new WindowManager();
 
   onMount(() => {
     scanStore.init();
+    void loadSystemColors();
 
     const unlistenFocus = appWindow.onFocusChanged(({ payload: focused }) => {
       windowFocused.set(focused);
@@ -92,9 +109,33 @@
   function handleWindowDrag() {
     windowManager.startDragging();
   }
+
+  function normalizeHexColor(value: string | null): string | null {
+    if (!value) {
+      return null;
+    }
+
+    const normalized = value.trim();
+    return HEX_COLOR_PATTERN.test(normalized) ? normalized : null;
+  }
+
+  async function loadSystemColors() {
+    try {
+      const colors = await TauriService.getSystemColors();
+      systemAccentColor = normalizeHexColor(colors.accent_color);
+      systemAccentTextColor = normalizeHexColor(colors.accent_text_color);
+      systemHighlightColor = normalizeHexColor(colors.highlight_color);
+      systemHighlightTextColor = normalizeHexColor(colors.highlight_text_color);
+    } catch {
+      systemAccentColor = null;
+      systemAccentTextColor = null;
+      systemHighlightColor = null;
+      systemHighlightTextColor = null;
+    }
+  }
 </script>
 
-<div class="window-frame" class:window-unfocused={!$windowFocused}>
+<div class="window-frame" class:window-unfocused={!$windowFocused} style={windowStyle}>
   <TitleBar
     title="Lantenna"
     focused={$windowFocused}
@@ -140,6 +181,7 @@
           onSelectHost={(ip) => scanStore.setSelectedHost(ip)}
           onToggleFavorite={(ip) => scanStore.toggleFavorite(ip)}
           onToggleHidden={(ip) => scanStore.toggleHidden(ip)}
+          onClearCustomName={(ip) => scanStore.setCustomName(ip, '')}
         />
         <HostInspector
           host={selectedHost}
@@ -167,6 +209,10 @@
 
 <style>
   .window-frame {
+    --system-accent-color: #000;
+    --system-accent-text-color: #fff;
+    --system-highlight-color: #000;
+    --system-highlight-text-color: #fff;
     width: 100vw;
     height: 100vh;
     background: #fff;

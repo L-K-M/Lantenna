@@ -67,3 +67,10 @@ export interface ScanResult {
 export interface ScanErrorPayload {
   message: string;
 }
+
+export interface SystemColors {
+  accent_color: string | null;
+  accent_text_color: string | null;
+  highlight_color: string | null;
+  highlight_text_color: string | null;
+}

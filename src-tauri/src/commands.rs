@@ -1,8 +1,10 @@
 use crate::models::{
     Host, NetworkInterface, PortProfile, ScanErrorPayload, ScanOptions, ScanResult,
+    SystemColors,
 };
 use crate::scanner;
 use crate::storage::Storage;
+use crate::system_colors;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -168,4 +170,9 @@ pub async fn open_external_url(url: String) -> Result<(), String> {
     open::that(&url)
         .map_err(|error| error.to_string())
         .map(|_| ())
+}
+
+#[tauri::command]
+pub fn get_system_colors() -> Result<SystemColors, String> {
+    Ok(system_colors::get_system_colors())
 }

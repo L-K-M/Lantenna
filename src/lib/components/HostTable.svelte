@@ -24,6 +24,7 @@
   export let onSelectHost: ((ip: string) => void) | undefined = undefined;
   export let onToggleFavorite: ((ip: string) => void) | undefined = undefined;
   export let onToggleHidden: ((ip: string) => void) | undefined = undefined;
+  export let onClearCustomName: ((ip: string) => void) | undefined = undefined;
 
   type SortField = 'ip' | 'favorite' | 'name' | 'fingerprint' | 'ports' | 'lastSeen';
   type SortDirection = 'asc' | 'desc';
@@ -186,6 +187,10 @@
     return hiddenSet.has(ip) ? `Unhide ${ip}` : `Hide ${ip}`;
   }
 
+  function hasFriendlyName(ip: string): boolean {
+    return (customNames[ip] || '').trim().length > 0;
+  }
+
   function closeContextMenu() {
     if (!contextMenu.open) {
       return;
@@ -210,7 +215,7 @@
     onSelectHost?.(ip);
 
     const menuWidth = 170;
-    const menuHeight = 34;
+    const menuHeight = 72;
     const maxX = Math.max(8, window.innerWidth - menuWidth - 8);
     const maxY = Math.max(8, window.innerHeight - menuHeight - 8);
 
@@ -224,6 +229,15 @@
 
   function toggleHiddenFromContextMenu(ip: string) {
     onToggleHidden?.(ip);
+    closeContextMenu();
+  }
+
+  function clearFriendlyNameFromContextMenu(ip: string) {
+    if (!hasFriendlyName(ip)) {
+      return;
+    }
+
+    onClearCustomName?.(ip);
     closeContextMenu();
   }
 
@@ -251,7 +265,89 @@
   function handleWindowKeydown(event: KeyboardEvent) {
     if (event.key === 'Escape') {
       closeContextMenu();
+      return;
     }
+
+    if (event.altKey || event.ctrlKey || event.metaKey || isTypingTarget(event.target) || sortedHosts.length === 0) {
+      return;
+    }
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      moveSelection(1);
+      return;
+    }
+
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveSelection(-1);
+      return;
+    }
+
+    if (event.key === 'Home') {
+      event.preventDefault();
+      selectByIndex(0);
+      return;
+    }
+
+    if (event.key === 'End') {
+      event.preventDefault();
+      selectByIndex(sortedHosts.length - 1);
+      return;
+    }
+
+    if (event.key === 'PageDown') {
+      event.preventDefault();
+      moveSelection(10);
+      return;
+    }
+
+    if (event.key === 'PageUp') {
+      event.preventDefault();
+      moveSelection(-10);
+    }
+  }
+
+  function isTypingTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) {
+      return false;
+    }
+
+    const tag = target.tagName.toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'button') {
+      return true;
+    }
+
+    return target.isContentEditable;
+  }
+
+  function selectByIndex(index: number) {
+    if (sortedHosts.length === 0) {
+      return;
+    }
+
+    const clampedIndex = Math.max(0, Math.min(index, sortedHosts.length - 1));
+    const next = sortedHosts[clampedIndex];
+    if (!next) {
+      return;
+    }
+
+    closeContextMenu();
+    onSelectHost?.(next.ip);
+  }
+
+  function moveSelection(offset: number) {
+    if (sortedHosts.length === 0) {
+      return;
+    }
+
+    const currentIndex = sortedHosts.findIndex((host) => host.ip === selectedHostIp);
+    if (currentIndex < 0) {
+      selectByIndex(offset >= 0 ? 0 : sortedHosts.length - 1);
+      return;
+    }
+
+    selectByIndex(currentIndex + offset);
   }
 
   function displayName(host: Host): string {
@@ -562,6 +658,15 @@
     >
       {hiddenLabel(contextMenu.ip)}
     </button>
+    <button
+      type="button"
+      class="context-menu-item"
+      role="menuitem"
+      disabled={!hasFriendlyName(contextMenu.ip)}
+      onclick={() => clearFriendlyNameFromContextMenu(contextMenu.ip)}
+    >
+      Clear Friendly Name
+    </button>
   </div>
 {/if}
 
@@ -636,6 +741,7 @@
 
   .sort-button.sorted {
     text-decoration: underline;
+    color: var(--system-accent-color, #000);
   }
 
   .ip-header {
@@ -687,7 +793,7 @@
   .favorite-sort:hover svg,
   .favorite-toggle.active svg,
   .favorite-toggle:hover svg {
-    fill: #000;
+    fill: var(--system-accent-color, #000);
   }
 
   .col-ip {
@@ -774,31 +880,41 @@
   }
 
   tr:hover td {
-    background: #000;
-    color: #fff;
+    background: var(--system-accent-color, #000);
+    color: var(--system-accent-text-color, #fff);
   }
 
   tr.selected td {
-    background: #000;
-    color: #fff;
+    background: var(--system-highlight-color, #000);
+    color: var(--system-highlight-text-color, #fff);
   }
 
-  tr:hover .favorite-sort svg,
-  tr:hover .favorite-toggle svg,
+  tr:hover .favorite-toggle svg {
+    stroke: var(--system-accent-text-color, #fff);
+  }
+
   tr.selected .favorite-toggle svg {
-    stroke: #fff;
+    stroke: var(--system-highlight-text-color, #fff);
   }
 
-  tr:hover .new-badge,
+  tr:hover .new-badge {
+    background: var(--system-accent-text-color, #fff);
+    color: var(--system-accent-color, #000);
+    border-color: var(--system-accent-text-color, #fff);
+  }
+
   tr.selected .new-badge {
-    background: #fff;
-    color: #000;
-    border-color: #fff;
+    background: var(--system-highlight-text-color, #fff);
+    color: var(--system-highlight-color, #000);
+    border-color: var(--system-highlight-text-color, #fff);
   }
 
-  tr:hover .favorite-toggle.active svg,
+  tr:hover .favorite-toggle.active svg {
+    fill: var(--system-accent-text-color, #fff);
+  }
+
   tr.selected .favorite-toggle.active svg {
-    fill: #fff;
+    fill: var(--system-highlight-text-color, #fff);
   }
 
   .placeholder {
@@ -811,7 +927,7 @@
   .context-menu {
     position: fixed;
     z-index: 3000;
-    min-width: 170px;
+    min-width: 210px;
     border: 1px solid #000;
     background: #fff;
     box-shadow: 2px 2px 0 #000;
@@ -835,8 +951,20 @@
 
   .context-menu-item:hover,
   .context-menu-item:focus-visible {
-    background: #000;
-    color: #fff;
+    background: var(--system-accent-color, #000);
+    color: var(--system-accent-text-color, #fff);
+    outline: none;
+  }
+
+  .context-menu-item:disabled {
+    color: #808080;
+    cursor: default;
+  }
+
+  .context-menu-item:disabled:hover,
+  .context-menu-item:disabled:focus-visible {
+    background: transparent;
+    color: #808080;
     outline: none;
   }
 </style>
