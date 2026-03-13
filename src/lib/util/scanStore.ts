@@ -25,6 +25,7 @@ interface ScanStoreState {
   showHiddenEntries: boolean;
   staleFavoriteIps: string[];
   progress: ScanProgress | null;
+  hostScanProgress: ScanProgress | null;
   scanning: boolean;
   loading: boolean;
   error: string | null;
@@ -375,6 +376,7 @@ const initialState: ScanStoreState = {
   showHiddenEntries: false,
   staleFavoriteIps: initialStaleFavoriteIps,
   progress: null,
+  hostScanProgress: null,
   scanning: false,
   loading: false,
   error: null,
@@ -492,6 +494,15 @@ function createScanStore() {
           ...state,
           progress: event.payload,
           scanning: event.payload.running
+        }));
+      })
+    );
+
+    unlisteners.push(
+      await listen<ScanProgress>('host-scan-progress', (event) => {
+        update((state) => ({
+          ...state,
+          hostScanProgress: event.payload
         }));
       })
     );
@@ -771,6 +782,7 @@ function createScanStore() {
         return {
           ...next,
           scanning: true,
+          hostScanProgress: null,
           error: null,
           hosts: mergeStaleFavoritesIntoHosts([], staleFavoriteIps, favoriteHostSnapshots),
           staleFavoriteIps,
@@ -824,6 +836,22 @@ function createScanStore() {
       }
     },
     refreshHostPorts: async (ip: string, profile: PortProfile = 'deep') => {
+      if (currentState.hostScanProgress?.running) {
+        notifications.add('A host deep scan is already in progress.', 'info');
+        return;
+      }
+
+      update((state) => ({
+        ...state,
+        hostScanProgress: {
+          scanned: 0,
+          total: 0,
+          found: 0,
+          running: true,
+          current_ip: ip
+        }
+      }));
+
       try {
         const host = await TauriService.scanHostPorts(ip, profile);
         update((state) => {
@@ -833,6 +861,17 @@ function createScanStore() {
           return {
             ...state,
             staleFavoriteIps,
+            hostScanProgress:
+              state.hostScanProgress && state.hostScanProgress.current_ip === host.ip
+                ? {
+                    ...state.hostScanProgress,
+                    scanned: 1,
+                    total: 1,
+                    found: host.open_ports.length,
+                    running: false,
+                    current_ip: host.ip
+                  }
+                : state.hostScanProgress,
             hosts: mergeStaleFavoritesIntoHosts(
               upsertHost(state.hosts, host),
               staleFavoriteIps,
@@ -840,8 +879,16 @@ function createScanStore() {
             )
           };
         });
+        notifications.add(`Deep scan complete for ${ip}.`, 'success');
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to scan host ports';
+        update((state) => ({
+          ...state,
+          hostScanProgress:
+            state.hostScanProgress && state.hostScanProgress.current_ip === ip
+              ? { ...state.hostScanProgress, running: false }
+              : state.hostScanProgress
+        }));
         notifications.add(message, 'error');
       }
     }

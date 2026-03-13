@@ -1,5 +1,5 @@
 use crate::models::{
-    Host, NetworkInterface, PortProfile, ScanErrorPayload, ScanOptions, ScanResult,
+    Host, NetworkInterface, PortProfile, ScanErrorPayload, ScanOptions, ScanProgress, ScanResult,
     SystemColors,
 };
 use crate::scanner;
@@ -9,6 +9,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
 pub struct AppState {
@@ -136,6 +137,7 @@ pub async fn get_scan_results(state: State<'_, AppState>) -> Result<Option<ScanR
 pub async fn scan_host_ports(
     ip: String,
     profile: PortProfile,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Host, String> {
     let timeout_ms = match profile {
@@ -144,11 +146,75 @@ pub async fn scan_host_ports(
         PortProfile::Deep => 320,
     };
 
-    let host = scanner::scan_single_host(ip, profile, timeout_ms)
-        .await
-        .map_err(|error| error.to_string())?;
+    let target_ip = ip.clone();
+    let mut last_emitted_scanned = 0usize;
+    let mut last_emit_at = Instant::now() - Duration::from_millis(250);
 
-    Ok(scanner::enrich_host_with_cache(host, state.storage.clone()).await)
+    let host = match scanner::scan_single_host_with_progress(
+        ip,
+        profile,
+        timeout_ms,
+        |scanned, total, found| {
+            let now = Instant::now();
+            let should_emit = scanned == 0
+                || scanned >= total
+                || scanned.saturating_sub(last_emitted_scanned) >= 12
+                || now.duration_since(last_emit_at) >= Duration::from_millis(75);
+
+            if !should_emit {
+                return;
+            }
+
+            last_emitted_scanned = scanned;
+            last_emit_at = now;
+
+            let _ = app.emit_to(
+                "main",
+                "host-scan-progress",
+                ScanProgress {
+                    scanned,
+                    total,
+                    found,
+                    running: true,
+                    current_ip: Some(target_ip.clone()),
+                },
+            );
+        },
+    )
+    .await
+    {
+        Ok(host) => host,
+        Err(error) => {
+            let _ = app.emit_to(
+                "main",
+                "host-scan-progress",
+                ScanProgress {
+                    scanned: 0,
+                    total: 1,
+                    found: 0,
+                    running: false,
+                    current_ip: Some(target_ip),
+                },
+            );
+            return Err(error.to_string());
+        }
+    };
+
+    let host = scanner::enrich_host_with_cache(host, state.storage.clone()).await;
+
+    let _ = app.emit_to(
+        "main",
+        "host-scan-progress",
+        ScanProgress {
+            scanned: 1,
+            total: 1,
+            found: host.open_ports.len(),
+            running: false,
+            current_ip: Some(host.ip.clone()),
+        },
+    );
+
+    Ok(host)
 }
 
 #[tauri::command]

@@ -33,6 +33,7 @@
     showHiddenEntries,
     staleFavoriteIps,
     progress,
+    hostScanProgress,
     scanning,
     loading,
     error,
@@ -66,18 +67,31 @@
 
   $: selectedHost = visibleHosts.find((host) => host.ip === selectedHostIp) || null;
 
-  $: footerStatus = scanning
+  $: hostScanTarget = hostScanProgress?.current_ip || 'selected host';
+  $: fullScanActive = scanning || Boolean(progress?.running);
+  $: footerStatus = fullScanActive
     ? progress
       ? `${progress.scanned}/${progress.total} scanned, ${progress.found} hosts`
       : 'Scanning...'
-    : 'Idle';
+    : hostScanProgress?.running
+      ? hostScanProgress.total > 0
+        ? `Deep scan ${hostScanTarget}: ${hostScanProgress.scanned}/${hostScanProgress.total} ports, ${hostScanProgress.found} open`
+        : `Deep scan ${hostScanTarget} in progress...`
+      : 'Idle';
 
-  $: showFooterProgress = scanning || Boolean(progress?.running);
-  $: footerProgressMax = progress && progress.total > 0 ? progress.total : 1;
-  $: footerProgressValue = progress ? Math.min(progress.scanned, footerProgressMax) : 0;
-  $: footerProgressAriaLabel = progress
-    ? `Scan progress: ${progress.scanned} of ${progress.total} scanned`
-    : 'Scan progress';
+  $: activeFooterProgress = fullScanActive ? progress : hostScanProgress?.running ? hostScanProgress : null;
+  $: showFooterProgress = Boolean(activeFooterProgress?.running);
+  $: footerProgressMax = activeFooterProgress && activeFooterProgress.total > 0 ? activeFooterProgress.total : 1;
+  $: footerProgressValue = activeFooterProgress ? Math.min(activeFooterProgress.scanned, footerProgressMax) : 0;
+  $: footerProgressAriaLabel = fullScanActive
+    ? progress
+      ? `Scan progress: ${progress.scanned} of ${progress.total} scanned`
+      : 'Scan progress'
+    : hostScanProgress?.running
+      ? hostScanProgress.total > 0
+        ? `Deep scan progress for ${hostScanTarget}: ${hostScanProgress.scanned} of ${hostScanProgress.total} ports`
+        : `Deep scan in progress for ${hostScanTarget}`
+      : 'Scan progress';
 
   $: windowStyle = [
     systemAccentColor ? `--system-accent-color: ${systemAccentColor}` : '',
@@ -193,6 +207,7 @@
         <HostInspector
           host={selectedHost}
           {customNames}
+          deepScanRunning={Boolean(hostScanProgress?.running)}
           onSetCustomName={(ip, name) => scanStore.setCustomName(ip, name)}
           onDeepScan={(ip) => scanStore.refreshHostPorts(ip, 'deep')}
         />

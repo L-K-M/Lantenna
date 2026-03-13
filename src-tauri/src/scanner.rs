@@ -429,6 +429,18 @@ where
 }
 
 pub async fn scan_single_host(ip: String, profile: PortProfile, timeout_ms: u64) -> Result<Host> {
+    scan_single_host_with_progress(ip, profile, timeout_ms, |_, _, _| {}).await
+}
+
+pub async fn scan_single_host_with_progress<F>(
+    ip: String,
+    profile: PortProfile,
+    timeout_ms: u64,
+    on_progress: F,
+) -> Result<Host>
+where
+    F: FnMut(usize, usize, usize),
+{
     let parsed_ip =
         Ipv4Addr::from_str(&ip).with_context(|| format!("Invalid IPv4 address '{}'", ip))?;
     let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -447,6 +459,7 @@ pub async fn scan_single_host(ip: String, profile: PortProfile, timeout_ms: u64)
         port_concurrency,
         connection_semaphore,
         cancel_flag,
+        on_progress,
     )
     .await;
     let name = resolve_hostname_with_timeout(parsed_ip, Duration::from_millis(250)).await;
@@ -581,6 +594,7 @@ async fn scan_host_internal(
         port_concurrency,
         connection_semaphore,
         cancel_flag.clone(),
+        |_, _, _| {},
     )
     .await;
     if !reachable {
@@ -603,14 +617,18 @@ async fn scan_host_internal(
     })
 }
 
-async fn scan_open_ports(
+async fn scan_open_ports<F>(
     ip: Ipv4Addr,
     ports: Arc<Vec<u16>>,
     timeout_duration: Duration,
     port_concurrency: usize,
     connection_semaphore: Arc<Semaphore>,
     cancel_flag: Arc<AtomicBool>,
-) -> (Vec<PortInfo>, bool) {
+    mut on_progress: F,
+) -> (Vec<PortInfo>, bool)
+where
+    F: FnMut(usize, usize, usize),
+{
     let concurrency = port_concurrency.clamp(1, 1024).min(ports.len().max(1));
 
     let mut stream = stream::iter(ports.iter().copied().map(|port| {
@@ -628,22 +646,32 @@ async fn scan_open_ports(
 
     let mut open_ports = Vec::new();
     let mut reachable = false;
+    let total_ports = ports.len();
+    let mut scanned_ports = 0usize;
+    let mut found_open_ports = 0usize;
+
+    on_progress(scanned_ports, total_ports, found_open_ports);
 
     while let Some(port) = stream.next().await {
         if cancel_flag.load(Ordering::Relaxed) {
             break;
         }
 
+        scanned_ports += 1;
+
         match port {
             Some(PortProbeOutcome::Open(port)) => {
                 reachable = true;
                 open_ports.push(port);
+                found_open_ports += 1;
             }
             Some(PortProbeOutcome::Reachable) => {
                 reachable = true;
             }
             None => {}
         }
+
+        on_progress(scanned_ports, total_ports, found_open_ports);
     }
 
     open_ports.sort_by_key(|item| item.port);

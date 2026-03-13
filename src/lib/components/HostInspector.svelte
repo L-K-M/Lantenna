@@ -6,6 +6,7 @@
 
   export let host: Host | null = null;
   export let customNames: Record<string, string> = {};
+  export let deepScanRunning = false;
   export let onDeepScan: ((ip: string) => void) | undefined = undefined;
   export let onSetCustomName: ((ip: string, name: string) => void) | undefined = undefined;
 
@@ -269,7 +270,23 @@
       </span>
     </div>
     {#if selectedCustomName && host.name && host.name !== selectedCustomName}
-      <div class="kv"><span>Detected Name</span><span>{host.name}</span></div>
+      <div class="kv">
+        <span>Detected Name</span>
+        <span class="kv-value">
+          <span class="copyable-text">{host.name}</span>
+          <BalloonHelp message={copyBalloonMessage} delay={250}>
+            <button
+              type="button"
+              class="copy-inline"
+              title="Copy detected name"
+              aria-label="Copy detected name"
+              onclick={() => copyValue('Detected name', host.name)}
+            >
+              <CopyIcon size={16} alt="" />
+            </button>
+          </BalloonHelp>
+        </span>
+      </div>
     {/if}
     <div class="kv"><span>Reachable</span><span>{host.reachable ? 'Yes' : 'No'}</span></div>
     <div class="kv"><span>Last Seen</span><span>{formatTime(host.last_seen)}</span></div>
@@ -377,7 +394,9 @@
         markdown
         delay={300}
       >
-        <Button onclick={() => onDeepScan?.(host.ip)}>Deep Scan</Button>
+        <Button onclick={() => onDeepScan?.(host.ip)} disabled={deepScanRunning}>
+          {deepScanRunning ? 'Deep Scanning...' : 'Deep Scan'}
+        </Button>
       </BalloonHelp>
     </div>
   {:else}
