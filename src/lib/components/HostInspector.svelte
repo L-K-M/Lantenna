@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { BalloonHelp, Button } from '@lkmc/system7-ui';
+  import { BalloonHelp, Button, CopyIcon, DownloadIcon } from '@lkmc/system7-ui';
   import { TauriService } from '$lib/tauri';
   import type { Host } from '$lib/types';
   import { notifications } from '$lib/util/notifications';
@@ -58,6 +58,7 @@
   const vncPorts = new Set([5900, 5901, 5902]);
   const telnetPorts = new Set([23, 2323]);
   const rtspPorts = new Set([554, 8554]);
+  const copyBalloonMessage = 'Copy this value';
 
   function formatTime(iso: string): string {
     if (!iso) {
@@ -232,18 +233,17 @@
       <span>IP</span>
       <span class="kv-value">
         <span class="copyable-text">{host.ip}</span>
-        <button
-          type="button"
-          class="copy-inline"
-          title="Copy IP address"
-          aria-label="Copy IP address"
-          onclick={() => copyValue('IP address', host.ip)}
-        >
-          <svg viewBox="0 0 16 16" role="img" focusable="false" aria-hidden="true">
-            <rect x="5" y="2" width="9" height="11" rx="0.5" ry="0.5" />
-            <rect x="2" y="5" width="9" height="9" rx="0.5" ry="0.5" />
-          </svg>
-        </button>
+        <BalloonHelp message={copyBalloonMessage} delay={250}>
+          <button
+            type="button"
+            class="copy-inline"
+            title="Copy IP address"
+            aria-label="Copy IP address"
+            onclick={() => copyValue('IP address', host.ip)}
+          >
+            <CopyIcon size={16} alt="" />
+          </button>
+        </BalloonHelp>
       </span>
     </div>
     <div class="kv">
@@ -251,18 +251,17 @@
       <span class="kv-value">
         <span class="copyable-text">{displayHostName}</span>
         {#if displayHostName !== 'Unknown'}
-          <button
-            type="button"
-            class="copy-inline"
-            title="Copy host name"
-            aria-label="Copy host name"
-            onclick={() => copyValue('Host name', displayHostName)}
-          >
-            <svg viewBox="0 0 16 16" role="img" focusable="false" aria-hidden="true">
-              <rect x="5" y="2" width="9" height="11" rx="0.5" ry="0.5" />
-              <rect x="2" y="5" width="9" height="9" rx="0.5" ry="0.5" />
-            </svg>
-          </button>
+          <BalloonHelp message={copyBalloonMessage} delay={250}>
+            <button
+              type="button"
+              class="copy-inline"
+              title="Copy host name"
+              aria-label="Copy host name"
+              onclick={() => copyValue('Host name', displayHostName)}
+            >
+              <CopyIcon size={16} alt="" />
+            </button>
+          </BalloonHelp>
         {/if}
       </span>
     </div>
@@ -283,12 +282,7 @@
           onkeydown={handleCustomNameKeydown}
         />
         <Button variant="icon" title="Save friendly name" onclick={saveCustomName}>
-          <svg class="save-name-icon" viewBox="0 0 16 16" role="img" focusable="false" aria-hidden="true">
-            <rect x="2" y="1.5" width="12" height="13" fill="none" stroke="currentColor" stroke-width="1.2" />
-            <rect x="4" y="3" width="6" height="4" fill="none" stroke="currentColor" stroke-width="1.2" />
-            <rect x="4" y="9" width="8" height="4" fill="none" stroke="currentColor" stroke-width="1.2" />
-            <line x1="10.5" y1="3" x2="10.5" y2="7" stroke="currentColor" stroke-width="1.2" />
-          </svg>
+          <DownloadIcon size={14} alt="" />
         </Button>
       </div>
     </div>
@@ -309,18 +303,17 @@
       <span class="kv-value">
         <span class="copyable-text">{macAddress}</span>
         {#if fp?.mac_address}
-          <button
-            type="button"
-            class="copy-inline"
-            title="Copy MAC address"
-            aria-label="Copy MAC address"
-            onclick={() => copyValue('MAC address', fp?.mac_address)}
-          >
-            <svg viewBox="0 0 16 16" role="img" focusable="false" aria-hidden="true">
-              <rect x="5" y="2" width="9" height="11" rx="0.5" ry="0.5" />
-              <rect x="2" y="5" width="9" height="9" rx="0.5" ry="0.5" />
-            </svg>
-          </button>
+          <BalloonHelp message={copyBalloonMessage} delay={250}>
+            <button
+              type="button"
+              class="copy-inline"
+              title="Copy MAC address"
+              aria-label="Copy MAC address"
+              onclick={() => copyValue('MAC address', fp?.mac_address)}
+            >
+              <CopyIcon size={16} alt="" />
+            </button>
+          </BalloonHelp>
         {/if}
       </span>
     </div>
@@ -452,27 +445,12 @@
     flex: 0 0 auto;
   }
 
-  .copy-inline svg {
-    width: 12px;
-    height: 12px;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.3;
-    stroke-linejoin: round;
-  }
-
   .copy-inline:hover,
   .copy-inline:focus-visible {
     background: var(--system-accent-color, #000);
     color: var(--system-accent-text-color, #fff);
     outline: 1px dotted var(--system-accent-color, #000);
     outline-offset: 1px;
-  }
-
-  .save-name-icon {
-    width: 14px;
-    height: 14px;
-    display: block;
   }
 
   .actions {
