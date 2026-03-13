@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { Checkbox, ErrorBanner, Notification, TitleBar } from '@lkmc/system7-ui';
+  import { Checkbox, ErrorBanner, Notification, ProgressBar, TitleBar } from '@lkmc/system7-ui';
 
   import HostInspector from '$lib/components/HostInspector.svelte';
   import HostTable from '$lib/components/HostTable.svelte';
@@ -71,6 +71,13 @@
       ? `${progress.scanned}/${progress.total} scanned, ${progress.found} hosts`
       : 'Scanning...'
     : 'Idle';
+
+  $: showFooterProgress = scanning || Boolean(progress?.running);
+  $: footerProgressMax = progress && progress.total > 0 ? progress.total : 1;
+  $: footerProgressValue = progress ? Math.min(progress.scanned, footerProgressMax) : 0;
+  $: footerProgressAriaLabel = progress
+    ? `Scan progress: ${progress.scanned} of ${progress.total} scanned`
+    : 'Scan progress';
 
   $: windowStyle = [
     systemAccentColor ? `--system-accent-color: ${systemAccentColor}` : '',
@@ -193,7 +200,18 @@
     </main>
 
     <footer class="app-footer">
-      <span>{footerStatus}</span>
+      {#if showFooterProgress}
+        <div class="footer-progress">
+          <ProgressBar
+            value={footerProgressValue}
+            max={footerProgressMax}
+            height={16}
+            title={footerProgressAriaLabel}
+            ariaLabel={footerProgressAriaLabel}
+          />
+        </div>
+      {/if}
+      <span class="footer-status">{footerStatus}</span>
       {#if hiddenCount > 0}
         <div class="hidden-footer-toggle">
           <Checkbox
@@ -245,6 +263,17 @@
     align-items: center;
     white-space: nowrap;
     gap: 12px;
+  }
+
+  .footer-status {
+    flex: 0 0 auto;
+  }
+
+  .footer-progress {
+    width: clamp(140px, 24vw, 280px);
+    min-width: 140px;
+    display: inline-flex;
+    align-items: center;
   }
 
   .hidden-footer-toggle {
