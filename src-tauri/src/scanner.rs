@@ -428,10 +428,6 @@ where
     })
 }
 
-pub async fn scan_single_host(ip: String, profile: PortProfile, timeout_ms: u64) -> Result<Host> {
-    scan_single_host_with_progress(ip, profile, timeout_ms, |_, _, _| {}).await
-}
-
 pub async fn scan_single_host_with_progress<F>(
     ip: String,
     profile: PortProfile,
