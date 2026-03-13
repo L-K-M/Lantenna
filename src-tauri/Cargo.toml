@@ -29,3 +29,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 open = "5"
 log = "0.4"
 env_logger = "0.11"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSColor", "NSColorSpace", "objc2-core-foundation"] }

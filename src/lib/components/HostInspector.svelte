@@ -463,8 +463,9 @@
 
   .copy-inline:hover,
   .copy-inline:focus-visible {
-    opacity: 0.7;
-    outline: 1px dotted #000;
+    background: var(--system-accent-color, #000);
+    color: var(--system-accent-text-color, #fff);
+    outline: 1px dotted var(--system-accent-color, #000);
     outline-offset: 1px;
   }
 
@@ -516,8 +517,8 @@
 
   .port-item-link:hover,
   .port-item-link:focus-visible {
-    background: #000;
-    color: #fff;
+    background: var(--system-accent-color, #000);
+    color: var(--system-accent-text-color, #fff);
     outline: none;
   }
 

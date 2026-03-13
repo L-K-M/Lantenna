@@ -700,7 +700,7 @@
   th,
   td {
     text-align: left;
-    border-bottom: 1px dotted #000;
+    border-bottom: 0.5px solid #000;
     padding: 6px 8px;
     vertical-align: middle;
   }
