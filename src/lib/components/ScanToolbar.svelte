@@ -242,11 +242,6 @@
     outline-offset: 1px;
   }
 
-  .toolbar-group :global(.sys7-btn:not(:disabled):hover) {
-    background: var(--system-accent-color, #000);
-    color: var(--system-accent-text-color, #fff);
-  }
-
   .toolbar-group :global(.sys7-btn:not(:disabled):focus-visible) {
     background: var(--system-accent-color, #000);
     color: var(--system-accent-text-color, #fff);

@@ -59,6 +59,9 @@
   const telnetPorts = new Set([23, 2323]);
   const rtspPorts = new Set([554, 8554]);
   const copyBalloonMessage = 'Copy this value';
+  const deepScanBalloonMessage = `**Deep Scan**
+- Scans this host with the deep profile (\`1-2048\`)
+- Refreshes open ports and fingerprint hints`;
 
   function formatTime(iso: string): string {
     if (!iso) {
@@ -289,7 +292,7 @@
 
     <div class="actions">
       <BalloonHelp
-        message="**Deep Scan**\n- Scans this host with the deep profile (`1-2048`)\n- Refreshes open ports and fingerprint hints"
+        message={deepScanBalloonMessage}
         markdown
         delay={300}
       >
@@ -455,6 +458,17 @@
 
   .actions {
     margin-top: 10px;
+    position: relative;
+    z-index: 30;
+  }
+
+  .actions :global(.balloon) {
+    width: min(32ch, calc(100vw - 64px));
+    max-width: min(32ch, calc(100vw - 64px));
+  }
+
+  .actions :global(.balloon .balloon-content.markdown-content) {
+    line-height: 1;
   }
 
   .name-editor {
