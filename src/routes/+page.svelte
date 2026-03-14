@@ -259,10 +259,7 @@
         `--system7-color-titlebar-edge-verydark: ${windowTones.edgeVeryDark}`,
         `--system7-color-titlebar-button: ${windowTones.titlebarButton}`,
         `--system7-color-scrollbar-thumb-line: ${windowTones.scrollbarLine}`,
-        `--system7-color-scrollbar-thumb: ${windowTones.scrollbarThumb}`,
-        `--system7-color-success: ${colors.accent_color}`,
-        `--system7-color-error: ${colors.accent_color}`,
-        `--system7-color-info: ${colors.accent_color}`
+        `--system7-color-scrollbar-thumb: ${windowTones.scrollbarThumb}`
       );
     }
 
@@ -387,6 +384,12 @@
     box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.2);
     display: flex;
     flex-direction: column;
+  }
+
+  .window-frame :global(.notification.success),
+  .window-frame :global(.notification.error),
+  .window-frame :global(.notification.info) {
+    border-left: 2px solid var(--system7-color-ink, #000);
   }
 
   .app-content {
