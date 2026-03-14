@@ -411,6 +411,7 @@
         border-left: 1.5px solid #000;
         padding: 10px;
         overflow-y: auto;
+        overflow-x: hidden;
         background: #fff;
         position: relative;
         z-index: 20;
@@ -484,11 +485,15 @@
     }
 
     .actions :global(.balloon) {
-        max-width: min(28ch, calc(100vw - 64px));
+        max-width: min(22ch, calc(100vw - 64px));
     }
 
     .actions :global(.balloon .balloon-content.markdown-content) {
         line-height: 1;
+    }
+
+    .actions :global(.balloon .balloon-content.markdown-content code) {
+        overflow-wrap: anywhere;
     }
 
     .name-editor {

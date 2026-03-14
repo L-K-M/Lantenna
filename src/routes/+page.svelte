@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import * as System7Ui from '@lkmc/system7-ui';
   import { Checkbox, ErrorBanner, Notification, ProgressBar, TitleBar } from '@lkmc/system7-ui';
@@ -147,6 +147,36 @@
     windowManager.startDragging();
   }
 
+  function getHostTableHeightMetrics(): { viewportHeight: number; contentHeight: number } | null {
+    const tableBodyContainer = document.querySelector<HTMLDivElement>('.table-body-container');
+    const tableBody = tableBodyContainer?.querySelector<HTMLTableElement>('table');
+
+    if (!tableBodyContainer || !tableBody) {
+      return null;
+    }
+
+    return {
+      viewportHeight: tableBodyContainer.clientHeight,
+      contentHeight: tableBody.getBoundingClientRect().height
+    };
+  }
+
+  async function handleWindowResizeToFit() {
+    if (isWindowShaded) {
+      return;
+    }
+
+    await tick();
+
+    const tableHeightMetrics = getHostTableHeightMetrics();
+    if (!tableHeightMetrics) {
+      return;
+    }
+
+    const heightDelta = Math.round(tableHeightMetrics.contentHeight - tableHeightMetrics.viewportHeight);
+    await windowManager.resizeHeightBy(heightDelta);
+  }
+
   function normalizeHexColor(value: string | null): string | null {
     if (!value) {
       return null;
@@ -229,7 +259,10 @@
         `--system7-color-titlebar-edge-verydark: ${windowTones.edgeVeryDark}`,
         `--system7-color-titlebar-button: ${windowTones.titlebarButton}`,
         `--system7-color-scrollbar-thumb-line: ${windowTones.scrollbarLine}`,
-        `--system7-color-scrollbar-thumb: ${windowTones.scrollbarThumb}`
+        `--system7-color-scrollbar-thumb: ${windowTones.scrollbarThumb}`,
+        `--system7-color-success: ${colors.accent_color}`,
+        `--system7-color-error: ${colors.accent_color}`,
+        `--system7-color-info: ${colors.accent_color}`
       );
     }
 
@@ -257,9 +290,11 @@
     title="Lantenna"
     focused={$windowFocused}
     closable
+    collapsible
     shadeable
     draggable
     onclose={handleWindowClose}
+    oncollapse={handleWindowResizeToFit}
     onshade={handleWindowShade}
     ondragstart={handleWindowDrag}
   />
@@ -342,6 +377,9 @@
     --system7-color-accent-text: #fff;
     --system7-color-highlight: #000;
     --system7-color-highlight-text: #fff;
+    --system7-color-success: #000;
+    --system7-color-error: #000;
+    --system7-color-info: #000;
     width: 100vw;
     height: 100vh;
     background: #fff;
