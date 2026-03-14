@@ -741,7 +741,7 @@
 
     .sort-button.sorted {
         text-decoration: underline;
-        color: var(--system-accent-color, #000);
+        color: var(--system7-color-accent, #000);
     }
 
     .ip-header {
@@ -794,7 +794,7 @@
     .favorite-sort:hover svg,
     .favorite-toggle.active svg,
     .favorite-toggle:hover svg {
-        fill: var(--system-accent-color, #000);
+        fill: var(--system7-color-accent, #000);
     }
 
     .col-ip {
@@ -882,41 +882,41 @@
     }
 
     tr:hover td {
-        background: var(--system-accent-color, #000);
-        color: var(--system-accent-text-color, #fff);
+        background: var(--system7-color-accent, #000);
+        color: var(--system7-color-accent-text, #fff);
     }
 
     tr.selected td {
-        background: var(--system-highlight-color, #000);
-        color: var(--system-highlight-text-color, #fff);
+        background: var(--system7-color-highlight, #000);
+        color: var(--system7-color-highlight-text, #fff);
     }
 
     tr:hover .favorite-toggle svg {
-        stroke: var(--system-accent-text-color, #fff);
+        stroke: var(--system7-color-accent-text, #fff);
     }
 
     tr.selected .favorite-toggle svg {
-        stroke: var(--system-highlight-text-color, #fff);
+        stroke: var(--system7-color-highlight-text, #fff);
     }
 
     tr:hover .new-badge {
-        background: var(--system-accent-text-color, #fff);
-        color: var(--system-accent-color, #000);
-        border-color: var(--system-accent-text-color, #fff);
+        background: var(--system7-color-accent-text, #fff);
+        color: var(--system7-color-accent, #000);
+        border-color: var(--system7-color-accent-text, #fff);
     }
 
     tr.selected .new-badge {
-        background: var(--system-highlight-text-color, #fff);
-        color: var(--system-highlight-color, #000);
-        border-color: var(--system-highlight-text-color, #fff);
+        background: var(--system7-color-highlight-text, #fff);
+        color: var(--system7-color-highlight, #000);
+        border-color: var(--system7-color-highlight-text, #fff);
     }
 
     tr:hover .favorite-toggle.active svg {
-        fill: var(--system-accent-text-color, #fff);
+        fill: var(--system7-color-accent-text, #fff);
     }
 
     tr.selected .favorite-toggle.active svg {
-        fill: var(--system-highlight-text-color, #fff);
+        fill: var(--system7-color-highlight-text, #fff);
     }
 
     .placeholder {
@@ -953,8 +953,8 @@
 
     .context-menu-item:hover,
     .context-menu-item:focus-visible {
-        background: var(--system-accent-color, #000);
-        color: var(--system-accent-text-color, #fff);
+        background: var(--system7-color-accent, #000);
+        color: var(--system7-color-accent-text, #fff);
         outline: none;
     }
 

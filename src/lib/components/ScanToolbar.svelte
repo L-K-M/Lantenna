@@ -226,26 +226,26 @@
   }
 
   .clear-search:hover {
-    background: var(--system-accent-color, #000);
-    color: var(--system-accent-text-color, #fff);
-    border-color: var(--system-accent-color, #000);
+    background: var(--system7-color-accent, #000);
+    color: var(--system7-color-accent-text, #fff);
+    border-color: var(--system7-color-accent, #000);
   }
 
   .clear-search:focus-visible {
-    border-color: var(--system-accent-color, #000);
-    outline: 1px dotted var(--system-accent-color, #000);
+    border-color: var(--system7-color-accent, #000);
+    outline: 1px dotted var(--system7-color-accent, #000);
     outline-offset: 1px;
   }
 
   .search-wrap input:focus-visible {
-    outline: 1px dotted var(--system-accent-color, #000);
+    outline: 1px dotted var(--system7-color-accent, #000);
     outline-offset: 1px;
   }
 
   .toolbar-group :global(.sys7-btn:not(:disabled):focus-visible) {
-    background: var(--system-accent-color, #000);
-    color: var(--system-accent-text-color, #fff);
-    outline: 1px dotted var(--system-accent-color, #000);
+    background: var(--system7-color-accent, #000);
+    color: var(--system7-color-accent-text, #fff);
+    outline: 1px dotted var(--system7-color-accent, #000);
     outline-offset: 1px;
   }
 

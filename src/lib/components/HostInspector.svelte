@@ -469,9 +469,9 @@
 
     .copy-inline:hover,
     .copy-inline:focus-visible {
-        background: var(--system-accent-color, #000);
-        color: var(--system-accent-text-color, #fff);
-        outline: 1px dotted var(--system-accent-color, #000);
+        background: var(--system7-color-accent, #000);
+        color: var(--system7-color-accent-text, #fff);
+        outline: 1px dotted var(--system7-color-accent, #000);
         outline-offset: 1px;
     }
 
@@ -529,8 +529,8 @@
 
     .port-item-link:hover,
     .port-item-link:focus-visible {
-        background: var(--system-accent-color, #000);
-        color: var(--system-accent-text-color, #fff);
+        background: var(--system7-color-accent, #000);
+        color: var(--system7-color-accent-text, #fff);
         outline: none;
     }
 

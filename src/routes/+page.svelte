@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
+  import * as System7Ui from '@lkmc/system7-ui';
   import { Checkbox, ErrorBanner, Notification, ProgressBar, TitleBar } from '@lkmc/system7-ui';
 
   import HostInspector from '$lib/components/HostInspector.svelte';
@@ -20,6 +21,17 @@
   let systemHighlightTextColor: string | null = null;
 
   const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+
+  interface System7ColorStyleInput {
+    accent_color?: string | null;
+    accent_text_color?: string | null;
+    highlight_color?: string | null;
+    highlight_text_color?: string | null;
+  }
+
+  const maybeGetSystem7ColorStyle = Reflect.get(System7Ui, 'getSystem7ColorStyle') as
+    | ((colors: System7ColorStyleInput) => string)
+    | undefined;
 
   $: ({
     interfaces,
@@ -93,14 +105,12 @@
         : `Deep scan in progress for ${hostScanTarget}`
       : 'Scan progress';
 
-  $: windowStyle = [
-    systemAccentColor ? `--system-accent-color: ${systemAccentColor}` : '',
-    systemAccentTextColor ? `--system-accent-text-color: ${systemAccentTextColor}` : '',
-    systemHighlightColor ? `--system-highlight-color: ${systemHighlightColor}` : '',
-    systemHighlightTextColor ? `--system-highlight-text-color: ${systemHighlightTextColor}` : ''
-  ]
-    .filter((value) => value.length > 0)
-    .join('; ');
+  $: windowStyle = getWindowColorStyle({
+    accent_color: systemAccentColor,
+    accent_text_color: systemAccentTextColor,
+    highlight_color: systemHighlightColor,
+    highlight_text_color: systemHighlightTextColor
+  });
 
   const appWindow = getCurrentWindow();
   const windowManager = new WindowManager();
@@ -168,6 +178,23 @@
 
     const normalized = value.trim();
     return HEX_COLOR_PATTERN.test(normalized) ? normalized : null;
+  }
+
+  function getWindowColorStyle(colors: System7ColorStyleInput): string {
+    if (maybeGetSystem7ColorStyle) {
+      return maybeGetSystem7ColorStyle(colors);
+    }
+
+    return [
+      colors.accent_color ? `--system7-color-accent: ${colors.accent_color}` : '',
+      colors.accent_text_color ? `--system7-color-accent-text: ${colors.accent_text_color}` : '',
+      colors.highlight_color ? `--system7-color-highlight: ${colors.highlight_color}` : '',
+      colors.highlight_text_color
+        ? `--system7-color-highlight-text: ${colors.highlight_text_color}`
+        : ''
+    ]
+      .filter((value) => value.length > 0)
+      .join('; ');
   }
 
   async function loadSystemColors() {
@@ -274,10 +301,10 @@
 
 <style>
   .window-frame {
-    --system-accent-color: #000;
-    --system-accent-text-color: #fff;
-    --system-highlight-color: #000;
-    --system-highlight-text-color: #fff;
+    --system7-color-accent: #000;
+    --system7-color-accent-text: #fff;
+    --system7-color-highlight: #000;
+    --system7-color-highlight-text: #fff;
     width: 100vw;
     height: 100vh;
     background: #fff;
