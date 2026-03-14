@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { Checkbox, ErrorBanner, Notification, ProgressBar, TitleBar } from '@lkmc/system7-ui';
 
@@ -131,6 +131,36 @@
     windowManager.startDragging();
   }
 
+  function getHostTableHeightMetrics(): { viewportHeight: number; contentHeight: number } | null {
+    const tableBodyContainer = document.querySelector<HTMLDivElement>('.table-body-container');
+    const tableBody = tableBodyContainer?.querySelector<HTMLTableElement>('table');
+
+    if (!tableBodyContainer || !tableBody) {
+      return null;
+    }
+
+    return {
+      viewportHeight: tableBodyContainer.clientHeight,
+      contentHeight: tableBody.getBoundingClientRect().height
+    };
+  }
+
+  async function handleWindowResizeToFit() {
+    if (isWindowShaded) {
+      return;
+    }
+
+    await tick();
+
+    const tableHeightMetrics = getHostTableHeightMetrics();
+    if (!tableHeightMetrics) {
+      return;
+    }
+
+    const heightDelta = Math.round(tableHeightMetrics.contentHeight - tableHeightMetrics.viewportHeight);
+    await windowManager.resizeHeightBy(heightDelta);
+  }
+
   function normalizeHexColor(value: string | null): string | null {
     if (!value) {
       return null;
@@ -161,9 +191,11 @@
     title="Lantenna"
     focused={$windowFocused}
     closable
+    collapsible
     shadeable
     draggable
     onclose={handleWindowClose}
+    oncollapse={handleWindowResizeToFit}
     onshade={handleWindowShade}
     ondragstart={handleWindowDrag}
   />
