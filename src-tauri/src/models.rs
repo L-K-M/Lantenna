@@ -14,6 +14,7 @@ pub struct PortInfo {
     pub port: u16,
     pub state: String,
     pub service: Option<String>,
+    pub banner: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +39,7 @@ pub struct DeviceFingerprint {
     pub confidence: u8,
     pub sources: Vec<String>,
     pub notes: Vec<String>,
+    pub discovered_services: Vec<String>,
     pub last_updated: String,
 }
 

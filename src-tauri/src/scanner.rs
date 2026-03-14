@@ -19,8 +19,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, OnceLock,
 };
-use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpStream, UdpSocket};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::{sleep, timeout, Duration};
@@ -688,6 +688,7 @@ async fn scan_port(
     for attempt in 1..=MAX_CONNECT_ATTEMPTS {
         match timeout(timeout_duration, TcpStream::connect(socket)).await {
             Ok(Ok(mut stream)) => {
+                let banner = grab_banner_for_port(ip, port, Duration::from_millis(500)).await;
                 if let Err(error) = stream.shutdown().await {
                     log::debug!(
                         "graceful TCP shutdown failed for {}:{}: {}",
@@ -701,6 +702,7 @@ async fn scan_port(
                     port,
                     state: "open".to_string(),
                     service: service_name(port).map(ToString::to_string),
+                    banner,
                 }));
             }
             Ok(Err(error)) if is_reachable_error(&error) => {
@@ -898,6 +900,7 @@ async fn build_fingerprint(
 ) -> DeviceFingerprint {
     let mut sources = Vec::new();
     let mut notes = Vec::new();
+    let mut discovered_services = Vec::new();
 
     if mac_address.is_some() {
         sources.push("arp-table".to_string());
@@ -980,6 +983,34 @@ async fn build_fingerprint(
         }
     }
 
+    let banner_os = extract_os_from_banners(&host.open_ports);
+    if let Some((software, os)) = &banner_os {
+        sources.push("banner-grab".to_string());
+        if let Some(s) = software {
+            notes.push(format!("detected software: {}", s));
+        }
+        if os_guess.is_none() {
+            if let Some(o) = os {
+                os_guess = Some(o.clone());
+            }
+        }
+    }
+
+    if let Ok(ip) = Ipv4Addr::from_str(&host.ip) {
+        let mdns_services = query_mdns_services(ip).await;
+        if !mdns_services.is_empty() {
+            sources.push("mdns".to_string());
+            for svc in &mdns_services {
+                discovered_services.push(svc.service_type.clone());
+                if let Some(name) = &svc.service_name {
+                    notes.push(format!("mDNS service: {}", name));
+                }
+            }
+            infer_device_from_mdns(&mdns_services, &mut device_type, &mut model_guess, &mut notes);
+            confidence = confidence.saturating_add(10);
+        }
+    }
+
     let (heuristic_type, heuristic_os, heuristic_model, heuristic_notes, heuristic_boost) =
         infer_device_profile(host, vendor.as_deref(), manufacturer.as_deref());
 
@@ -1031,6 +1062,7 @@ async fn build_fingerprint(
 
     dedup_strings(&mut sources);
     dedup_strings(&mut notes);
+    dedup_strings(&mut discovered_services);
 
     DeviceFingerprint {
         mac_address,
@@ -1043,7 +1075,80 @@ async fn build_fingerprint(
         confidence,
         sources,
         notes,
+        discovered_services,
         last_updated: Utc::now().to_rfc3339(),
+    }
+}
+
+fn extract_os_from_banners(ports: &[PortInfo]) -> Option<(Option<String>, Option<String>)> {
+    for port in ports {
+        if let Some(banner) = &port.banner {
+            if banner.starts_with("SSH-") {
+                if let Some((software, os)) = parse_ssh_banner(banner) {
+                    return Some((software, os));
+                }
+            } else if port.port == 80 || port.port == 443 || port.port == 8080 {
+                if let Some((software, os)) = parse_http_server_banner(banner) {
+                    return Some((software, os));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn infer_device_from_mdns(
+    services: &[DiscoveredService],
+    device_type: &mut Option<String>,
+    model_guess: &mut Option<String>,
+    notes: &mut Vec<String>,
+) {
+    let service_types: Vec<&str> = services.iter().map(|s| s.service_type.as_str()).collect();
+
+    if service_types.iter().any(|s| s.contains("airplay") || s.contains("raop")) {
+        set_if_none(device_type, "Media device");
+        set_if_none(model_guess, "Apple AirPlay device");
+        notes.push("AirPlay service detected via mDNS".to_string());
+    }
+
+    if service_types.iter().any(|s| s.contains("googlecast")) {
+        set_if_none(device_type, "Media device");
+        set_if_none(model_guess, "Google Cast device");
+        notes.push("Google Cast service detected via mDNS".to_string());
+    }
+
+    if service_types.iter().any(|s| s.contains("hap") || s.contains("homekit")) {
+        set_if_none(device_type, "IoT device");
+        set_if_none(model_guess, "Apple HomeKit device");
+        notes.push("HomeKit service detected via mDNS".to_string());
+    }
+
+    if service_types.iter().any(|s| s.contains("ipp") || s.contains("printer")) {
+        set_if_none(device_type, "Printer");
+        notes.push("Printer service detected via mDNS".to_string());
+    }
+
+    if service_types.iter().any(|s| s.contains("spotify")) {
+        set_if_none(device_type, "Media device");
+        set_if_none(model_guess, "Spotify Connect speaker");
+        notes.push("Spotify Connect service detected via mDNS".to_string());
+    }
+
+    if service_types.iter().any(|s| s.contains("smb") || s.contains("afpovertcp")) {
+        set_if_none(device_type, "File server");
+        notes.push("File sharing service detected via mDNS".to_string());
+    }
+
+    if service_types.iter().any(|s| s.contains("companion-link")) {
+        set_if_none(device_type, "Apple device");
+        set_if_none(model_guess, "Apple Mac/iOS device");
+        notes.push("Apple Companion Link detected via mDNS".to_string());
+    }
+
+    if service_types.iter().any(|s| s.contains("daap") || s.contains("dacp")) {
+        set_if_none(device_type, "Media device");
+        set_if_none(model_guess, "Apple iTunes/Home Sharing device");
+        notes.push("Apple media sharing detected via mDNS".to_string());
     }
 }
 
@@ -1222,15 +1327,42 @@ async fn lookup_vendor_via_maclookup(mac: &str) -> Option<String> {
     ])
 }
 
-async fn lookup_fingerbank(mac: &str, hostname: Option<&str>) -> Option<FingerbankFingerprint> {
+struct FingerbankQueryParams<'a> {
+    mac: &'a str,
+    hostname: Option<&'a str>,
+    dhcp_fingerprint: Option<&'a str>,
+    dhcp_vendor: Option<&'a str>,
+    user_agents: Option<Vec<&'a str>>,
+    fqdn: Option<&'a str>,
+}
+
+async fn lookup_fingerbank_with_params(params: FingerbankQueryParams<'_>) -> Option<FingerbankFingerprint> {
     let api_key = std::env::var("FINGERBANK_API_KEY").ok()?;
 
     let mut request = http_client()
         .get("https://api.fingerbank.org/api/v2/combinations/interrogate")
-        .query(&[("key", api_key.as_str()), ("mac", mac)]);
+        .query(&[("key", api_key.as_str()), ("mac", params.mac)]);
 
-    if let Some(hostname) = hostname {
+    if let Some(hostname) = params.hostname {
         request = request.query(&[("hostname", hostname)]);
+    }
+
+    if let Some(dhcp_fingerprint) = params.dhcp_fingerprint {
+        request = request.query(&[("dhcp_fingerprint", dhcp_fingerprint)]);
+    }
+
+    if let Some(dhcp_vendor) = params.dhcp_vendor {
+        request = request.query(&[("dhcp_vendor", dhcp_vendor)]);
+    }
+
+    if let Some(fqdn) = params.fqdn {
+        request = request.query(&[("fqdn", fqdn)]);
+    }
+
+    if let Some(user_agents) = &params.user_agents {
+        for ua in user_agents {
+            request = request.query(&[("user_agents[]", ua)]);
+        }
     }
 
     let response = request
@@ -1289,6 +1421,18 @@ async fn lookup_fingerbank(mac: &str, hostname: Option<&str>) -> Option<Fingerba
         os_guess,
         confidence,
     })
+}
+
+async fn lookup_fingerbank(mac: &str, hostname: Option<&str>) -> Option<FingerbankFingerprint> {
+    lookup_fingerbank_with_params(FingerbankQueryParams {
+        mac,
+        hostname,
+        dhcp_fingerprint: None,
+        dhcp_vendor: None,
+        user_agents: None,
+        fqdn: None,
+    })
+    .await
 }
 
 fn infer_device_profile(
@@ -1696,6 +1840,409 @@ fn parse_ipv4_or_zero(value: &str) -> Ipv4Addr {
     Ipv4Addr::from_str(value).unwrap_or(Ipv4Addr::new(0, 0, 0, 0))
 }
 
+const MDNS_MULTICAST_ADDR: &str = "224.0.0.251";
+const MDNS_PORT: u16 = 5353;
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct DiscoveredService {
+    pub service_type: String,
+    pub service_name: Option<String>,
+    pub port: Option<u16>,
+    pub properties: HashMap<String, String>,
+}
+
+async fn grab_ssh_banner(ip: Ipv4Addr, port: u16, timeout_duration: Duration) -> Option<String> {
+    let socket = SocketAddr::new(IpAddr::V4(ip), port);
+    let stream = timeout(timeout_duration, TcpStream::connect(socket))
+        .await
+        .ok()?
+        .ok()?;
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    let mut line = String::new();
+    let result = timeout(Duration::from_millis(500), reader.read_line(&mut line))
+        .await
+        .ok()?
+        .ok()?;
+    if result > 0 {
+        let banner = line.trim().to_string();
+        if banner.starts_with("SSH-") {
+            let _ = writer.shutdown().await;
+            return Some(banner);
+        }
+    }
+    None
+}
+
+async fn grab_http_banner(ip: Ipv4Addr, port: u16, timeout_duration: Duration) -> Option<String> {
+    let socket = SocketAddr::new(IpAddr::V4(ip), port);
+    let mut stream = timeout(timeout_duration, TcpStream::connect(socket))
+        .await
+        .ok()?
+        .ok()?;
+    let request = format!(
+        "HEAD / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        ip
+    );
+    let _ = stream.write_all(request.as_bytes()).await;
+    let mut response = vec![0u8; 4096];
+    let n = timeout(Duration::from_millis(1000), stream.read(&mut response))
+        .await
+        .ok()?
+        .ok()?;
+    if let Ok(text) = std::str::from_utf8(&response[..n]) {
+        for line in text.lines() {
+            if let Some(server) = line.strip_prefix("Server: ") {
+                let _ = stream.shutdown().await;
+                return Some(server.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
+async fn grab_ftp_banner(ip: Ipv4Addr, port: u16, timeout_duration: Duration) -> Option<String> {
+    let socket = SocketAddr::new(IpAddr::V4(ip), port);
+    let stream = timeout(timeout_duration, TcpStream::connect(socket))
+        .await
+        .ok()?
+        .ok()?;
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    let mut line = String::new();
+    let result = timeout(Duration::from_millis(500), reader.read_line(&mut line))
+        .await
+        .ok()?
+        .ok()?;
+    if result > 0 && line.starts_with("220 ") {
+        let _ = writer.shutdown().await;
+        return Some(line.trim().to_string());
+    }
+    None
+}
+
+async fn grab_banner_for_port(ip: Ipv4Addr, port: u16, timeout_duration: Duration) -> Option<String> {
+    match port {
+        22 => grab_ssh_banner(ip, port, timeout_duration).await,
+        21 => grab_ftp_banner(ip, port, timeout_duration).await,
+        80 | 443 | 8080 | 8443 | 8000 | 3000 | 5000 | 9000 => {
+            grab_http_banner(ip, port, timeout_duration).await
+        }
+        _ => None,
+    }
+}
+
+fn parse_ssh_banner(banner: &str) -> Option<(Option<String>, Option<String>)> {
+    let parts: Vec<&str> = banner.split_whitespace().collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let version_part = parts.get(1)?;
+    let version_parts: Vec<&str> = version_part.split('-').collect();
+    let os_guess = if version_parts.len() > 1 {
+        let os_part = version_parts.last()?;
+        if os_part.contains("Ubuntu") {
+            Some("Ubuntu Linux".to_string())
+        } else if os_part.contains("Debian") {
+            Some("Debian Linux".to_string())
+        } else if os_part.contains("CentOS") || os_part.contains("RHEL") {
+            Some("CentOS/RHEL Linux".to_string())
+        } else if os_part.contains("FreeBSD") {
+            Some("FreeBSD".to_string())
+        } else if os_part.contains("OpenBSD") {
+            Some("OpenBSD".to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let software = version_parts.first().map(|s| s.to_string());
+    Some((software, os_guess))
+}
+
+fn parse_http_server_banner(banner: &str) -> Option<(Option<String>, Option<String>)> {
+    let lowered = banner.to_lowercase();
+    let os_guess = if lowered.contains("ubuntu") {
+        Some("Ubuntu Linux".to_string())
+    } else if lowered.contains("debian") {
+        Some("Debian Linux".to_string())
+    } else if lowered.contains("centos") {
+        Some("CentOS Linux".to_string())
+    } else if lowered.contains("windows") || lowered.contains("iis") {
+        Some("Windows Server".to_string())
+    } else {
+        None
+    };
+    let software = Some(banner.to_string());
+    Some((software, os_guess))
+}
+
+async fn query_mdns_services(_ip: Ipv4Addr) -> Vec<DiscoveredService> {
+    let socket = match UdpSocket::bind("0.0.0.0:0").await {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let queries = [
+        "_airplay._tcp.local",
+        "_raop._tcp.local",
+        "_googlecast._tcp.local",
+        "_spotify-connect._tcp.local",
+        "_hap._tcp.local",
+        "_homekit._tcp.local",
+        "_printer._tcp.local",
+        "_ipp._tcp.local",
+        "_pdl-datastream._tcp.local",
+        "_smb._tcp.local",
+        "_afpovertcp._tcp.local",
+        "_nfs._tcp.local",
+        "_ssh._tcp.local",
+        "_sftp-ssh._tcp.local",
+        "_companion-link._tcp.local",
+        "_daap._tcp.local",
+        "_dacp._tcp.local",
+        "_eppc._tcp.local",
+        "_net-assistant._tcp.local",
+        "_rfb._tcp.local",
+        "_workstation._tcp.local",
+        "_device-info._tcp.local",
+        "_sleep-proxy._udp.local",
+    ];
+    let mut services = Vec::new();
+    let dns_packet = build_mdns_query(&queries);
+    let multicast_addr: SocketAddr = format!("{}:{}", MDNS_MULTICAST_ADDR, MDNS_PORT)
+        .parse()
+        .unwrap();
+    if socket.send_to(&dns_packet, multicast_addr).await.is_err() {
+        return services;
+    }
+    let mut buf = vec![0u8; 4096];
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+    loop {
+        let recv_timeout = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if recv_timeout.is_zero() {
+            break;
+        }
+        match timeout(recv_timeout, socket.recv_from(&mut buf)).await {
+            Ok(Ok((n, _src))) => {
+                if let Some(parsed) = parse_mdns_response(&buf[..n]) {
+                    services.extend(parsed);
+                }
+            }
+            _ => break,
+        }
+    }
+    services
+}
+
+fn build_mdns_query(services: &[&str]) -> Vec<u8> {
+    let mut packet = Vec::new();
+    let transaction_id: u16 = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() & 0xFFFF) as u16;
+    packet.extend_from_slice(&transaction_id.to_be_bytes());
+    packet.extend_from_slice(&0x0000u16.to_be_bytes());
+    packet.extend_from_slice(&(services.len() as u16).to_be_bytes());
+    packet.extend_from_slice(&0x0000u16.to_be_bytes());
+    packet.extend_from_slice(&0x0000u16.to_be_bytes());
+    packet.extend_from_slice(&0x0000u16.to_be_bytes());
+    for service in services {
+        encode_dns_name(&mut packet, service);
+        packet.extend_from_slice(&0x00FFu16.to_be_bytes());
+        packet.extend_from_slice(&0x0001u16.to_be_bytes());
+    }
+    packet
+}
+
+fn encode_dns_name(packet: &mut Vec<u8>, name: &str) {
+    for label in name.split('.') {
+        let label_bytes = label.as_bytes();
+        packet.push(label_bytes.len() as u8);
+        packet.extend_from_slice(label_bytes);
+    }
+    packet.push(0);
+}
+
+fn parse_mdns_response(data: &[u8]) -> Option<Vec<DiscoveredService>> {
+    if data.len() < 12 {
+        return None;
+    }
+    let _transaction_id = u16::from_be_bytes([data[0], data[1]]);
+    let flags = u16::from_be_bytes([data[2], data[3]]);
+    if (flags & 0x8000) == 0 {
+        return None;
+    }
+    let answer_count = u16::from_be_bytes([data[6], data[7]]) as usize;
+    if answer_count == 0 {
+        return None;
+    }
+    let mut services = Vec::new();
+    let mut offset = 12usize;
+    for _ in 0..answer_count {
+        if offset >= data.len() {
+            break;
+        }
+        let (name, new_offset) = parse_dns_name(data, offset)?;
+        offset = new_offset;
+        if offset + 10 > data.len() {
+            break;
+        }
+        let _rr_type = u16::from_be_bytes([data[offset], data[offset + 1]]);
+        let _rr_class = u16::from_be_bytes([data[offset + 2], data[offset + 3]]);
+        let _ttl = u32::from_be_bytes([
+            data[offset + 4],
+            data[offset + 5],
+            data[offset + 6],
+            data[offset + 7],
+        ]);
+        let rdlength = u16::from_be_bytes([data[offset + 8], data[offset + 9]]) as usize;
+        offset += 10;
+        if name.contains("._tcp.") || name.contains("._udp.") {
+            if let Some(service_type) = extract_service_type(&name) {
+                services.push(DiscoveredService {
+                    service_type,
+                    service_name: Some(name.clone()),
+                    port: None,
+                    properties: HashMap::new(),
+                });
+            }
+        }
+        offset += rdlength;
+    }
+    Some(services)
+}
+
+fn parse_dns_name(data: &[u8], start: usize) -> Option<(String, usize)> {
+    let mut name = String::new();
+    let mut offset = start;
+    let mut jumped = false;
+    let mut jump_offset = 0usize;
+    loop {
+        if offset >= data.len() {
+            break;
+        }
+        let len = data[offset] as usize;
+        if len == 0 {
+            offset += 1;
+            break;
+        }
+        if (len & 0xC0) == 0xC0 {
+            if offset + 1 >= data.len() {
+                break;
+            }
+            let ptr = ((len & 0x3F) as usize) << 8 | (data[offset + 1] as usize);
+            if !jumped {
+                jump_offset = offset + 2;
+                jumped = true;
+            }
+            offset = ptr;
+            continue;
+        }
+        offset += 1;
+        if offset + len > data.len() {
+            break;
+        }
+        if !name.is_empty() {
+            name.push('.');
+        }
+        if let Ok(label) = std::str::from_utf8(&data[offset..offset + len]) {
+            name.push_str(label);
+        }
+        offset += len;
+    }
+    let final_offset = if jumped { jump_offset } else { offset };
+    Some((name, final_offset))
+}
+
+fn extract_service_type(name: &str) -> Option<String> {
+    let parts: Vec<&str> = name.split('.').collect();
+    for part in parts {
+        if part.starts_with('_') && (part.ends_with("_tcp") || part.ends_with("_udp")) {
+            return Some(part.to_string());
+        }
+    }
+    None
+}
+
+#[allow(dead_code)]
+pub async fn discover_ssdp_devices() -> Vec<DiscoveredService> {
+    let socket = match UdpSocket::bind("0.0.0.0:0").await {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let m_search = concat!(
+        "M-SEARCH * HTTP/1.1\r\n",
+        "HOST: 239.255.255.250:1900\r\n",
+        "MAN: \"ssdp:discover\"\r\n",
+        "MX: 2\r\n",
+        "ST: ssdp:all\r\n",
+        "\r\n"
+    );
+    let multicast_addr: SocketAddr = "239.255.255.250:1900".parse().unwrap();
+    if socket.send_to(m_search.as_bytes(), multicast_addr).await.is_err() {
+        return Vec::new();
+    }
+    let mut devices = Vec::new();
+    let mut buf = vec![0u8; 8192];
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(2000);
+    loop {
+        let recv_timeout = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if recv_timeout.is_zero() {
+            break;
+        }
+        match timeout(recv_timeout, socket.recv_from(&mut buf)).await {
+            Ok(Ok((n, _src))) => {
+                if let Some(device) = parse_ssdp_response(&buf[..n]) {
+                    devices.push(device);
+                }
+            }
+            _ => break,
+        }
+    }
+    devices
+}
+
+
+
+#[allow(dead_code)]
+fn parse_ssdp_response(data: &[u8]) -> Option<DiscoveredService> {
+    let text = std::str::from_utf8(data).ok()?;
+    let mut properties = HashMap::new();
+    let mut service_type = None;
+    for line in text.lines() {
+        if let Some((key, value)) = line.split_once(':') {
+            let key = key.trim().to_lowercase();
+            let value = value.trim().to_string();
+            match key.as_str() {
+                "st" | "nt" => {
+                    service_type = Some(value.clone());
+                    properties.insert("search_target".to_string(), value);
+                }
+                "server" => {
+                    properties.insert("server".to_string(), value);
+                }
+                "location" => {
+                    properties.insert("location".to_string(), value);
+                }
+                "usn" => {
+                    properties.insert("usn".to_string(), value);
+                }
+                _ => {
+                    properties.insert(key, value);
+                }
+            }
+        }
+    }
+    service_type.map(|st| DiscoveredService {
+        service_type: st,
+        service_name: properties.get("server").cloned(),
+        port: Some(1900),
+        properties,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1721,6 +2268,7 @@ mod tests {
                     port: *port,
                     state: "open".to_string(),
                     service: service_name(*port).map(|value| value.to_string()),
+                    banner: None,
                 })
                 .collect(),
             last_seen: Utc::now().to_rfc3339(),
