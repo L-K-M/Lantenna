@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount } from 'svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import * as System7Ui from '@lkmc/system7-ui';
   import { Checkbox, ErrorBanner, Notification, ProgressBar, TitleBar } from '@lkmc/system7-ui';
@@ -27,6 +27,12 @@
     accent_text_color?: string | null;
     highlight_color?: string | null;
     highlight_text_color?: string | null;
+  }
+
+  interface RgbColor {
+    r: number;
+    g: number;
+    b: number;
   }
 
   const maybeGetSystem7ColorStyle = Reflect.get(System7Ui, 'getSystem7ColorStyle') as
@@ -141,36 +147,6 @@
     windowManager.startDragging();
   }
 
-  function getHostTableHeightMetrics(): { viewportHeight: number; contentHeight: number } | null {
-    const tableBodyContainer = document.querySelector<HTMLDivElement>('.table-body-container');
-    const tableBody = tableBodyContainer?.querySelector<HTMLTableElement>('table');
-
-    if (!tableBodyContainer || !tableBody) {
-      return null;
-    }
-
-    return {
-      viewportHeight: tableBodyContainer.clientHeight,
-      contentHeight: tableBody.getBoundingClientRect().height
-    };
-  }
-
-  async function handleWindowResizeToFit() {
-    if (isWindowShaded) {
-      return;
-    }
-
-    await tick();
-
-    const tableHeightMetrics = getHostTableHeightMetrics();
-    if (!tableHeightMetrics) {
-      return;
-    }
-
-    const heightDelta = Math.round(tableHeightMetrics.contentHeight - tableHeightMetrics.viewportHeight);
-    await windowManager.resizeHeightBy(heightDelta);
-  }
-
   function normalizeHexColor(value: string | null): string | null {
     if (!value) {
       return null;
@@ -180,21 +156,84 @@
     return HEX_COLOR_PATTERN.test(normalized) ? normalized : null;
   }
 
+  function hexToRgb(value: string): RgbColor {
+    return {
+      r: parseInt(value.slice(1, 3), 16),
+      g: parseInt(value.slice(3, 5), 16),
+      b: parseInt(value.slice(5, 7), 16)
+    };
+  }
+
+  function rgbToHex({ r, g, b }: RgbColor): string {
+    return `#${[r, g, b]
+      .map((channel) =>
+        Math.max(0, Math.min(255, Math.round(channel)))
+          .toString(16)
+          .padStart(2, '0')
+      )
+      .join('')
+      .toUpperCase()}`;
+  }
+
+  function mixHexColors(fromHex: string, toHex: string, ratio: number): string {
+    const clampedRatio = Math.max(0, Math.min(1, ratio));
+    const from = hexToRgb(fromHex);
+    const to = hexToRgb(toHex);
+
+    return rgbToHex({
+      r: from.r + (to.r - from.r) * clampedRatio,
+      g: from.g + (to.g - from.g) * clampedRatio,
+      b: from.b + (to.b - from.b) * clampedRatio
+    });
+  }
+
+  function getWindowToneSet(windowColor: string) {
+    return {
+      edgeLight: mixHexColors(windowColor, '#FFFFFF', 0.55),
+      edgeDark: mixHexColors(windowColor, '#000000', 0.25),
+      edgeVeryDark: mixHexColors(windowColor, '#000000', 0.42),
+      scrollbarLine: mixHexColors(windowColor, '#000000', 0.18),
+      scrollbarThumb: mixHexColors(windowColor, '#FFFFFF', 0.7),
+      titlebarButton: mixHexColors(windowColor, '#FFFFFF', 0.82)
+    };
+  }
+
   function getWindowColorStyle(colors: System7ColorStyleInput): string {
+    const styleParts: string[] = [];
+
     if (maybeGetSystem7ColorStyle) {
-      return maybeGetSystem7ColorStyle(colors);
+      const baseStyle = maybeGetSystem7ColorStyle(colors);
+      if (baseStyle) {
+        styleParts.push(baseStyle);
+      }
+    } else {
+      styleParts.push(
+        ...[
+          colors.accent_color ? `--system7-color-accent: ${colors.accent_color}` : '',
+          colors.accent_text_color ? `--system7-color-accent-text: ${colors.accent_text_color}` : '',
+          colors.highlight_color ? `--system7-color-highlight: ${colors.highlight_color}` : '',
+          colors.highlight_text_color
+            ? `--system7-color-highlight-text: ${colors.highlight_text_color}`
+            : ''
+        ].filter((value) => value.length > 0)
+      );
     }
 
-    return [
-      colors.accent_color ? `--system7-color-accent: ${colors.accent_color}` : '',
-      colors.accent_text_color ? `--system7-color-accent-text: ${colors.accent_text_color}` : '',
-      colors.highlight_color ? `--system7-color-highlight: ${colors.highlight_color}` : '',
-      colors.highlight_text_color
-        ? `--system7-color-highlight-text: ${colors.highlight_text_color}`
-        : ''
-    ]
-      .filter((value) => value.length > 0)
-      .join('; ');
+    if (colors.accent_color) {
+      const windowTones = getWindowToneSet(colors.accent_color);
+
+      styleParts.push(
+        `--system7-color-focus-ring: ${colors.accent_color}`,
+        `--system7-color-titlebar-edge-light: ${windowTones.edgeLight}`,
+        `--system7-color-titlebar-edge-dark: ${windowTones.edgeDark}`,
+        `--system7-color-titlebar-edge-verydark: ${windowTones.edgeVeryDark}`,
+        `--system7-color-titlebar-button: ${windowTones.titlebarButton}`,
+        `--system7-color-scrollbar-thumb-line: ${windowTones.scrollbarLine}`,
+        `--system7-color-scrollbar-thumb: ${windowTones.scrollbarThumb}`
+      );
+    }
+
+    return styleParts.join('; ');
   }
 
   async function loadSystemColors() {
@@ -213,16 +252,14 @@
   }
 </script>
 
-<div class="window-frame" class:window-unfocused={!$windowFocused} style={windowStyle}>
+<div class="window-frame s7-root" class:window-unfocused={!$windowFocused} style={windowStyle}>
   <TitleBar
     title="Lantenna"
     focused={$windowFocused}
     closable
-    collapsible
     shadeable
     draggable
     onclose={handleWindowClose}
-    oncollapse={handleWindowResizeToFit}
     onshade={handleWindowShade}
     ondragstart={handleWindowDrag}
   />
