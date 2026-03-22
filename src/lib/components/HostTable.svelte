@@ -12,6 +12,7 @@
     import printerIcon from '$lib/assets/host-icons/printer.svg';
     import routerIcon from '$lib/assets/host-icons/router.svg';
     import serverIcon from '$lib/assets/host-icons/server.svg';
+    import { DataTable } from '@lkmc/system7-ui';
 
     export let hosts: Host[] = [];
     export let loading = false;
@@ -28,6 +29,14 @@
 
     type SortField = 'ip' | 'favorite' | 'name' | 'fingerprint' | 'ports' | 'lastSeen';
     type SortDirection = 'asc' | 'desc';
+
+    const columns = [
+        { key: 'ip', label: 'IP', width: '200px', className: 'col-ip' },
+        { key: 'name', label: 'Name', width: '25%', className: 'col-name' },
+        { key: 'fingerprint', label: 'Fingerprint', width: '32%', className: 'col-fingerprint' },
+        { key: 'ports', label: 'Open Ports', className: 'col-ports' },
+        { key: 'lastSeen', label: 'Last Seen', width: '100px', className: 'col-seen' }
+    ];
 
     interface IconInfo {
         src: string;
@@ -507,141 +516,131 @@
         on:blur={closeContextMenu}
 />
 
-<div class="table-wrap">
-    <div class="table-header-container">
-        <table>
-            <thead>
-            <tr>
-                <th class="col-ip">
-                    <div class="ip-header">
-                        <button
-                                type="button"
-                                class="favorite-sort"
-                                class:sorted={sortField === 'favorite'}
-                                onclick={() => setSort('favorite')}
-                                aria-label="Sort by favorites"
-                                title="Sort by favorites"
-                        >
-                            <svg viewBox="0 0 16 16" role="img" focusable="false" aria-hidden="true">
-                                <path d="M8 1.5l2 4 4.5.6-3.3 3.1.8 4.8L8 12l-4 2 0.8-4.8L1.5 6.1l4.5-.6L8 1.5z"/>
-                            </svg>
-                        </button>
+<DataTable
+        class="table-wrap"
+        {columns}
+        sortKey={sortField === 'favorite' ? null : sortField}
+        sortDirection={sortDirection}
+        loading={loading && hosts.length === 0}
+        empty={!loading && hosts.length === 0}
+        loadingText="Scanning..."
+        emptyText="No hosts yet. Start a scan."
+        emptyColspan={5}
+        bodyClass="table-body-container"
+>
+    <svelte:fragment slot="header">
+        <tr>
+            <th class="col-ip">
+                <div class="ip-header">
+                    <button
+                            type="button"
+                            class="favorite-sort"
+                            class:sorted={sortField === 'favorite'}
+                            onclick={() => setSort('favorite')}
+                            aria-label="Sort by favorites"
+                            title="Sort by favorites"
+                    >
+                        <svg viewBox="0 0 16 16" role="img" focusable="false" aria-hidden="true">
+                            <path d="M8 1.5l2 4 4.5.6-3.3 3.1.8 4.8L8 12l-4 2 0.8-4.8L1.5 6.1l4.5-.6L8 1.5z"/>
+                        </svg>
+                    </button>
 
-                        <button
-                                type="button"
-                                class="sort-button"
-                                class:sorted={sortField === 'ip'}
-                                onclick={() => setSort('ip')}
-                        >
-                            IP
-                        </button>
-                    </div>
-                </th>
-                <th class="col-name">
                     <button
                             type="button"
                             class="sort-button"
-                            class:sorted={sortField === 'name'}
-                            onclick={() => setSort('name')}
+                            class:sorted={sortField === 'ip'}
+                            onclick={() => setSort('ip')}
                     >
-                        Name
+                        IP
                     </button>
-                </th>
-                <th class="col-fingerprint">
+                </div>
+            </th>
+            <th class="col-name">
+                <button
+                        type="button"
+                        class="sort-button"
+                        class:sorted={sortField === 'name'}
+                        onclick={() => setSort('name')}
+                >
+                    Name
+                </button>
+            </th>
+            <th class="col-fingerprint">
+                <button
+                        type="button"
+                        class="sort-button"
+                        class:sorted={sortField === 'fingerprint'}
+                        onclick={() => setSort('fingerprint')}
+                >
+                    Fingerprint
+                </button>
+            </th>
+            <th class="col-ports">
+                <button
+                        type="button"
+                        class="sort-button"
+                        class:sorted={sortField === 'ports'}
+                        onclick={() => setSort('ports')}
+                >
+                    Open Ports
+                </button>
+            </th>
+            <th class="col-seen">
+                <button
+                        type="button"
+                        class="sort-button"
+                        class:sorted={sortField === 'lastSeen'}
+                        onclick={() => setSort('lastSeen')}
+                >
+                    Last Seen
+                </button>
+            </th>
+        </tr>
+    </svelte:fragment>
+
+    {#each sortedHosts as host}
+        {@const hostIcon = getHostIcon(host)}
+
+        <!-- svelte-ignore a11y-click-events-have-key-events -->
+        <!-- svelte-ignore a11y-no-static-element-interactions -->
+        <tr
+                class:selected={selectedHostIp === host.ip}
+                class:hidden-entry={hiddenSet.has(host.ip)}
+                class:stale={staleFavoriteSet.has(host.ip)}
+                class:new-entry={newHostSet.has(host.ip)}
+                onclick={() => selectHost(host.ip)}
+                oncontextmenu={(event) => openContextMenu(event, host.ip)}
+        >
+            <td class="col-ip">
+                <div class="ip-cell">
                     <button
                             type="button"
-                            class="sort-button"
-                            class:sorted={sortField === 'fingerprint'}
-                            onclick={() => setSort('fingerprint')}
+                            class="favorite-toggle"
+                            class:active={favoriteSet.has(host.ip)}
+                            aria-label={favoriteLabel(host.ip)}
+                            title={favoriteLabel(host.ip)}
+                            onclick={(event) => toggleFavorite(event, host.ip)}
                     >
-                        Fingerprint
+                        <svg viewBox="0 0 16 16" role="img" focusable="false" aria-hidden="true">
+                            <path d="M8 1.5l2 4 4.5.6-3.3 3.1.8 4.8L8 12l-4 2 0.8-4.8L1.5 6.1l4.5-.6L8 1.5z"/>
+                        </svg>
                     </button>
-                </th>
-                <th class="col-ports">
-                    <button
-                            type="button"
-                            class="sort-button"
-                            class:sorted={sortField === 'ports'}
-                            onclick={() => setSort('ports')}
-                    >
-                        Open Ports
-                    </button>
-                </th>
-                <th class="col-seen">
-                    <button
-                            type="button"
-                            class="sort-button"
-                            class:sorted={sortField === 'lastSeen'}
-                            onclick={() => setSort('lastSeen')}
-                    >
-                        Last Seen
-                    </button>
-                </th>
-            </tr>
-            </thead>
-        </table>
-    </div>
-
-    <div class="table-body-container">
-        <table>
-            <tbody>
-            {#if loading && hosts.length === 0}
-                <tr>
-                    <td colspan="5" class="placeholder">Scanning...</td>
-                </tr>
-            {:else if hosts.length === 0}
-                <tr>
-                    <td colspan="5" class="placeholder">No hosts yet. Start a scan.</td>
-                </tr>
-            {:else}
-                {#each sortedHosts as host}
-                    {@const hostIcon = getHostIcon(host)}
-
-                    <!-- svelte-ignore a11y-click-events-have-key-events -->
-                    <!-- svelte-ignore a11y-no-static-element-interactions -->
-                    <tr
-                            class:selected={selectedHostIp === host.ip}
-                            class:hidden-entry={hiddenSet.has(host.ip)}
-                            class:stale={staleFavoriteSet.has(host.ip)}
-                            class:new-entry={newHostSet.has(host.ip)}
-                            onclick={() => selectHost(host.ip)}
-                            oncontextmenu={(event) => openContextMenu(event, host.ip)}
-                    >
-                        <td class="col-ip">
-                            <div class="ip-cell">
-                                <button
-                                        type="button"
-                                        class="favorite-toggle"
-                                        class:active={favoriteSet.has(host.ip)}
-                                        aria-label={favoriteLabel(host.ip)}
-                                        title={favoriteLabel(host.ip)}
-                                        onclick={(event) => toggleFavorite(event, host.ip)}
-                                >
-                                    <svg viewBox="0 0 16 16" role="img" focusable="false" aria-hidden="true">
-                                        <path d="M8 1.5l2 4 4.5.6-3.3 3.1.8 4.8L8 12l-4 2 0.8-4.8L1.5 6.1l4.5-.6L8 1.5z"/>
-                                    </svg>
-                                </button>
-                                <img class="device-icon" src={hostIcon.src} alt="" aria-hidden="true" title={hostIcon.label}/>
-                                <span class="ip-text">{host.ip}</span>
-                                {#if newHostSet.has(host.ip)}
-                                    <span class="new-badge">NEW</span>
-                                {/if}
-                            </div>
-                        </td>
-                        <td class="col-name">
-                            <span class="host-name">{displayName(host)}</span>
-                        </td>
-                        <td class="col-fingerprint">{formatFingerprint(host)}</td>
-                        <td class="col-ports">{formatPorts(host)}</td>
-                        <td class="col-seen">{formatTime(host.last_seen)}</td>
-                    </tr>
-                {/each}
-            {/if}
-            </tbody>
-        </table>
-    </div>
-
-</div>
+                    <img class="device-icon" src={hostIcon.src} alt="" aria-hidden="true" title={hostIcon.label}/>
+                    <span class="ip-text">{host.ip}</span>
+                    {#if newHostSet.has(host.ip)}
+                        <span class="new-badge">NEW</span>
+                    {/if}
+                </div>
+            </td>
+            <td class="col-name">
+                <span class="host-name">{displayName(host)}</span>
+            </td>
+            <td class="col-fingerprint">{formatFingerprint(host)}</td>
+            <td class="col-ports">{formatPorts(host)}</td>
+            <td class="col-seen">{formatTime(host.last_seen)}</td>
+        </tr>
+    {/each}
+</DataTable>
 
 {#if contextMenu.open}
     <div
@@ -671,53 +670,6 @@
 {/if}
 
 <style>
-    .table-wrap {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        overflow: hidden;
-        min-height: 0;
-    }
-
-    .table-header-container {
-        padding-right: 16px;
-        border-bottom: 1.5px solid #000;
-    }
-
-    .table-body-container {
-        flex: 1;
-        overflow-y: scroll;
-        overflow-x: hidden;
-        min-height: 0;
-    }
-
-    table {
-        width: 100%;
-        border-collapse: collapse;
-        table-layout: fixed;
-    }
-
-    th,
-    td {
-        text-align: left;
-        border-bottom: 0.5px solid #000;
-        padding: 6px 8px;
-        vertical-align: middle;
-    }
-
-    td {
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
-    th {
-        font-weight: normal;
-        border-bottom: none;
-        white-space: nowrap;
-        overflow: hidden;
-    }
-
     .sort-button {
         border: none;
         background: transparent;
@@ -741,7 +693,7 @@
 
     .sort-button.sorted {
         text-decoration: underline;
-        color: var(--system7-color-accent, #000);
+        text-underline-offset: 2px;
     }
 
     .ip-header {
@@ -917,13 +869,6 @@
 
     tr.selected .favorite-toggle.active svg {
         fill: var(--system7-color-highlight-text, #fff);
-    }
-
-    .placeholder {
-        text-align: center;
-        color: #666;
-        font-style: italic;
-        padding: 24px 8px;
     }
 
     .context-menu {
