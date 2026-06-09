@@ -3,6 +3,7 @@ mod models;
 mod scanner;
 mod storage;
 mod system_colors;
+mod wol;
 
 use commands::{AppState, ScanManager};
 use std::sync::Arc;
@@ -34,6 +35,7 @@ pub fn run() {
             commands::scan_host_ports,
             commands::open_external_url,
             commands::get_system_colors,
+            commands::wake_host,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -63,6 +63,11 @@
     const deepScanBalloonMessage = `**Deep Scan**
 - Scans this host with the deep profile (\`1-2048\`)
 - Refreshes open ports and fingerprint hints`;
+    const wakeBalloonMessage = `**Wake**
+- Sends a Wake-on-LAN magic packet to this host's MAC address
+- The device must have Wake-on-LAN enabled to respond`;
+
+    let wakingHost = false;
 
     function formatTime(iso: string): string {
         if (!iso) {
@@ -207,6 +212,23 @@
 
         if (!copied) {
             throw new Error('Clipboard write was blocked by the system');
+        }
+    }
+
+    async function wakeHost(mac: string | null | undefined) {
+        if (!mac || wakingHost) {
+            return;
+        }
+
+        wakingHost = true;
+        try {
+            await TauriService.wakeHost(mac);
+            notifications.add(`Wake-on-LAN packet sent to ${mac}.`, 'success');
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to send Wake-on-LAN packet';
+            notifications.add(message, 'error');
+        } finally {
+            wakingHost = false;
         }
     }
 
@@ -389,6 +411,17 @@
         {/if}
 
         <div class="actions">
+            {#if fp?.mac_address}
+                <BalloonHelp
+                        message={wakeBalloonMessage}
+                        markdown
+                        delay={300}
+                >
+                    <Button onclick={() => wakeHost(fp?.mac_address)} disabled={wakingHost}>
+                        {wakingHost ? 'Waking...' : 'Wake'}
+                    </Button>
+                </BalloonHelp>
+            {/if}
             <BalloonHelp
                     message={deepScanBalloonMessage}
                     markdown
@@ -482,6 +515,7 @@
         z-index: 30;
         display: flex;
         justify-content: flex-end;
+        gap: 8px;
     }
 
     .actions :global(.balloon) {

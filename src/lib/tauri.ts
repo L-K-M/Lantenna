@@ -29,4 +29,8 @@ export class TauriService {
   static async getSystemColors(): Promise<SystemColors> {
     return await invoke('get_system_colors');
   }
+
+  static async wakeHost(mac: string): Promise<void> {
+    await invoke('wake_host', { mac });
+  }
 }

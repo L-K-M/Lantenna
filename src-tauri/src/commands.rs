@@ -242,3 +242,10 @@ pub async fn open_external_url(url: String) -> Result<(), String> {
 pub fn get_system_colors() -> Result<SystemColors, String> {
     Ok(system_colors::get_system_colors())
 }
+
+#[tauri::command]
+pub async fn wake_host(mac: String) -> Result<(), String> {
+    crate::wol::send_magic_packet(&mac)
+        .await
+        .map_err(|error| error.to_string())
+}
