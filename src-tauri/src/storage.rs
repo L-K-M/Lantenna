@@ -250,6 +250,7 @@ mod tests {
             confidence: 10,
             sources: Vec::new(),
             notes: Vec::new(),
+            discovered_services: Vec::new(),
             last_updated: timestamp.to_rfc3339(),
         }
     }
