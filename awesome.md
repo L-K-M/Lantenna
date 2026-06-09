@@ -15,7 +15,7 @@ this review round.
 test fixture struct literal was never updated. Any `cargo test` run fails with
 `missing field 'discovered_services'`. This also means the storage tests (and by extension all
 Rust tests) haven't run since the field was added.
-**Status:** ✅ Fixed (bug-fix PR).
+**Status:** ✅ Fixed in PR #2.
 
 ### B2. mDNS fingerprint cross-contamination — services attributed to the wrong host 🔴
 **Where:** `src-tauri/src/scanner.rs` → `query_mdns_services(_ip: Ipv4Addr)`
@@ -27,7 +27,7 @@ answers while the scanner is enriching your printer, the printer's fingerprint g
 fingerprint is then **cached for 90 days** keyed to the printer's MAC.
 **Fix:** filter `recv_from` results so only responses whose source address matches the target
 host are parsed.
-**Status:** ✅ Fixed (bug-fix PR).
+**Status:** ✅ Fixed in PR #2.
 
 ### B3. One mDNS multicast burst per host during enrichment 🟠
 **Where:** `src-tauri/src/scanner.rs` → `enrich_hosts_with_cache` / `build_fingerprint`
@@ -35,7 +35,7 @@ Every enriched host triggers its own 23-question multicast burst + 500 ms listen
 (with enrichment concurrency up to 12, that's a small multicast storm per scan, and most of the
 collected data was duplicated garbage due to B2). The whole subnet can be covered by a *single*
 query whose responses are grouped by responder address.
-**Status:** ✅ Fixed (bug-fix PR) — one shared mDNS sweep per scan, responses grouped by source IP.
+**Status:** ✅ Fixed in PR #2 — one shared mDNS sweep per scan, responses grouped by source IP.
 
 ### B4. `parse_ssh_banner` extracts the wrong software / misses the OS 🟠
 **Where:** `src-tauri/src/scanner.rs` → `parse_ssh_banner`
@@ -48,7 +48,7 @@ For the most common Ubuntu banner `SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.1`:
   so the software is never recorded for the most common case.
 **Fix:** software = the part after `SSH-<protoversion>-` in the first token; OS hints are
 matched case-insensitively against the whole banner.
-**Status:** ✅ Fixed (bug-fix PR, with unit tests).
+**Status:** ✅ Fixed in PR #2 (with unit tests).
 
 ### B5. Frontend types out of sync with Rust models 🟠
 **Where:** `src/lib/types.ts`
@@ -56,7 +56,7 @@ matched case-insensitively against the whole banner.
 - `PortInfo` is missing `banner: string | null` (exists in models.rs, and the backend spends
   real effort grabbing SSH/HTTP/FTP banners) — so the UI literally cannot show banners and
   TypeScript would reject any attempt to.
-**Status:** ✅ Fixed (bug-fix PR) — types added, and banners are now displayed in the host
+**Status:** ✅ Fixed in PR #2 — types added, and banners are now displayed in the host
 inspector port list.
 
 ### B6. "Last Seen" column shows only the time of day 🟡
@@ -64,12 +64,12 @@ inspector port list.
 Results restored from a previous day (persisted latest scan, favorite snapshots) render as e.g.
 `14:32:08`, which reads as *today* 14:32. Misleading the morning after.
 **Fix:** include the date when the timestamp is not from today.
-**Status:** ✅ Fixed (bug-fix PR).
+**Status:** ✅ Fixed in PR #2.
 
 ### B7. README installation instructions are missing the clone step 🟡
 **Where:** `README.md` — the code block says “Clone the repository” but only contains
 `cd Lantenna`.
-**Status:** ✅ Fixed (bug-fix PR).
+**Status:** ✅ Fixed in PR #2.
 
 ### B8. Listener attach/destroy race in `scanStore` 🟡
 **Where:** `src/lib/util/scanStore.ts` → `attachListeners` / `destroy`
@@ -148,7 +148,7 @@ free signal.
 ### M2. Wake-on-LAN ⏰
 The scanner already collects MAC addresses — sending a WoL magic packet is ~30 lines of Rust
 and turns Lantenna from a passive observer into something genuinely useful ("the NAS is
-asleep → click Wake"). **Status:** ✅ Implemented (feature PR) — "Wake" button in the host
+asleep → click Wake"). **Status:** ✅ Implemented in PR #3 — "Wake" button in the host
 inspector for any host with a known MAC.
 
 ### M3. Export scan results
