@@ -3,6 +3,7 @@ mod models;
 mod scanner;
 mod storage;
 mod system_colors;
+mod updates;
 mod wol;
 
 use commands::{AppState, ScanManager};
@@ -35,6 +36,8 @@ pub fn run() {
             commands::scan_host_ports,
             commands::open_external_url,
             commands::get_system_colors,
+            updates::check_self_update,
+            updates::open_release_url,
             commands::wake_host,
         ])
         .run(tauri::generate_context!())
