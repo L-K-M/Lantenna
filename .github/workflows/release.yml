@@ -80,21 +80,40 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build and upload Tauri bundles
-        uses: tauri-apps/tauri-action@v0
+      # Referencing an unconfigured secret yields an empty string, and the
+      # Tauri bundler treats a set-but-empty APPLE_CERTIFICATE as "signing
+      # requested" — `security import` then fails the whole build. Export the
+      # signing variables only when they actually have values, so unsigned
+      # builds work without any secrets configured.
+      - name: Enable code signing when secrets are configured
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Optional macOS code signing / notarization. The build still works
-          # unsigned when these secrets are absent.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Optional Tauri updater signing key.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+                      APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID \
+                      TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD; do
+            value="${!name}"
+            if [ -n "$value" ]; then
+              {
+                echo "${name}<<__SIGNING_SECRET_EOF__"
+                echo "$value"
+                echo "__SIGNING_SECRET_EOF__"
+              } >> "$GITHUB_ENV"
+            fi
+          done
+
+      - name: Build and upload Tauri bundles
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
