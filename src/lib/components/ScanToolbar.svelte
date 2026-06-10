@@ -174,6 +174,10 @@
     pointer-events: none;
     width: 12px;
     height: 12px;
+    /* Paint above the TextInput wrap, which is also positioned and later
+       in DOM order (the raw input it replaced was static, so the icon
+       used to win by default). */
+    z-index: 1;
   }
 
   .search-icon svg {
