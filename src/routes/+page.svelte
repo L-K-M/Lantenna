@@ -1,8 +1,14 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import * as System7Ui from '@lkmc/system7-ui';
-  import { Checkbox, ErrorBanner, Notification, ProgressBar, TitleBar } from '@lkmc/system7-ui';
+  import {
+    Checkbox,
+    ErrorBanner,
+    Notification,
+    ProgressBar,
+    TitleBar,
+    getSystem7WindowStyle
+  } from '@lkmc/system7-ui';
 
   import HostInspector from '$lib/components/HostInspector.svelte';
   import HostTable from '$lib/components/HostTable.svelte';
@@ -13,31 +19,10 @@
   import { notifications } from '$lib/util/notifications';
   import { scanStore } from '$lib/util/scanStore';
   import { windowFocused } from '$lib/util/windowState';
+  import type { SystemColors } from '$lib/types';
 
   let isWindowShaded = false;
-  let systemAccentColor: string | null = null;
-  let systemAccentTextColor: string | null = null;
-  let systemHighlightColor: string | null = null;
-  let systemHighlightTextColor: string | null = null;
-
-  const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
-
-  interface System7ColorStyleInput {
-    accent_color?: string | null;
-    accent_text_color?: string | null;
-    highlight_color?: string | null;
-    highlight_text_color?: string | null;
-  }
-
-  interface RgbColor {
-    r: number;
-    g: number;
-    b: number;
-  }
-
-  const maybeGetSystem7ColorStyle = Reflect.get(System7Ui, 'getSystem7ColorStyle') as
-    | ((colors: System7ColorStyleInput) => string)
-    | undefined;
+  let systemColors: SystemColors | null = null;
 
   $: ({
     interfaces,
@@ -111,12 +96,7 @@
         : `Deep scan in progress for ${hostScanTarget}`
       : 'Scan progress';
 
-  $: windowStyle = getWindowColorStyle({
-    accent_color: systemAccentColor,
-    accent_text_color: systemAccentTextColor,
-    highlight_color: systemHighlightColor,
-    highlight_text_color: systemHighlightTextColor
-  });
+  $: windowStyle = systemColors ? getSystem7WindowStyle(systemColors) : '';
 
   const appWindow = getCurrentWindow();
   const windowManager = new WindowManager();
@@ -177,107 +157,11 @@
     await windowManager.resizeHeightBy(heightDelta);
   }
 
-  function normalizeHexColor(value: string | null): string | null {
-    if (!value) {
-      return null;
-    }
-
-    const normalized = value.trim();
-    return HEX_COLOR_PATTERN.test(normalized) ? normalized : null;
-  }
-
-  function hexToRgb(value: string): RgbColor {
-    return {
-      r: parseInt(value.slice(1, 3), 16),
-      g: parseInt(value.slice(3, 5), 16),
-      b: parseInt(value.slice(5, 7), 16)
-    };
-  }
-
-  function rgbToHex({ r, g, b }: RgbColor): string {
-    return `#${[r, g, b]
-      .map((channel) =>
-        Math.max(0, Math.min(255, Math.round(channel)))
-          .toString(16)
-          .padStart(2, '0')
-      )
-      .join('')
-      .toUpperCase()}`;
-  }
-
-  function mixHexColors(fromHex: string, toHex: string, ratio: number): string {
-    const clampedRatio = Math.max(0, Math.min(1, ratio));
-    const from = hexToRgb(fromHex);
-    const to = hexToRgb(toHex);
-
-    return rgbToHex({
-      r: from.r + (to.r - from.r) * clampedRatio,
-      g: from.g + (to.g - from.g) * clampedRatio,
-      b: from.b + (to.b - from.b) * clampedRatio
-    });
-  }
-
-  function getWindowToneSet(windowColor: string) {
-    return {
-      edgeLight: mixHexColors(windowColor, '#FFFFFF', 0.55),
-      edgeDark: mixHexColors(windowColor, '#000000', 0.25),
-      edgeVeryDark: mixHexColors(windowColor, '#000000', 0.42),
-      scrollbarLine: mixHexColors(windowColor, '#000000', 0.18),
-      scrollbarThumb: mixHexColors(windowColor, '#FFFFFF', 0.7),
-      titlebarButton: mixHexColors(windowColor, '#FFFFFF', 0.82)
-    };
-  }
-
-  function getWindowColorStyle(colors: System7ColorStyleInput): string {
-    const styleParts: string[] = [];
-
-    if (maybeGetSystem7ColorStyle) {
-      const baseStyle = maybeGetSystem7ColorStyle(colors);
-      if (baseStyle) {
-        styleParts.push(baseStyle);
-      }
-    } else {
-      styleParts.push(
-        ...[
-          colors.accent_color ? `--system7-color-accent: ${colors.accent_color}` : '',
-          colors.accent_text_color ? `--system7-color-accent-text: ${colors.accent_text_color}` : '',
-          colors.highlight_color ? `--system7-color-highlight: ${colors.highlight_color}` : '',
-          colors.highlight_text_color
-            ? `--system7-color-highlight-text: ${colors.highlight_text_color}`
-            : ''
-        ].filter((value) => value.length > 0)
-      );
-    }
-
-    if (colors.accent_color) {
-      const windowTones = getWindowToneSet(colors.accent_color);
-
-      styleParts.push(
-        `--system7-color-focus-ring: ${colors.accent_color}`,
-        `--system7-color-titlebar-edge-light: ${windowTones.edgeLight}`,
-        `--system7-color-titlebar-edge-dark: ${windowTones.edgeDark}`,
-        `--system7-color-titlebar-edge-verydark: ${windowTones.edgeVeryDark}`,
-        `--system7-color-titlebar-button: ${windowTones.titlebarButton}`,
-        `--system7-color-scrollbar-thumb-line: ${windowTones.scrollbarLine}`,
-        `--system7-color-scrollbar-thumb: ${windowTones.scrollbarThumb}`
-      );
-    }
-
-    return styleParts.join('; ');
-  }
-
   async function loadSystemColors() {
     try {
-      const colors = await TauriService.getSystemColors();
-      systemAccentColor = normalizeHexColor(colors.accent_color);
-      systemAccentTextColor = normalizeHexColor(colors.accent_text_color);
-      systemHighlightColor = normalizeHexColor(colors.highlight_color);
-      systemHighlightTextColor = normalizeHexColor(colors.highlight_text_color);
+      systemColors = await TauriService.getSystemColors();
     } catch {
-      systemAccentColor = null;
-      systemAccentTextColor = null;
-      systemHighlightColor = null;
-      systemHighlightTextColor = null;
+      systemColors = null;
     }
   }
 </script>
@@ -297,7 +181,7 @@
   />
 
   {#if !isWindowShaded}
-    <Notification notifications={$notifications} />
+    <Notification notifications={$notifications} ondismiss={(id) => notifications.remove(id)} />
 
     <main class="app-content">
       <ScanToolbar

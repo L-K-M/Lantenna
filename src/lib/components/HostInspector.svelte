@@ -1,5 +1,5 @@
 <script lang="ts">
-    import {BalloonHelp, Button, CopyIcon, DownloadIcon} from '@lkmc/system7-ui';
+    import {BalloonHelp, Button, CopyIcon, DownloadIcon, TextInput} from '@lkmc/system7-ui';
     import {TauriService} from '$lib/tauri';
     import type {Host} from '$lib/types';
     import {notifications} from '$lib/util/notifications';
@@ -316,10 +316,10 @@
         <div class="name-editor">
             <label for="custom-name-input">Custom Name</label>
             <div class="name-editor-controls">
-                <input
+                <TextInput
                         id="custom-name-input"
-                        type="text"
                         bind:value={customNameDraft}
+                        clearable
                         placeholder="Set a friendly device name"
                         onkeydown={handleCustomNameKeydown}
                 />
@@ -547,9 +547,13 @@
         margin-top: 4px;
     }
 
-    .name-editor-controls input {
+    .name-editor-controls :global(.sys7-text-input-wrap) {
         flex: 1;
         min-width: 0;
+    }
+
+    .name-editor-controls :global(.sys7-text-input) {
+        width: 100%;
     }
 
     ul {
