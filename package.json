@@ -1,6 +1,6 @@
 {
   "name": "lantenna",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "System 7 LAN scanner for macOS",
   "type": "module",
   "scripts": {
