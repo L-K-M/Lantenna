@@ -14,6 +14,7 @@ export interface PortInfo {
   port: number;
   state: 'open';
   service: string | null;
+  banner: string | null;
 }
 
 export interface DeviceFingerprint {
@@ -27,6 +28,7 @@ export interface DeviceFingerprint {
   confidence: number;
   sources: string[];
   notes: string[];
+  discovered_services: string[];
   last_updated: string;
 }
 

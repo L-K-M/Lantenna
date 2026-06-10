@@ -156,7 +156,13 @@
             return '-';
         }
 
-        return date.toLocaleTimeString();
+        const now = new Date();
+        const sameDay =
+            date.getFullYear() === now.getFullYear() &&
+            date.getMonth() === now.getMonth() &&
+            date.getDate() === now.getDate();
+
+        return sameDay ? date.toLocaleTimeString() : date.toLocaleDateString();
     }
 
     function formatFingerprint(host: Host): string {

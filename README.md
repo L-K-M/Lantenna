@@ -11,6 +11,7 @@ Lantenna is a Tauri-based Mac OS X program that scans the local LAN and displays
 
 ```bash
 # Clone the repository
+git clone https://github.com/L-K-M/Lantenna.git
 cd Lantenna
 
 # Install dependencies

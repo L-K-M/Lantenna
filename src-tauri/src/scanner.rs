@@ -780,6 +780,7 @@ async fn snapshot_pending_vendors(
 
 pub async fn enrich_hosts_with_cache(hosts: Vec<Host>, storage: Arc<Storage>) -> Vec<Host> {
     let arp_table = Arc::new(read_arp_table().await);
+    let mdns_services_by_host = Arc::new(sweep_mdns_services().await);
     let pending_vendor_cache: SharedVendorCache = Arc::new(Mutex::new(HashMap::new()));
     let concurrency = enrichment_concurrency().min(hosts.len().max(1));
 
@@ -789,11 +790,18 @@ pub async fn enrich_hosts_with_cache(hosts: Vec<Host>, storage: Arc<Storage>) ->
     let mut stream = stream::iter(hosts.into_iter().enumerate().map(|(index, host)| {
         let storage = storage.clone();
         let arp_table = arp_table.clone();
+        let mdns_services_by_host = mdns_services_by_host.clone();
         let pending_vendor_cache = pending_vendor_cache.clone();
         async move {
             let mac = arp_table.get(&host.ip).cloned();
+            let mdns_services = Ipv4Addr::from_str(&host.ip)
+                .ok()
+                .and_then(|ip| mdns_services_by_host.get(&ip))
+                .map(|services| services.as_slice())
+                .unwrap_or_default();
             let (enriched_host, cache_entry) =
-                enrich_host_internal(host, mac, &storage, pending_vendor_cache).await;
+                enrich_host_internal(host, mac, mdns_services, &storage, pending_vendor_cache)
+                    .await;
             (index, enriched_host, cache_entry)
         }
     }))
@@ -829,10 +837,17 @@ pub async fn enrich_hosts_with_cache(hosts: Vec<Host>, storage: Arc<Storage>) ->
 pub async fn enrich_host_with_cache(host: Host, storage: Arc<Storage>) -> Host {
     let arp_table = read_arp_table().await;
     let mac = arp_table.get(&host.ip).cloned();
+    let mdns_services_by_host = sweep_mdns_services().await;
+    let mdns_services = Ipv4Addr::from_str(&host.ip)
+        .ok()
+        .and_then(|ip| mdns_services_by_host.get(&ip))
+        .map(|services| services.as_slice())
+        .unwrap_or_default();
     let pending_vendor_cache: SharedVendorCache = Arc::new(Mutex::new(HashMap::new()));
 
     let (enriched_host, cache_entry) =
-        enrich_host_internal(host, mac, &storage, pending_vendor_cache.clone()).await;
+        enrich_host_internal(host, mac, mdns_services, &storage, pending_vendor_cache.clone())
+            .await;
 
     if let Some((key, fingerprint)) = cache_entry {
         if let Err(error) = storage.cache_fingerprints(vec![(key, fingerprint)]) {
@@ -852,6 +867,7 @@ pub async fn enrich_host_with_cache(host: Host, storage: Arc<Storage>) -> Host {
 async fn enrich_host_internal(
     mut host: Host,
     mac_from_arp: Option<String>,
+    mdns_services: &[DiscoveredService],
     storage: &Arc<Storage>,
     pending_vendor_cache: SharedVendorCache,
 ) -> (Host, Option<(String, DeviceFingerprint)>) {
@@ -886,7 +902,14 @@ async fn enrich_host_internal(
         }
     }
 
-    let fingerprint = build_fingerprint(&host, mac_address, storage, pending_vendor_cache).await;
+    let fingerprint = build_fingerprint(
+        &host,
+        mac_address,
+        mdns_services,
+        storage,
+        pending_vendor_cache,
+    )
+    .await;
     host.fingerprint = Some(fingerprint.clone());
 
     (host, Some((primary_key, fingerprint)))
@@ -895,6 +918,7 @@ async fn enrich_host_internal(
 async fn build_fingerprint(
     host: &Host,
     mac_address: Option<String>,
+    mdns_services: &[DiscoveredService],
     storage: &Arc<Storage>,
     pending_vendor_cache: SharedVendorCache,
 ) -> DeviceFingerprint {
@@ -996,19 +1020,16 @@ async fn build_fingerprint(
         }
     }
 
-    if let Ok(ip) = Ipv4Addr::from_str(&host.ip) {
-        let mdns_services = query_mdns_services(ip).await;
-        if !mdns_services.is_empty() {
-            sources.push("mdns".to_string());
-            for svc in &mdns_services {
-                discovered_services.push(svc.service_type.clone());
-                if let Some(name) = &svc.service_name {
-                    notes.push(format!("mDNS service: {}", name));
-                }
+    if !mdns_services.is_empty() {
+        sources.push("mdns".to_string());
+        for svc in mdns_services {
+            discovered_services.push(svc.service_type.clone());
+            if let Some(name) = &svc.service_name {
+                notes.push(format!("mDNS service: {}", name));
             }
-            infer_device_from_mdns(&mdns_services, &mut device_type, &mut model_guess, &mut notes);
-            confidence = confidence.saturating_add(10);
         }
+        infer_device_from_mdns(mdns_services, &mut device_type, &mut model_guess, &mut notes);
+        confidence = confidence.saturating_add(10);
     }
 
     let (heuristic_type, heuristic_os, heuristic_model, heuristic_notes, heuristic_boost) =
@@ -1934,31 +1955,37 @@ async fn grab_banner_for_port(ip: Ipv4Addr, port: u16, timeout_duration: Duratio
 }
 
 fn parse_ssh_banner(banner: &str) -> Option<(Option<String>, Option<String>)> {
-    let parts: Vec<&str> = banner.split_whitespace().collect();
-    if parts.len() < 2 {
-        return None;
-    }
-    let version_part = parts.get(1)?;
-    let version_parts: Vec<&str> = version_part.split('-').collect();
-    let os_guess = if version_parts.len() > 1 {
-        let os_part = version_parts.last()?;
-        if os_part.contains("Ubuntu") {
-            Some("Ubuntu Linux".to_string())
-        } else if os_part.contains("Debian") {
-            Some("Debian Linux".to_string())
-        } else if os_part.contains("CentOS") || os_part.contains("RHEL") {
-            Some("CentOS/RHEL Linux".to_string())
-        } else if os_part.contains("FreeBSD") {
-            Some("FreeBSD".to_string())
-        } else if os_part.contains("OpenBSD") {
-            Some("OpenBSD".to_string())
-        } else {
-            None
-        }
+    // Banner format: "SSH-<protoversion>-<software> [comment]",
+    // e.g. "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.13".
+    let first_token = banner.split_whitespace().next()?;
+    let mut pieces = first_token.splitn(3, '-');
+    pieces.next()?;
+    pieces.next()?;
+    let software = pieces
+        .next()
+        .map(|value| value.to_string())
+        .filter(|value| !value.is_empty());
+
+    let lowered = banner.to_ascii_lowercase();
+    let os_guess = if lowered.contains("ubuntu") {
+        Some("Ubuntu Linux".to_string())
+    } else if lowered.contains("debian") || lowered.contains("raspbian") {
+        Some("Debian Linux".to_string())
+    } else if lowered.contains("centos") || lowered.contains("rhel") || lowered.contains("red hat")
+    {
+        Some("CentOS/RHEL Linux".to_string())
+    } else if lowered.contains("freebsd") {
+        Some("FreeBSD".to_string())
+    } else if lowered.contains("openbsd") {
+        Some("OpenBSD".to_string())
     } else {
         None
     };
-    let software = version_parts.first().map(|s| s.to_string());
+
+    if software.is_none() && os_guess.is_none() {
+        return None;
+    }
+
     Some((software, os_guess))
 }
 
@@ -1979,10 +2006,14 @@ fn parse_http_server_banner(banner: &str) -> Option<(Option<String>, Option<Stri
     Some((software, os_guess))
 }
 
-async fn query_mdns_services(_ip: Ipv4Addr) -> Vec<DiscoveredService> {
+/// Sends a single multicast mDNS query and groups the responses by the address
+/// that sent them, so services are only ever attributed to the host that
+/// actually advertised them.
+async fn sweep_mdns_services() -> HashMap<Ipv4Addr, Vec<DiscoveredService>> {
+    let mut services_by_host: HashMap<Ipv4Addr, Vec<DiscoveredService>> = HashMap::new();
     let socket = match UdpSocket::bind("0.0.0.0:0").await {
         Ok(s) => s,
-        Err(_) => return Vec::new(),
+        Err(_) => return services_by_host,
     };
     let queries = [
         "_airplay._tcp.local",
@@ -2009,13 +2040,12 @@ async fn query_mdns_services(_ip: Ipv4Addr) -> Vec<DiscoveredService> {
         "_device-info._tcp.local",
         "_sleep-proxy._udp.local",
     ];
-    let mut services = Vec::new();
     let dns_packet = build_mdns_query(&queries);
     let multicast_addr: SocketAddr = format!("{}:{}", MDNS_MULTICAST_ADDR, MDNS_PORT)
         .parse()
         .unwrap();
     if socket.send_to(&dns_packet, multicast_addr).await.is_err() {
-        return services;
+        return services_by_host;
     }
     let mut buf = vec![0u8; 4096];
     let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
@@ -2025,15 +2055,18 @@ async fn query_mdns_services(_ip: Ipv4Addr) -> Vec<DiscoveredService> {
             break;
         }
         match timeout(recv_timeout, socket.recv_from(&mut buf)).await {
-            Ok(Ok((n, _src))) => {
+            Ok(Ok((n, src))) => {
+                let IpAddr::V4(src_ip) = src.ip() else {
+                    continue;
+                };
                 if let Some(parsed) = parse_mdns_response(&buf[..n]) {
-                    services.extend(parsed);
+                    services_by_host.entry(src_ip).or_default().extend(parsed);
                 }
             }
             _ => break,
         }
     }
-    services
+    services_by_host
 }
 
 fn build_mdns_query(services: &[&str]) -> Vec<u8> {
@@ -2372,5 +2405,31 @@ mod tests {
         assert_eq!(os_guess.as_deref(), Some("Apple iOS/iPadOS family"));
         assert_eq!(model_guess.as_deref(), Some("Apple mobile device"));
         assert!(boost >= 20);
+    }
+
+    #[test]
+    fn parse_ssh_banner_extracts_software_and_os_from_ubuntu_banner() {
+        let (software, os_guess) =
+            parse_ssh_banner("SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.13").expect("parsed banner");
+
+        assert_eq!(software.as_deref(), Some("OpenSSH_8.9p1"));
+        assert_eq!(os_guess.as_deref(), Some("Ubuntu Linux"));
+    }
+
+    #[test]
+    fn parse_ssh_banner_handles_banner_without_comment() {
+        let (software, os_guess) = parse_ssh_banner("SSH-2.0-OpenSSH_9.6").expect("parsed banner");
+
+        assert_eq!(software.as_deref(), Some("OpenSSH_9.6"));
+        assert!(os_guess.is_none());
+    }
+
+    #[test]
+    fn parse_ssh_banner_handles_dashes_inside_software_version() {
+        let (software, os_guess) =
+            parse_ssh_banner("SSH-2.0-dropbear_2022.83-debian").expect("parsed banner");
+
+        assert_eq!(software.as_deref(), Some("dropbear_2022.83-debian"));
+        assert_eq!(os_guess.as_deref(), Some("Debian Linux"));
     }
 }

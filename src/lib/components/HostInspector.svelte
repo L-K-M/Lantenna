@@ -374,6 +374,9 @@
                                 </div>
 
                                 <span class="port-link-label">{target.label}</span>
+                                {#if port.banner}
+                                    <div class="port-banner" title={port.banner}>{port.banner}</div>
+                                {/if}
                             </a>
                         </li>
                     {:else}
@@ -382,6 +385,9 @@
                                 <span class="port-number">{port.port}</span>
                                 <span class="port-service">{port.service || 'unknown'}</span>
                             </div>
+                            {#if port.banner}
+                                <div class="port-banner" title={port.banner}>{port.banner}</div>
+                            {/if}
                         </li>
                     {/if}
                 {/each}
@@ -520,11 +526,27 @@
 
     .port-item {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
-        gap: 8px;
+        gap: 2px 8px;
         border: 1px solid #000;
         padding: 4px 6px;
         margin-bottom: 6px;
+    }
+
+    .port-banner {
+        flex: 1 0 100%;
+        min-width: 0;
+        font-size: 0.85em;
+        color: #555;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .port-item-link:hover .port-banner,
+    .port-item-link:focus-visible .port-banner {
+        color: inherit;
     }
 
     .port-item-link {
