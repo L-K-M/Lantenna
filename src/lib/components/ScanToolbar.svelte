@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { BalloonHelp, Button, Dropdown } from '@lkmc/system7-ui';
+  import { BalloonHelp, Button, Dropdown, TextInput } from '@lkmc/system7-ui';
   import type { NetworkInterface, ScanApproach } from '$lib/types';
 
   export let interfaces: NetworkInterface[] = [];
@@ -88,26 +88,14 @@
           <line x1="9.8" y1="9.8" x2="14" y2="14" />
         </svg>
       </span>
-      <input
+      <TextInput
         value={query}
-        type="text"
+        clearable
         placeholder="Filter by IP or host name"
-        oninput={(event) => onQueryChange?.((event.currentTarget as HTMLInputElement).value)}
+        ariaLabel="Filter by IP or host name"
+        oninput={(value) => onQueryChange?.(value)}
+        onclear={() => onQueryChange?.('')}
       />
-
-      {#if query.length > 0}
-        <button
-          type="button"
-          class="clear-search"
-          aria-label="Clear filter"
-          onclick={() => onQueryChange?.('')}
-        >
-          <svg viewBox="0 0 12 12" role="img" focusable="false" aria-hidden="true">
-            <line x1="2" y1="2" x2="10" y2="10" />
-            <line x1="10" y1="2" x2="2" y2="10" />
-          </svg>
-        </button>
-      {/if}
     </div>
   </div>
 </div>
@@ -153,10 +141,6 @@
     border: 0;
   }
 
-  input {
-    min-width: 160px;
-  }
-
   .dropdown-wrap :global(.sys7-dropdown) {
     min-width: 220px;
   }
@@ -170,11 +154,13 @@
     position: relative;
   }
 
-  .search-wrap input {
+  .search-wrap :global(.sys7-text-input-wrap) {
     width: 100%;
-    box-sizing: border-box;
+  }
+
+  .search-wrap :global(.sys7-text-input) {
+    width: 100%;
     padding-left: 26px;
-    padding-right: 28px;
   }
 
   .search-icon {
@@ -197,49 +183,6 @@
     stroke: #000;
     stroke-width: 1.2;
     stroke-linecap: square;
-  }
-
-  .clear-search {
-    position: absolute;
-    right: 5px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 18px;
-    height: 18px;
-    border: 1px solid transparent;
-    background: transparent;
-    padding: 0;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #000;
-  }
-
-  .clear-search svg {
-    width: 10px;
-    height: 10px;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.4;
-    stroke-linecap: square;
-  }
-
-  .clear-search:hover {
-    background: var(--system7-color-accent, #000);
-    color: var(--system7-color-accent-text, #fff);
-    border-color: var(--system7-color-accent, #000);
-  }
-
-  .clear-search:focus-visible {
-    border-color: var(--system7-color-accent, #000);
-    outline: 1px dotted var(--system7-color-accent, #000);
-    outline-offset: 1px;
-  }
-
-  .search-wrap input:focus-visible {
-    outline: 1px dotted var(--system7-color-accent, #000);
-    outline-offset: 1px;
   }
 
   .toolbar-group :global(.sys7-btn:not(:disabled):focus-visible) {
