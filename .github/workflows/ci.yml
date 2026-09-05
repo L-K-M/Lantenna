@@ -38,14 +38,27 @@ jobs:
         run: npm run build
 
   rust:
-    name: Rust (fmt, clippy, test)
-    # Lantenna is a macOS-only app: it links against AppKit (objc2-app-kit) for
-    # system accent colors and only bundles a .dmg. The macOS-gated code paths
-    # (`#[cfg(target_os = "macos")]`) only compile on macOS, so we lint and test
-    # on a macOS runner to exercise the real target rather than on Linux.
-    runs-on: macos-latest
+    name: Rust (fmt, clippy, test — ${{ matrix.platform }})
+    # Lantenna ships for macOS and Linux, and each OS has code the other never
+    # compiles (`#[cfg(target_os = ...)]`: the AppKit accent colors on macOS;
+    # the ICMP flag dialect and the `ip neigh` ARP reader on Linux) — so lint
+    # and test on both real targets.
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v5
+
+      # Tauri v2 needs the webkit2gtk 4.1 series (and friends) to compile on
+      # Linux; macOS runners have everything out of the box.
+      - name: Install Tauri system dependencies (Linux)
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
       - name: Set up Node
         uses: actions/setup-node@v5
@@ -67,12 +80,20 @@ jobs:
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.platform }}
 
+      # The crate lives in src-tauri/ (there is no root Cargo.toml), so every
+      # cargo command must run from there.
       - name: Check formatting
         run: cargo fmt --all --check
+        working-directory: src-tauri
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
+        working-directory: src-tauri
 
       - name: Test
-        run: cargo test
+        run: cargo test --locked
+        working-directory: src-tauri

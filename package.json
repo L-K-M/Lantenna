@@ -1,7 +1,7 @@
 {
   "name": "lantenna",
   "version": "1.0.1",
-  "description": "System 7 LAN scanner for macOS",
+  "description": "System 7 LAN scanner for macOS and Linux",
   "type": "module",
   "scripts": {
     "dev": "vite dev",

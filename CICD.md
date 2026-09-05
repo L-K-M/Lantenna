@@ -6,17 +6,18 @@ are produced by pushing a version tag. Everything works with **no secrets
 configured** — code signing and notarization are optional and only kick in when
 the relevant secrets are present.
 
-Lantenna is a **macOS-only** application: the Rust backend links against AppKit
-(`objc2-app-kit`) to read the system accent/highlight colors, those code paths are
-gated behind `#[cfg(target_os = "macos")]`, and the only bundle produced is a
-`.dmg`. The workflows reflect that — the release matrix is macOS-only and the Rust
-CI job runs on a macOS runner.
+Lantenna started as a **Mac OS X** application and now also ships for Linux, so
+the release matrix covers macOS (`.dmg`) and Ubuntu/Linux (`.deb` + `.AppImage`).
+Each platform has backend code the other never compiles — the AppKit accent and
+highlight colors on macOS (`objc2-app-kit`), and on Linux the GTK decoration-state
+tracking, the `ip neigh` neighbour reader and the iputils `ping` flag dialect — so
+CI lints and tests on both runners to exercise both real targets.
 
 ## Workflows
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | PRs + pushes to `main` | Type-check and build the SvelteKit frontend, then run `cargo fmt`/`clippy`/`test` on macOS. |
-| `.github/workflows/release.yml` | Pushing a `v*.*.*` tag | Build the macOS Tauri `.dmg` bundles (Apple Silicon + Intel) and attach them to a GitHub Release. |
+| `.github/workflows/ci.yml` | PRs + pushes to `main` | Type-check and build the SvelteKit frontend, then run `cargo fmt`/`clippy`/`test` on macOS and Ubuntu. |
+| `.github/workflows/release.yml` | Pushing a `v*.*.*` tag | Build the macOS Tauri `.dmg` bundles (Apple Silicon + Intel) and the Linux `.deb`/`.AppImage` bundles (x86_64), and attach them to a GitHub Release. |
 
 ## Continuous integration (`ci.yml`)
 
@@ -26,20 +27,25 @@ The CI workflow has two parallel jobs:
   `npm ci`, runs `npm run check` (`svelte-kit sync` + `svelte-check`), then
   `npm run build` (`vite build`). The frontend is platform-independent, so it
   builds on the cheaper Linux runner.
-- **Rust (fmt, clippy, test)** — runs on **macOS**. Builds the frontend into
-  `build/` first (because `tauri::generate_context!` embeds it at compile time),
-  then runs `cargo fmt --all --check`, `cargo clippy --all-targets -- -D warnings`,
-  and `cargo test`. Running this job on macOS is deliberate: the AppKit-backed
-  `#[cfg(target_os = "macos")]` code in `src-tauri/src/system_colors.rs` only
-  compiles on macOS, so a Linux runner would silently skip linting and testing it.
-  `Swatinem/rust-cache` caches the cargo build between runs.
+- **Rust (fmt, clippy, test)** — builds the frontend into `build/` first (because
+  `tauri::generate_context!` embeds it at compile time), then runs
+  `cargo fmt --all --check`, `cargo clippy --locked --all-targets -- -D warnings`,
+  and `cargo test --locked`. `Swatinem/rust-cache` caches the cargo build between
+  runs. The job is a matrix over `macos-latest` and `ubuntu-22.04`: each platform's
+  `#[cfg(target_os = ...)]` code (AppKit system colors on macOS; GTK
+  decoration-state tracking and the `ip neigh` neighbour reader on Linux) only
+  compiles on its own OS, so both real targets are exercised. The bundles
+  themselves are built by the release workflow.
 
 Lantenna's `src-tauri` is a single crate (not a Cargo workspace), so the cargo
-commands run without `--workspace`.
+commands run without `--workspace`. There is no `Cargo.toml` at the repository
+root — all cargo commands run from `src-tauri/` (the CI steps set
+`working-directory: src-tauri`).
 
-Lantenna is built on **Tauri v2**. Because CI and releases run on macOS there are
-no Linux webview packages to install; a Tauri v2 project built on Linux would need
-`libwebkit2gtk-4.1-dev` (the 4.1 series; Tauri v1 uses `-4.0-dev`).
+The Ubuntu jobs install the Tauri v2 Linux system packages first —
+`libwebkit2gtk-4.1-dev` (the 4.1 series; Tauri v1 projects use `-4.0-dev`
+instead) plus the usual build tools; the release workflow additionally installs
+`patchelf` and `xdg-utils` for the AppImage bundler.
 
 ### Running CI checks locally
 
@@ -49,11 +55,16 @@ npm ci
 npm run check
 npm run build
 
-# Rust (run from the repository root, on macOS)
+# Rust (run from src-tauri/)
+cd src-tauri
 cargo fmt --all --check
-cargo clippy --all-targets -- -D warnings
-cargo test
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
 ```
+
+On Linux you also need the Tauri system dependencies (`libwebkit2gtk-4.1-dev`,
+`build-essential`, `libxdo-dev`, `libssl-dev`, `libayatana-appindicator3-dev`,
+`librsvg2-dev`, etc.). On macOS none of these are required.
 
 ## Releases (`release.yml`)
 
@@ -75,27 +86,35 @@ The workflow:
 1. **Creates a draft GitHub Release** named `Lantenna v1.2.3` with auto-generated
    release notes. Tags containing `-` (e.g. `v1.2.3-rc.1`) are marked as
    pre-releases.
-2. **Builds the macOS desktop bundles** with `tauri-apps/tauri-action@v0` across a
-   two-way matrix and uploads each artifact to the draft release:
+2. **Builds the desktop bundles** with `tauri-apps/tauri-action@v0` across a
+   three-way matrix and uploads each artifact to the draft release:
    - macOS Apple Silicon (`aarch64-apple-darwin`) — `.dmg` / `.app`
    - macOS Intel (`x86_64-apple-darwin`) — `.dmg` / `.app`
+   - Linux x86_64 (`x86_64-unknown-linux-gnu`, built on `ubuntu-22.04`) —
+     `.deb` / `.AppImage`
 
    The `bundle.targets` in `src-tauri/tauri.conf.json` is `"all"`; on a macOS
-   runner that resolves to the `.app` and `.dmg` formats.
+   runner that resolves to the `.app` and `.dmg` formats. On Linux the
+   platform-specific `src-tauri/tauri.linux.conf.json` overrides it to
+   `["deb", "appimage"]` (deliberately no `.rpm`) and declares the `iputils-ping`
+   and `iproute2` packages the scanner shells out to. The Linux leg builds on the
+   oldest supported Ubuntu LTS runner so the binaries link against a glibc old
+   enough for the systems users run.
 3. **Publishes the release** (flips it from draft to published) once all build
    jobs succeed. If a build fails, the release stays a draft so nothing
    half-built is published.
 
-> **Why macOS-only?** Lantenna depends on AppKit and only targets Mac OS X, so
-> building Linux/Windows bundles would either fail to compile or ship a degraded
-> app. The matrix is therefore restricted to macOS. If cross-platform support is
-> added later, extend the matrix with `ubuntu-22.04` / `windows-latest` entries
-> (and add the `libwebkit2gtk-4.1-dev` Linux dependency step) the same way the
-> other Tauri repos do.
+> **Why no Windows?** The Rust backend's platform-specific pieces currently exist
+> for macOS and Linux only (system colors, window-activity tracking, and the
+> `ping`/neighbour-table dialects the scanner shells out to). If Windows support
+> is desired later you can extend the matrix with a `windows-latest` entry the
+> same way the other Tauri repos do, after porting those pieces.
 
 Builds are **unsigned** unless the optional signing secrets below are configured.
 An unsigned macOS app still runs, but users will see Gatekeeper warnings;
 add the Apple secrets later to enable notarization without editing the workflow.
+The Apple signing step is skipped on the Linux leg; the Linux packages are not
+signed.
 
 ## Secrets
 

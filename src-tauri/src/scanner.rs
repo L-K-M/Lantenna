@@ -845,9 +845,14 @@ pub async fn enrich_host_with_cache(host: Host, storage: Arc<Storage>) -> Host {
         .unwrap_or_default();
     let pending_vendor_cache: SharedVendorCache = Arc::new(Mutex::new(HashMap::new()));
 
-    let (enriched_host, cache_entry) =
-        enrich_host_internal(host, mac, mdns_services, &storage, pending_vendor_cache.clone())
-            .await;
+    let (enriched_host, cache_entry) = enrich_host_internal(
+        host,
+        mac,
+        mdns_services,
+        &storage,
+        pending_vendor_cache.clone(),
+    )
+    .await;
 
     if let Some((key, fingerprint)) = cache_entry {
         if let Err(error) = storage.cache_fingerprints(vec![(key, fingerprint)]) {
@@ -943,11 +948,9 @@ async fn build_fingerprint(
         }
 
         if vendor.is_none() {
-            if let Ok(cached_vendor) = storage.get_cached_vendor(oui_value) {
-                if let Some(value) = cached_vendor {
-                    vendor = Some(value);
-                    sources.push("oui-cache".to_string());
-                }
+            if let Ok(Some(value)) = storage.get_cached_vendor(oui_value) {
+                vendor = Some(value);
+                sources.push("oui-cache".to_string());
             }
         }
 
@@ -1028,7 +1031,12 @@ async fn build_fingerprint(
                 notes.push(format!("mDNS service: {}", name));
             }
         }
-        infer_device_from_mdns(mdns_services, &mut device_type, &mut model_guess, &mut notes);
+        infer_device_from_mdns(
+            mdns_services,
+            &mut device_type,
+            &mut model_guess,
+            &mut notes,
+        );
         confidence = confidence.saturating_add(10);
     }
 
@@ -1126,7 +1134,10 @@ fn infer_device_from_mdns(
 ) {
     let service_types: Vec<&str> = services.iter().map(|s| s.service_type.as_str()).collect();
 
-    if service_types.iter().any(|s| s.contains("airplay") || s.contains("raop")) {
+    if service_types
+        .iter()
+        .any(|s| s.contains("airplay") || s.contains("raop"))
+    {
         set_if_none(device_type, "Media device");
         set_if_none(model_guess, "Apple AirPlay device");
         notes.push("AirPlay service detected via mDNS".to_string());
@@ -1138,13 +1149,19 @@ fn infer_device_from_mdns(
         notes.push("Google Cast service detected via mDNS".to_string());
     }
 
-    if service_types.iter().any(|s| s.contains("hap") || s.contains("homekit")) {
+    if service_types
+        .iter()
+        .any(|s| s.contains("hap") || s.contains("homekit"))
+    {
         set_if_none(device_type, "IoT device");
         set_if_none(model_guess, "Apple HomeKit device");
         notes.push("HomeKit service detected via mDNS".to_string());
     }
 
-    if service_types.iter().any(|s| s.contains("ipp") || s.contains("printer")) {
+    if service_types
+        .iter()
+        .any(|s| s.contains("ipp") || s.contains("printer"))
+    {
         set_if_none(device_type, "Printer");
         notes.push("Printer service detected via mDNS".to_string());
     }
@@ -1155,7 +1172,10 @@ fn infer_device_from_mdns(
         notes.push("Spotify Connect service detected via mDNS".to_string());
     }
 
-    if service_types.iter().any(|s| s.contains("smb") || s.contains("afpovertcp")) {
+    if service_types
+        .iter()
+        .any(|s| s.contains("smb") || s.contains("afpovertcp"))
+    {
         set_if_none(device_type, "File server");
         notes.push("File sharing service detected via mDNS".to_string());
     }
@@ -1166,7 +1186,10 @@ fn infer_device_from_mdns(
         notes.push("Apple Companion Link detected via mDNS".to_string());
     }
 
-    if service_types.iter().any(|s| s.contains("daap") || s.contains("dacp")) {
+    if service_types
+        .iter()
+        .any(|s| s.contains("daap") || s.contains("dacp"))
+    {
         set_if_none(device_type, "Media device");
         set_if_none(model_guess, "Apple iTunes/Home Sharing device");
         notes.push("Apple media sharing detected via mDNS".to_string());
@@ -1255,23 +1278,40 @@ fn extract_mac_from_arp_line(line: &str) -> Option<String> {
     })
 }
 
+/// The commands that can print a neighbour table, in the order they are tried.
+///
+/// Linux leads with `ip neigh`: `arp` lives in `net-tools`, which stock Ubuntu
+/// has not installed since 20.04, so a `.deb` install would otherwise find no
+/// MAC addresses at all — losing vendor lookup, device-type inference and Wake
+/// on LAN. `ip` ships in `iproute2`, which is essential on every Debian-family
+/// system. `arp` stays as the fallback for distributions that still prefer it.
+#[cfg(target_os = "windows")]
+const NEIGHBOUR_COMMANDS: &[(&str, &str)] = &[("arp", "-a")];
+
+#[cfg(target_os = "linux")]
+const NEIGHBOUR_COMMANDS: &[(&str, &str)] = &[("ip", "neigh"), ("arp", "-an")];
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+const NEIGHBOUR_COMMANDS: &[(&str, &str)] = &[("arp", "-an")];
+
 async fn read_arp_table() -> HashMap<String, String> {
     tokio::task::spawn_blocking(move || {
         let mut table = HashMap::new();
 
-        #[cfg(target_os = "windows")]
-        let output = StdCommand::new("arp").arg("-a").output();
+        // Take the first command that exists and succeeds; a missing binary
+        // reports an error here rather than a non-zero status.
+        let output = NEIGHBOUR_COMMANDS.iter().find_map(|(program, argument)| {
+            StdCommand::new(program)
+                .arg(argument)
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+        });
 
-        #[cfg(not(target_os = "windows"))]
-        let output = StdCommand::new("arp").arg("-an").output();
-
-        let Ok(output) = output else {
+        let Some(output) = output else {
+            log::debug!("no neighbour table command available");
             return table;
         };
-
-        if !output.status.success() {
-            return table;
-        }
 
         let content = String::from_utf8_lossy(&output.stdout);
         for line in content.lines() {
@@ -1357,7 +1397,9 @@ struct FingerbankQueryParams<'a> {
     fqdn: Option<&'a str>,
 }
 
-async fn lookup_fingerbank_with_params(params: FingerbankQueryParams<'_>) -> Option<FingerbankFingerprint> {
+async fn lookup_fingerbank_with_params(
+    params: FingerbankQueryParams<'_>,
+) -> Option<FingerbankFingerprint> {
     let api_key = std::env::var("FINGERBANK_API_KEY").ok()?;
 
     let mut request = http_client()
@@ -1675,11 +1717,7 @@ fn set_if_none(slot: &mut Option<String>, value: &str) {
 }
 
 fn normalize_hint_text(value: &str) -> String {
-    let lowered = value
-        .to_lowercase()
-        .replace('-', " ")
-        .replace('_', " ")
-        .replace('.', " ");
+    let lowered = value.to_lowercase().replace(['-', '_', '.'], " ");
 
     lowered
         .chars()
@@ -1943,7 +1981,11 @@ async fn grab_ftp_banner(ip: Ipv4Addr, port: u16, timeout_duration: Duration) ->
     None
 }
 
-async fn grab_banner_for_port(ip: Ipv4Addr, port: u16, timeout_duration: Duration) -> Option<String> {
+async fn grab_banner_for_port(
+    ip: Ipv4Addr,
+    port: u16,
+    timeout_duration: Duration,
+) -> Option<String> {
     match port {
         22 => grab_ssh_banner(ip, port, timeout_duration).await,
         21 => grab_ftp_banner(ip, port, timeout_duration).await,
@@ -2074,7 +2116,8 @@ fn build_mdns_query(services: &[&str]) -> Vec<u8> {
     let transaction_id: u16 = (std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_nanos() & 0xFFFF) as u16;
+        .as_nanos()
+        & 0xFFFF) as u16;
     packet.extend_from_slice(&transaction_id.to_be_bytes());
     packet.extend_from_slice(&0x0000u16.to_be_bytes());
     packet.extend_from_slice(&(services.len() as u16).to_be_bytes());
@@ -2165,7 +2208,7 @@ fn parse_dns_name(data: &[u8], start: usize) -> Option<(String, usize)> {
             if offset + 1 >= data.len() {
                 break;
             }
-            let ptr = ((len & 0x3F) as usize) << 8 | (data[offset + 1] as usize);
+            let ptr = (len & 0x3F) << 8 | (data[offset + 1] as usize);
             if !jumped {
                 jump_offset = offset + 2;
                 jumped = true;
@@ -2214,7 +2257,11 @@ pub async fn discover_ssdp_devices() -> Vec<DiscoveredService> {
         "\r\n"
     );
     let multicast_addr: SocketAddr = "239.255.255.250:1900".parse().unwrap();
-    if socket.send_to(m_search.as_bytes(), multicast_addr).await.is_err() {
+    if socket
+        .send_to(m_search.as_bytes(), multicast_addr)
+        .await
+        .is_err()
+    {
         return Vec::new();
     }
     let mut devices = Vec::new();
@@ -2236,8 +2283,6 @@ pub async fn discover_ssdp_devices() -> Vec<DiscoveredService> {
     }
     devices
 }
-
-
 
 #[allow(dead_code)]
 fn parse_ssdp_response(data: &[u8]) -> Option<DiscoveredService> {
@@ -2356,6 +2401,27 @@ mod tests {
     fn normalize_mac_accepts_short_segments() {
         let normalized = normalize_mac("a:b:c:d:e:f");
         assert_eq!(normalized.as_deref(), Some("0A:0B:0C:0D:0E:0F"));
+    }
+
+    #[test]
+    fn extract_parses_ip_neigh_lines() {
+        // `ip neigh` on Linux, where `arp` is usually absent.
+        let line = "192.0.2.1 dev eth0 lladdr 02:fc:00:00:00:05 REACHABLE";
+        assert_eq!(
+            extract_ipv4_from_arp_line(line),
+            Some(Ipv4Addr::new(192, 0, 2, 1))
+        );
+        assert_eq!(
+            extract_mac_from_arp_line(line).as_deref(),
+            Some("02:FC:00:00:00:05")
+        );
+    }
+
+    #[test]
+    fn extract_mac_ignores_ip_neigh_lines_without_lladdr() {
+        // A neighbour that never answered has no lladdr to extract.
+        let line = "192.0.2.55 dev eth0 FAILED";
+        assert_eq!(extract_mac_from_arp_line(line), None);
     }
 
     #[test]

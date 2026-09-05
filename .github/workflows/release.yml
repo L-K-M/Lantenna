@@ -41,8 +41,11 @@ jobs:
             return data.id;
 
   # ---------------------------------------------------------------------------
-  # Desktop bundles. Lantenna is a macOS-only app (AppKit dependency, .dmg-only
-  # bundle), so the matrix covers macOS on Apple Silicon and Intel only.
+  # Desktop bundles: macOS .dmg on Apple Silicon and Intel, plus Ubuntu/Linux
+  # .deb and .AppImage on x86_64 (the Linux bundle targets live in
+  # src-tauri/tauri.linux.conf.json). The Linux leg builds on the oldest
+  # supported Ubuntu LTS runner so the binaries link against a glibc old enough
+  # for the systems users actually run.
   # ---------------------------------------------------------------------------
   build-desktop:
     name: Desktop (${{ matrix.platform }} ${{ matrix.args }})
@@ -57,9 +60,22 @@ jobs:
           - platform: macos-latest
             args: --target x86_64-apple-darwin
             rust-targets: x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            args: ''
+            rust-targets: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v5
+
+      # Tauri v2 needs the webkit2gtk 4.1 series to compile, plus patchelf and
+      # xdg-utils for the AppImage bundler (linuxdeploy's GTK plugin shells out
+      # to xdg-open); macOS runners have everything out of the box.
+      - name: Install Tauri system dependencies (Linux)
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils
 
       - name: Set up Node
         uses: actions/setup-node@v5
@@ -75,6 +91,7 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
+          workspaces: src-tauri
           key: ${{ matrix.platform }}-${{ matrix.args }}
 
       - name: Install frontend dependencies
@@ -84,8 +101,10 @@ jobs:
       # Tauri bundler treats a set-but-empty APPLE_CERTIFICATE as "signing
       # requested" — `security import` then fails the whole build. Export the
       # signing variables only when they actually have values, so unsigned
-      # builds work without any secrets configured.
+      # builds work without any secrets configured. Apple signing means nothing
+      # to the Linux leg, so it skips this step.
       - name: Enable code signing when secrets are configured
+        if: startsWith(matrix.platform, 'macos')
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
