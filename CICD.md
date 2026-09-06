@@ -16,7 +16,7 @@ CI lints and tests on both runners to exercise both real targets.
 ## Workflows
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | PRs + pushes to `main` | Type-check and build the SvelteKit frontend, then run `cargo fmt`/`clippy`/`test` on macOS and Ubuntu. |
+| `.github/workflows/ci.yml` | PRs + pushes to `main` | Type-check, test and build the SvelteKit frontend, then run `cargo fmt`/`clippy`/`test` on macOS and Ubuntu. |
 | `.github/workflows/release.yml` | Pushing a `v*.*.*` tag | Build the macOS Tauri `.dmg` bundles (Apple Silicon + Intel) and the Linux `.deb`/`.AppImage` bundles (x86_64), and attach them to a GitHub Release. |
 
 ## Continuous integration (`ci.yml`)
@@ -25,8 +25,9 @@ The CI workflow has two parallel jobs:
 
 - **Frontend (check & build)** — runs on Ubuntu. Installs npm dependencies with
   `npm ci`, runs `npm run check` (`svelte-kit sync` + `svelte-check`), then
-  `npm run build` (`vite build`). The frontend is platform-independent, so it
-  builds on the cheaper Linux runner.
+  `npm test` (vitest under jsdom: the window-activity subscription lifecycle and
+  the title-bar drag regression), then `npm run build` (`vite build`). The
+  frontend is platform-independent, so it builds on the cheaper Linux runner.
 - **Rust (fmt, clippy, test)** — builds the frontend into `build/` first (because
   `tauri::generate_context!` embeds it at compile time), then runs
   `cargo fmt --all --check`, `cargo clippy --locked --all-targets -- -D warnings`,
@@ -53,6 +54,7 @@ instead) plus the usual build tools; the release workflow additionally installs
 # Frontend
 npm ci
 npm run check
+npm test
 npm run build
 
 # Rust (run from src-tauri/)
@@ -104,11 +106,12 @@ The workflow:
    jobs succeed. If a build fails, the release stays a draft so nothing
    half-built is published.
 
-> **Why no Windows?** The Rust backend's platform-specific pieces currently exist
-> for macOS and Linux only (system colors, window-activity tracking, and the
-> `ping`/neighbour-table dialects the scanner shells out to). If Windows support
-> is desired later you can extend the matrix with a `windows-latest` entry the
-> same way the other Tauri repos do, after porting those pieces.
+> **Why no Windows?** Nobody has built or run Lantenna on Windows. The code has
+> Windows branches (`ping -n`, `arp -a`, and generic fallbacks for system colors
+> and window-activity tracking), but none of them has been exercised, and the
+> custom title bar has only been tested on macOS and Linux. If Windows support is
+> wanted later, add a `windows-latest` entry to the matrix the same way the other
+> Tauri repos do, then verify those paths.
 
 Builds are **unsigned** unless the optional signing secrets below are configured.
 An unsigned macOS app still runs, but users will see Gatekeeper warnings;
