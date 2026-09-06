@@ -27,6 +27,17 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
+it('reports the startup state when no event arrives first', async () => {
+  const onChange = vi.fn();
+  const stop = new WindowManager().subscribeActivity(onChange);
+
+  await vi.waitFor(() => expect(onChange).toHaveBeenCalledWith(true));
+  expect(native.invoke).toHaveBeenCalledWith('is_window_active');
+
+  stop();
+  expect(native.unlisten).toHaveBeenCalledOnce();
+});
+
 it('does not overwrite an activity event with a stale initial snapshot', async () => {
   const snapshot = deferred<boolean>();
   native.invoke.mockReturnValue(snapshot.promise);
