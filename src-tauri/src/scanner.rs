@@ -2448,6 +2448,15 @@ mod tests {
     }
 
     #[test]
+    fn extract_ignores_ipv6_neigh_lines() {
+        // `ip neigh` lists IPv6 neighbours too — link-local ones are on every
+        // Linux box — and the hosts table is keyed by IPv4. Rejecting the
+        // address is what keeps the line out; its lladdr looks like any other.
+        let line = "fe80::1 dev eth0 lladdr 02:fc:00:00:00:05 STALE";
+        assert_eq!(extract_ipv4_from_arp_line(line), None);
+    }
+
+    #[test]
     fn extract_mac_ignores_incomplete_arp_lines() {
         let line = "? (192.168.1.10) at (incomplete) on en0 ifscope [ethernet]";
         assert_eq!(extract_mac_from_arp_line(line), None);
