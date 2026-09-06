@@ -1309,7 +1309,7 @@ async fn read_arp_table() -> HashMap<String, String> {
         });
 
         let Some(output) = output else {
-            log::debug!("no neighbour table command available");
+            log::debug!("no neighbour table command succeeded (tried {NEIGHBOUR_COMMANDS:?})");
             return table;
         };
 

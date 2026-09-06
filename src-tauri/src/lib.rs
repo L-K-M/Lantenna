@@ -31,8 +31,12 @@ pub fn run() {
     tauri::Builder::default()
         .manage(app_state)
         .setup(|app| {
-            if let Some(window) = app.get_webview_window("main") {
-                window_activity::track(&window)?;
+            match app.get_webview_window("main") {
+                Some(window) => window_activity::track(&window)?,
+                // Only reachable if the window label in tauri.conf.json stops
+                // being "main"; say so rather than leaving the title bar stuck
+                // on its startup state with nothing in the log.
+                None => log::warn!("no \"main\" window; window activity not tracked"),
             }
             Ok(())
         })
