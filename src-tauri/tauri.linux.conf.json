@@ -3,10 +3,11 @@
   "bundle": {
     "targets": ["deb", "appimage"],
     "category": "Utility",
-    "longDescription": "Lantenna scans the local network and lists the hosts it finds, with their host names, MAC vendors, inferred device types and open ports, in a System 7 interface.",
+    "longDescription": "Lantenna scans the local network and lists the hosts it\nfinds, with their host names, MAC vendors, inferred device types and open\nports, in a System 7 interface.",
     "linux": {
       "deb": {
-        "depends": ["iputils-ping", "iproute2"]
+        "depends": ["iputils-ping", "iproute2"],
+        "section": "net"
       }
     }
   }

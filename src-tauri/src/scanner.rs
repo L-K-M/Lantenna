@@ -1278,13 +1278,14 @@ fn extract_mac_from_arp_line(line: &str) -> Option<String> {
     })
 }
 
-/// The commands that can print a neighbour table, in the order they are tried.
-///
-/// Linux leads with `ip neigh`: `arp` lives in `net-tools`, which stock Ubuntu
-/// has not installed since 20.04, so a `.deb` install would otherwise find no
-/// MAC addresses at all — losing vendor lookup, device-type inference and Wake
-/// on LAN. `ip` ships in `iproute2`, which is essential on every Debian-family
-/// system. `arp` stays as the fallback for distributions that still prefer it.
+// The commands that can print a neighbour table, in the order they are tried.
+//
+// Linux leads with `ip neigh`: `arp` lives in `net-tools`, which Ubuntu has not
+// installed by default for several releases, so a `.deb` install would
+// otherwise find no MAC addresses at all — losing vendor lookup, device-type
+// inference and Wake on LAN. `ip` ships in `iproute2`, which carries Debian's
+// `Priority: important`, so every standard install has it; `arp` stays as the
+// fallback for systems that ship it instead.
 #[cfg(target_os = "windows")]
 const NEIGHBOUR_COMMANDS: &[(&str, &str)] = &[("arp", "-a")];
 
@@ -1298,23 +1299,24 @@ async fn read_arp_table() -> HashMap<String, String> {
     tokio::task::spawn_blocking(move || {
         let mut table = HashMap::new();
 
-        // Take the first command that exists and succeeds. Record why each
-        // other one didn't, so the warning below names a cause instead of
-        // just the list of things that were tried.
+        // Take the first command that exists and succeeds, keeping every
+        // failure's cause: the warning below is the only one anybody sees, so
+        // it has to carry them itself.
+        let mut failures = Vec::new();
         let output = NEIGHBOUR_COMMANDS.iter().find_map(|(program, argument)| {
             match StdCommand::new(program).arg(argument).output() {
                 Ok(output) if output.status.success() => Some(output),
                 Ok(output) => {
-                    log::debug!(
-                        "{program} {argument} exited with {}: {}",
+                    failures.push(format!(
+                        "`{program} {argument}` exited with {}: {}",
                         output.status,
                         String::from_utf8_lossy(&output.stderr).trim()
-                    );
+                    ));
                     None
                 }
                 // A missing binary surfaces here rather than as a status.
                 Err(error) => {
-                    log::debug!("could not run {program} {argument}: {error}");
+                    failures.push(format!("`{program} {argument}` did not run: {error}"));
                     None
                 }
             }
@@ -1322,11 +1324,17 @@ async fn read_arp_table() -> HashMap<String, String> {
 
         let Some(output) = output else {
             // Losing the neighbour table costs every MAC, and with it vendor
-            // lookup, device-type inference and Wake on LAN — too much to
-            // report only at debug level.
-            log::warn!("no neighbour table command succeeded (tried {NEIGHBOUR_COMMANDS:?})");
+            // lookup, device-type inference and Wake on LAN.
+            log::warn!(
+                "no neighbour table command succeeded: {}",
+                failures.join("; ")
+            );
             return table;
         };
+
+        if !failures.is_empty() {
+            log::debug!("neighbour table read after {}", failures.join("; "));
+        }
 
         let content = String::from_utf8_lossy(&output.stdout);
         for line in content.lines() {

@@ -33,11 +33,12 @@ install it (double-click it, or run
 `sudo apt install ./Lantenna_<version>_amd64.deb`), **or** download the
 `.AppImage`, mark it executable (`chmod +x`), and run it directly.
 
-Lantenna discovers hosts by shelling out to `ping` and reading the kernel's
-neighbour table with `ip neigh`, so the `.deb` depends on `iputils-ping` and
-`iproute2`. It falls back to `arp` for systems that still ship it; `net-tools`
-is deliberately not a dependency, since `iproute2` is present on every
-Debian-family install and the fallback is there for other Unixes.
+Lantenna discovers hosts by shelling out to `ping` and, on Linux, reading the
+kernel's neighbour table with `ip neigh`, so the `.deb` depends on
+`iputils-ping` and `iproute2`. If `ip` is missing it falls back to `arp`, which
+is why `net-tools` is deliberately not a dependency: `iproute2` carries Debian's
+`Priority: important`, so the fallback should never be needed on a
+Debian-family system. (macOS reads the table with `arp` directly.)
 
 ## Installation
 
