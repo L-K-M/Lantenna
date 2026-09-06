@@ -31,11 +31,18 @@ pub fn run() {
     tauri::Builder::default()
         .manage(app_state)
         .setup(|app| {
+            // Tracking only drives title-bar styling, so neither failure is
+            // worth refusing to launch over: propagating out of setup() would
+            // abort the whole app. Both arms leave the title bar on its
+            // startup state and say why.
             match app.get_webview_window("main") {
-                Some(window) => window_activity::track(&window)?,
+                Some(window) => {
+                    if let Err(error) = window_activity::track(&window) {
+                        log::error!("window activity not tracked: {error}");
+                    }
+                }
                 // Only reachable if the window label in tauri.conf.json stops
-                // being "main"; say so rather than leaving the title bar stuck
-                // on its startup state with nothing in the log.
+                // being "main".
                 None => log::warn!("no \"main\" window; window activity not tracked"),
             }
             Ok(())

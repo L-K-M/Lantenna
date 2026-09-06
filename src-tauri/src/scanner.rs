@@ -1309,7 +1309,10 @@ async fn read_arp_table() -> HashMap<String, String> {
         });
 
         let Some(output) = output else {
-            log::debug!("no neighbour table command succeeded (tried {NEIGHBOUR_COMMANDS:?})");
+            // Losing the neighbour table costs every MAC, and with it vendor
+            // lookup, device-type inference and Wake on LAN — too much to
+            // report only at debug level.
+            log::warn!("no neighbour table command succeeded (tried {NEIGHBOUR_COMMANDS:?})");
             return table;
         };
 
