@@ -45,8 +45,9 @@ root — all cargo commands run from `src-tauri/` (the CI steps set
 
 The Ubuntu jobs install the Tauri v2 Linux system packages first —
 `libwebkit2gtk-4.1-dev` (the 4.1 series; Tauri v1 projects use `-4.0-dev`
-instead) plus the usual build tools; the release workflow additionally installs
-`patchelf` and `xdg-utils` for the AppImage bundler.
+instead) plus the usual build tools. The release workflow also installs `patchelf`
+and `xdg-utils`, following Tauri's GitHub Actions guide; the AppImage builds
+without them (linuxdeploy ships its own `patchelf`).
 
 ### Running CI checks locally
 

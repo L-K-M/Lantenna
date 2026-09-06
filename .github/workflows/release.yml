@@ -67,9 +67,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Tauri v2 needs the webkit2gtk 4.1 series to compile, plus patchelf and
-      # xdg-utils for the AppImage bundler (linuxdeploy's GTK plugin shells out
-      # to xdg-open); macOS runners have everything out of the box.
+      # Tauri v2 needs the webkit2gtk 4.1 series to compile; macOS runners have
+      # everything out of the box. patchelf and xdg-utils follow Tauri's GitHub
+      # Actions guide, but the AppImage builds without them: linuxdeploy ships
+      # its own patchelf, and its GTK plugin never calls xdg-open.
       - name: Install Tauri system dependencies (Linux)
         if: startsWith(matrix.platform, 'ubuntu')
         run: |
