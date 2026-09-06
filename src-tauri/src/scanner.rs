@@ -1298,14 +1298,26 @@ async fn read_arp_table() -> HashMap<String, String> {
     tokio::task::spawn_blocking(move || {
         let mut table = HashMap::new();
 
-        // Take the first command that exists and succeeds; a missing binary
-        // reports an error here rather than a non-zero status.
+        // Take the first command that exists and succeeds. Record why each
+        // other one didn't, so the warning below names a cause instead of
+        // just the list of things that were tried.
         let output = NEIGHBOUR_COMMANDS.iter().find_map(|(program, argument)| {
-            StdCommand::new(program)
-                .arg(argument)
-                .output()
-                .ok()
-                .filter(|output| output.status.success())
+            match StdCommand::new(program).arg(argument).output() {
+                Ok(output) if output.status.success() => Some(output),
+                Ok(output) => {
+                    log::debug!(
+                        "{program} {argument} exited with {}: {}",
+                        output.status,
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    );
+                    None
+                }
+                // A missing binary surfaces here rather than as a status.
+                Err(error) => {
+                    log::debug!("could not run {program} {argument}: {error}");
+                    None
+                }
+            }
         });
 
         let Some(output) = output else {

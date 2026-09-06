@@ -2,6 +2,8 @@ import { currentMonitor, getCurrentWindow, LogicalSize } from '@tauri-apps/api/w
 import { invoke } from '@tauri-apps/api/core';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 
+// Must match ACTIVITY_CHANGED in src-tauri/src/window_activity.rs; nothing
+// checks this at build time.
 const ACTIVITY_CHANGED = 'window-activity-changed';
 
 export class WindowManager {
@@ -35,6 +37,9 @@ export class WindowManager {
         }
 
         unlisten = stop;
+
+        // An event already told us the current state; skip the round trip.
+        if (receivedEvent) return;
 
         const active = await invoke<boolean>('is_window_active');
         if (!disposed && !receivedEvent) onChange(active);

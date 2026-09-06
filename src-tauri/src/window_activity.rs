@@ -3,6 +3,8 @@ use tauri::{Emitter, WebviewWindow};
 #[cfg(target_os = "linux")]
 use gtk::{gdk::WindowState, glib::Propagation, prelude::*};
 
+// Must match ACTIVITY_CHANGED in src/lib/windowManager.ts; nothing checks
+// this at build time.
 const ACTIVITY_CHANGED: &str = "window-activity-changed";
 
 #[cfg(target_os = "linux")]

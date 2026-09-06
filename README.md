@@ -34,8 +34,10 @@ install it (double-click it, or run
 `.AppImage`, mark it executable (`chmod +x`), and run it directly.
 
 Lantenna discovers hosts by shelling out to `ping` and reading the kernel's
-neighbour table (`ip neigh`, falling back to `arp`), so the `.deb` depends on
-`iputils-ping` and `iproute2`.
+neighbour table with `ip neigh`, so the `.deb` depends on `iputils-ping` and
+`iproute2`. It falls back to `arp` for systems that still ship it; `net-tools`
+is deliberately not a dependency, since `iproute2` is present on every
+Debian-family install and the fallback is there for other Unixes.
 
 ## Installation
 
