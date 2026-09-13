@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { getCurrentWindow } from '@tauri-apps/api/window';
   import {
     Checkbox,
     ErrorBanner,
@@ -98,19 +97,18 @@
 
   $: windowStyle = systemColors ? getSystem7WindowStyle(systemColors) : '';
 
-  const appWindow = getCurrentWindow();
   const windowManager = new WindowManager();
 
   onMount(() => {
     scanStore.init();
     void loadSystemColors();
 
-    const unlistenFocus = appWindow.onFocusChanged(({ payload: focused }) => {
-      windowFocused.set(focused);
+    const unlistenActivity = windowManager.subscribeActivity((active) => {
+      windowFocused.set(active);
     });
 
     return () => {
-      unlistenFocus.then((fn) => fn());
+      unlistenActivity();
       scanStore.destroy();
     };
   });

@@ -4,10 +4,12 @@ mod scanner;
 mod storage;
 mod system_colors;
 mod updates;
+mod window_activity;
 mod wol;
 
 use commands::{AppState, ScanManager};
 use std::sync::Arc;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -28,6 +30,23 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(app_state)
+        .setup(|app| {
+            // Tracking only drives title-bar styling, so neither failure is
+            // worth refusing to launch over: propagating out of setup() would
+            // abort the whole app. Both arms leave the title bar on its
+            // startup state and say why.
+            match app.get_webview_window("main") {
+                Some(window) => {
+                    if let Err(error) = window_activity::track(&window) {
+                        log::error!("window activity not tracked: {error}");
+                    }
+                }
+                // Only reachable if the window label in tauri.conf.json stops
+                // being "main".
+                None => log::warn!("no \"main\" window; window activity not tracked"),
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::get_network_interfaces,
             commands::start_scan,
@@ -39,6 +58,7 @@ pub fn run() {
             updates::check_self_update,
             updates::open_release_url,
             commands::wake_host,
+            window_activity::is_window_active,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
