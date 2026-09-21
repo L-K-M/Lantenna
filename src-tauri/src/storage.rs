@@ -203,7 +203,7 @@ fn prune_fingerprint_cache(cache: &mut HashMap<String, DeviceFingerprint>) {
         })
         .collect::<Vec<(String, i64)>>();
 
-    ranked_keys.sort_by(|a, b| b.1.cmp(&a.1));
+    ranked_keys.sort_by_key(|entry| std::cmp::Reverse(entry.1));
 
     let keep = ranked_keys
         .into_iter()

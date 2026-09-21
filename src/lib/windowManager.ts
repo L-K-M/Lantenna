@@ -1,10 +1,58 @@
 import { currentMonitor, getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
+import { invoke } from '@tauri-apps/api/core';
+import type { UnlistenFn } from '@tauri-apps/api/event';
+
+// Must match ACTIVITY_CHANGED in src-tauri/src/window_activity.rs; nothing
+// checks this at build time.
+const ACTIVITY_CHANGED = 'window-activity-changed';
 
 export class WindowManager {
   private static readonly TITLE_BAR_HEIGHT = 36;
   private savedWindowSize: { width: number; height: number } | null = null;
   private isShaded = false;
   private appWindow = getCurrentWindow();
+
+  /**
+   * Reports whether the window draws as active. On Linux that is GTK's
+   * decoration state rather than keyboard focus, so dragging the custom title
+   * bar no longer greys it out mid-drag.
+   */
+  subscribeActivity(onChange: (active: boolean) => void): UnlistenFn {
+    let disposed = false;
+    let receivedEvent = false;
+    let unlisten: UnlistenFn | undefined;
+
+    // Listen before reading the startup state; a newer event beats that snapshot.
+    void this.appWindow
+      .listen<boolean>(ACTIVITY_CHANGED, ({ payload }) => {
+        if (disposed) return;
+
+        receivedEvent = true;
+        onChange(payload);
+      })
+      .then(async (stop) => {
+        if (disposed) {
+          stop();
+          return;
+        }
+
+        unlisten = stop;
+
+        // An event already told us the current state; skip the round trip.
+        if (receivedEvent) return;
+
+        const active = await invoke<boolean>('is_window_active');
+        if (!disposed && !receivedEvent) onChange(active);
+      })
+      .catch((error) => {
+        console.error('Failed to track window activity:', error);
+      });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }
 
   async close(): Promise<void> {
     await this.appWindow.close();
