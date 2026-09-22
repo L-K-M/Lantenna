@@ -1,5 +1,8 @@
 # Lantenna
 
+> [!IMPORTANT]
+> LLM disclosure: This codebase was written with substantial help from large language models: AI coding agents working from the [`AGENTS.md`](AGENTS.md) brief in this repo.
+
 Lantenna is a Tauri-based Mac OS X program that scans the local LAN and displays discovered hosts, host names, and open ports.
 
 **Latest release:** v<!-- version -->1.0.1<!-- /version --> · [Download](https://github.com/L-K-M/Lantenna/releases/latest)
