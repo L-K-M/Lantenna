@@ -1948,7 +1948,9 @@ enum BannerKind {
 
 /// Plain-HTTP ports whose `Server` header is worth reading. TLS ports (443,
 /// 5001, 8443, ...) are deliberately absent.
-const HTTP_BANNER_PORTS: [u16; 9] = [80, 3000, 5000, 8000, 8008, 8080, 8081, 8888, 9000];
+const HTTP_BANNER_PORTS: [u16; 11] = [
+    80, 631, 3000, 5000, 8000, 8008, 8080, 8081, 8123, 8888, 9000,
+];
 
 const GREETING_READ_TIMEOUT: Duration = Duration::from_millis(500);
 const HTTP_READ_TIMEOUT: Duration = Duration::from_millis(1000);
@@ -1957,7 +1959,7 @@ const MAX_BANNER_CHARS: usize = 200;
 
 fn banner_kind_for_port(port: u16) -> BannerKind {
     match port {
-        21 | 22 => BannerKind::ServerGreeting,
+        21 | 22 | 25 | 587 => BannerKind::ServerGreeting,
         port if HTTP_BANNER_PORTS.contains(&port) => BannerKind::HttpServerHeader,
         _ => BannerKind::None,
     }
@@ -2564,6 +2566,8 @@ mod tests {
     fn banner_kind_skips_tls_ports() {
         assert_eq!(banner_kind_for_port(22), BannerKind::ServerGreeting);
         assert_eq!(banner_kind_for_port(21), BannerKind::ServerGreeting);
+        assert_eq!(banner_kind_for_port(25), BannerKind::ServerGreeting);
+        assert_eq!(banner_kind_for_port(8123), BannerKind::HttpServerHeader);
         assert_eq!(banner_kind_for_port(8080), BannerKind::HttpServerHeader);
         for tls_port in [443, 5001, 8443] {
             assert_eq!(banner_kind_for_port(tls_port), BannerKind::None);
