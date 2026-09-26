@@ -97,7 +97,8 @@ The `FingerbankQueryParams` struct enables future integration with DHCP fingerpr
 
 - Fingerprints are rebuilt from the latest scan every time, so device type,
   OS guess and notes follow the current open ports. Only network lookups are
-  cached: OUI vendors per OUI, and Fingerbank answers per MAC for 90 days.
+  cached: OUI vendors per OUI, and Fingerbank answers per MAC for 90 days (7
+  days for "no match" answers, so newly catalogued devices are picked up).
 - Vendor lookups on maclookup.app send only the OUI (first three octets), never
   the full MAC.
 - Locally administered MACs (bit `0x02` of the first octet: randomized
