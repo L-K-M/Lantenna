@@ -613,7 +613,7 @@ function createScanStore() {
         }));
         scanProgress.update((value) => ({
           ...value,
-          progress: value.progress ? { ...value.progress, running: false } : null
+          progress: value.progress ? { ...value.progress, running: false, current_ip: null } : null
         }));
         notifications.add(event.payload.message, 'error');
       })
@@ -810,6 +810,7 @@ function createScanStore() {
 
       const previousNewHostIps = currentState.newHostIps;
       const previousProgress = currentProgress.progress;
+      const previousHostScanProgress = currentProgress.hostScanProgress;
       const maxHosts = selectedInterface.host_count > 0 ? Math.min(selectedInterface.host_count, MAX_SCAN_HOSTS) : null;
 
       if (selectedInterface.host_count > MAX_SCAN_HOSTS) {
@@ -869,7 +870,7 @@ function createScanStore() {
           pendingIps: [],
           newHostIps: previousNewHostIps
         }));
-        scanProgress.update((value) => ({ ...value, progress: previousProgress }));
+        scanProgress.set({ progress: previousProgress, hostScanProgress: previousHostScanProgress });
         notifications.add(message, 'error');
       }
     },

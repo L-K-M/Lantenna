@@ -105,6 +105,8 @@
 
     $: sortedHosts = sortHosts(hosts, sortField, sortDirection, favoriteSet, customNames);
 
+    // `_names` is deliberately unused: passing `customNames` in the `$:`
+    // statement above is what re-sorts the table when a custom name changes.
     function sortHosts(
         list: Host[],
         field: SortField,
