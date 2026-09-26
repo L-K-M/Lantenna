@@ -17,8 +17,16 @@ const vncPorts = new Set([5900, 5901, 5902]);
 const telnetPorts = new Set([23, 2323]);
 const rtspPorts = new Set([554, 8554]);
 
+const IPV4_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/;
+
 /** The URL a user would open for an open port, or null when there is none. */
 export function getPortTarget(hostIp: string, port: number, service: string | null): PortTarget | null {
+  // These URLs go to the OS opener; only interpolate a plain IPv4 address
+  // (host records can also come from favorites saved in localStorage).
+  if (!IPV4_LITERAL.test(hostIp)) {
+    return null;
+  }
+
   const normalized = (service || '').toLowerCase();
   const buildUrl = (
     scheme: 'http' | 'https' | 'ftp' | 'ssh' | 'telnet' | 'rtsp' | 'vnc',
@@ -98,18 +106,25 @@ export function getPortTarget(hostIp: string, port: number, service: string | nu
 }
 
 /**
- * What opening a host should do: its web UI when it has one (HTTP before
- * HTTPS, since devices usually redirect), otherwise its first openable port.
+ * Targets a double-click or Return may open, in order of preference: the web
+ * UI (HTTP before HTTPS, since devices usually redirect), then file sharing,
+ * remote login and screen sharing. Telnet, FTP and RTSP stay link-only in the
+ * inspector; launching those handlers from a double-click would surprise.
  */
+const PRIMARY_TARGET_ORDER: PortTarget['label'][] = ['HTTP', 'HTTPS', 'SMB', 'SSH', 'VNC'];
+
+/** What opening a host should do, or null when nothing suitable is open. */
 export function primaryPortTarget(host: Host): PortTarget | null {
   const targets = host.open_ports
     .map((port) => getPortTarget(host.ip, port.port, port.service))
     .filter((target): target is PortTarget => target !== null);
 
-  return (
-    targets.find((target) => target.label === 'HTTP') ||
-    targets.find((target) => target.label === 'HTTPS') ||
-    targets[0] ||
-    null
-  );
+  for (const label of PRIMARY_TARGET_ORDER) {
+    const target = targets.find((item) => item.label === label);
+    if (target) {
+      return target;
+    }
+  }
+
+  return null;
 }

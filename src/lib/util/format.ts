@@ -54,7 +54,7 @@ export function normalizeDisplayText(value: string): string {
   return value
     .normalize('NFKC')
     .replace(/[\u0000-\u001F\u007F]/g, '')
-    .replace(/[​-‍﻿]/g, '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
     .replace(/\s+,/g, ',')
     .replace(/,(?=\p{L})/gu, ', ')
     .replace(/\s+/g, ' ')
