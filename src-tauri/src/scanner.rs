@@ -2219,6 +2219,12 @@ fn parse_dns_name(data: &[u8], start: usize) -> Option<(String, usize)> {
                     return None;
                 }
 
+                // DNS-SD forbids ASCII control characters in names (RFC 6763,
+                // section 4.1.1); a label carrying them is malformed.
+                if label.iter().any(|byte| byte.is_ascii_control()) {
+                    return None;
+                }
+
                 if !name.is_empty() {
                     name.push('.');
                 }
@@ -2473,6 +2479,9 @@ mod tests {
     fn run_with_deadline<T: Send + 'static>(
         parse: impl FnOnce() -> T + Send + 'static,
     ) -> Option<T> {
+        // On timeout the helper thread keeps running (threads can't be killed).
+        // That's fine for pure parsing code, but don't reuse this for code
+        // that holds locks.
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let _ = sender.send(parse());
@@ -2534,6 +2543,27 @@ mod tests {
         packet.extend_from_slice(&[0x05, b'a', b'b']);
 
         assert_eq!(parse_dns_name(&packet, 12), None);
+    }
+
+    #[test]
+    fn parse_dns_name_rejects_control_characters() {
+        let mut packet = mdns_response_header(1);
+        packet.extend_from_slice(&[0x04, b't', 0x01, b'v', 0x1B, 0x00]);
+
+        assert_eq!(parse_dns_name(&packet, 12), None);
+    }
+
+    #[test]
+    fn parse_dns_name_keeps_utf8_instance_names() {
+        let mut packet = mdns_response_header(1);
+        let label = "Küche TV".as_bytes();
+        packet.push(label.len() as u8);
+        packet.extend_from_slice(label);
+        packet.push(0);
+
+        let (name, _) = parse_dns_name(&packet, 12).expect("valid UTF-8 name");
+
+        assert_eq!(name, "Küche TV");
     }
 
     #[test]
