@@ -29,7 +29,7 @@
     '**Interface**\n- Choose the adapter connected to the network you want to scan.\n- If there are multiple entries with the same name, pick the one with the matching subnet.\n- Scans are limited to the selected interface subnet.';
 
   const approachHelpText =
-    '**Fast**\n- Focused common TCP ports + a few high-signal fingerprint ports\n- TCP-only discovery\n- Fastest, lower coverage\n\n**Balanced** (recommended)\n- Expanded service-port set + extra device-signature ports\n- Hybrid discovery (TCP + ICMP fallback)\n- Best default for most networks\n\n**Thorough**\n- TCP ports `1-2048` + additional high-signal ports above `2048`\n- Hybrid discovery (TCP + ICMP fallback)\n- Slowest, highest coverage\n\n*Note: very large subnets are capped to 4096 hosts per scan.*';
+    '**Fast**\n- Focused common TCP ports + a few high-signal fingerprint ports\n- TCP-only discovery\n- Fastest, lower coverage\n\n**Balanced** (recommended)\n- Expanded service-port set + extra device-signature ports\n- Hybrid discovery (TCP + ICMP fallback)\n- Best default for most networks\n\n**Thorough**\n- TCP ports `1-2048` + every Balanced port above `2048`\n- Hybrid discovery (TCP + ICMP fallback)\n- Slowest, highest coverage\n\n*Note: very large subnets are capped to 4096 hosts per scan.*';
 
   function interfaceLabel(item: NetworkInterface): string {
     return `${item.name} (${item.subnet})`;

@@ -19,7 +19,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, OnceLock,
 };
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::{Mutex, Semaphore};
@@ -680,6 +680,23 @@ async fn scan_port(
     timeout_duration: Duration,
     connection_semaphore: Arc<Semaphore>,
 ) -> Option<PortProbeOutcome> {
+    probe_port(
+        ip,
+        port,
+        banner_kind_for_port(port),
+        timeout_duration,
+        connection_semaphore,
+    )
+    .await
+}
+
+async fn probe_port(
+    ip: Ipv4Addr,
+    port: u16,
+    banner_kind: BannerKind,
+    timeout_duration: Duration,
+    connection_semaphore: Arc<Semaphore>,
+) -> Option<PortProbeOutcome> {
     const MAX_CONNECT_ATTEMPTS: usize = 2;
 
     let socket = SocketAddr::new(IpAddr::V4(ip), port);
@@ -688,7 +705,9 @@ async fn scan_port(
     for attempt in 1..=MAX_CONNECT_ATTEMPTS {
         match timeout(timeout_duration, TcpStream::connect(socket)).await {
             Ok(Ok(mut stream)) => {
-                let banner = grab_banner_for_port(ip, port, Duration::from_millis(500)).await;
+                // Read the banner on this connection rather than opening a
+                // second one: that doubled the sockets per open port.
+                let banner = read_banner(&mut stream, ip, banner_kind).await;
                 if let Err(error) = stream.shutdown().await {
                     log::debug!(
                         "graceful TCP shutdown failed for {}:{}: {}",
@@ -1116,7 +1135,7 @@ fn extract_os_from_banners(ports: &[PortInfo]) -> Option<(Option<String>, Option
                 if let Some((software, os)) = parse_ssh_banner(banner) {
                     return Some((software, os));
                 }
-            } else if port.port == 80 || port.port == 443 || port.port == 8080 {
+            } else if banner_kind_for_port(port.port) == BannerKind::HttpServerHeader {
                 if let Some((software, os)) = parse_http_server_banner(banner) {
                     return Some((software, os));
                 }
@@ -1765,46 +1784,67 @@ fn number_at_paths(value: &Value, paths: Vec<Vec<&str>>) -> Option<f64> {
     None
 }
 
-fn append_signature_ports(mut ports: Vec<u16>, extras: &[u16]) -> Vec<u16> {
-    for port in extras {
-        if !ports.contains(port) {
-            ports.push(*port);
-        }
+/// Ports every profile probes because the device heuristics and icons key
+/// off them: web UIs, SSH, SMB, RDP, printers (IPP, JetDirect), cameras
+/// (RTSP), Apple (AFP, AirPlay, iOS sync), Google Cast, Plex, NAS admin,
+/// MQTT and Home Assistant.
+const SIGNATURE_PORTS: [u16; 19] = [
+    22, 80, 443, 445, 548, 554, 631, 1883, 3389, 5000, 5001, 7000, 8009, 8080, 8123, 8443, 9100,
+    32400, 62078,
+];
+
+/// Common services added by Quick on top of the signature ports.
+const QUICK_EXTRA_PORTS: [u16; 10] = [21, 23, 53, 110, 135, 139, 143, 515, 5900, 8000];
+
+/// Services added by Standard (and Deep) on top of Quick. TCP only: UDP-only
+/// services such as DHCP, NTP, SNMP, SSDP and mDNS can't answer a TCP probe.
+const STANDARD_EXTRA_PORTS: [u16; 42] = [
+    25, 88, 111, 119, 389, 465, 587, 636, 873, 993, 995, 1080, 1194, 1433, 1521, 1723, 2049, 2375,
+    3000, 3306, 3689, 5060, 5432, 5672, 6053, 6379, 6443, 7001, 8008, 8081, 8291, 8554, 8728, 8729,
+    8883, 8888, 9000, 9090, 9200, 27017, 37777, 37778,
+];
+
+/// Deep scans every port up to this one, plus the Standard ports above it.
+const DEEP_RANGE_END: u16 = 2048;
+
+/// Port list for a profile. Each profile probes everything the lighter ones
+/// do, so a deeper scan never loses a service a lighter one found.
+fn ports_for_profile(profile: &PortProfile) -> Vec<u16> {
+    let mut ports = SIGNATURE_PORTS.to_vec();
+    ports.extend_from_slice(&QUICK_EXTRA_PORTS);
+
+    if matches!(profile, PortProfile::Standard | PortProfile::Deep) {
+        ports.extend_from_slice(&STANDARD_EXTRA_PORTS);
+    }
+
+    if matches!(profile, PortProfile::Deep) {
+        ports.extend(1..=DEEP_RANGE_END);
     }
 
     ports.sort_unstable();
+    ports.dedup();
     ports
-}
-
-fn ports_for_profile(profile: &PortProfile) -> Vec<u16> {
-    match profile {
-        PortProfile::Quick => append_signature_ports(
-            vec![
-                20, 21, 22, 23, 53, 80, 110, 139, 143, 443, 445, 515, 548, 631, 135, 3389, 5000,
-                5353, 5900, 8000, 8080, 8443,
-            ],
-            &[554, 5001, 62078, 32400],
-        ),
-        PortProfile::Standard => append_signature_ports(
-            vec![
-                20, 21, 22, 23, 25, 53, 67, 68, 69, 80, 88, 110, 111, 119, 123, 135, 137, 138, 139,
-                143, 161, 389, 443, 445, 465, 500, 514, 515, 548, 587, 631, 636, 873, 993, 995,
-                1080, 1194, 1433, 1521, 1723, 1812, 1900, 2049, 2375, 3000, 3306, 3389, 5000, 5060,
-                5353, 5432, 5672, 5900, 6379, 6443, 7001, 8000, 8080, 8081, 8443, 8888, 9000, 9090,
-                9200, 27017,
-            ],
-            &[554, 5001, 62078, 32400, 8291, 8728, 8729, 37777, 37778],
-        ),
-        PortProfile::Deep => append_signature_ports(
-            (1..=2048).collect(),
-            &[5000, 5001, 62078, 32400, 8291, 8728, 8729, 37777, 37778],
-        ),
-    }
 }
 
 fn service_name(port: u16) -> Option<&'static str> {
     match port {
         20 => Some("ftp-data"),
+        88 => Some("kerberos"),
+        119 => Some("nntp"),
+        873 => Some("rsync"),
+        1080 => Some("socks"),
+        1194 => Some("openvpn"),
+        1883 => Some("mqtt"),
+        3689 => Some("daap"),
+        6053 => Some("esphome"),
+        7000 => Some("airplay"),
+        8008 => Some("http-alt"),
+        8009 => Some("cast"),
+        8081 => Some("http-alt"),
+        8123 => Some("home-assistant"),
+        8883 => Some("mqtt-tls"),
+        8888 => Some("http-alt"),
+        9100 => Some("jetdirect"),
         21 => Some("ftp"),
         22 => Some("ssh"),
         23 => Some("telnet"),
@@ -1894,89 +1934,112 @@ pub struct DiscoveredService {
     pub properties: HashMap<String, String>,
 }
 
-async fn grab_ssh_banner(ip: Ipv4Addr, port: u16, timeout_duration: Duration) -> Option<String> {
-    let socket = SocketAddr::new(IpAddr::V4(ip), port);
-    let stream = timeout(timeout_duration, TcpStream::connect(socket))
-        .await
-        .ok()?
-        .ok()?;
-    let (reader, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(reader);
-    let mut line = String::new();
-    let result = timeout(Duration::from_millis(500), reader.read_line(&mut line))
-        .await
-        .ok()?
-        .ok()?;
-    if result > 0 {
-        let banner = line.trim().to_string();
-        if banner.starts_with("SSH-") {
-            let _ = writer.shutdown().await;
-            return Some(banner);
-        }
-    }
-    None
+/// What to read from a port right after it accepts the probe connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BannerKind {
+    /// The server speaks first (SSH, FTP): read its greeting line.
+    ServerGreeting,
+    /// Send a plain-HTTP `HEAD` and read the `Server` header.
+    HttpServerHeader,
+    /// Nothing to read. This includes TLS ports, where a plaintext request
+    /// only burns the read timeout.
+    None,
 }
 
-async fn grab_http_banner(ip: Ipv4Addr, port: u16, timeout_duration: Duration) -> Option<String> {
-    let socket = SocketAddr::new(IpAddr::V4(ip), port);
-    let mut stream = timeout(timeout_duration, TcpStream::connect(socket))
-        .await
-        .ok()?
-        .ok()?;
-    let request = format!(
-        "HEAD / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        ip
-    );
-    let _ = stream.write_all(request.as_bytes()).await;
-    let mut response = vec![0u8; 4096];
-    let n = timeout(Duration::from_millis(1000), stream.read(&mut response))
-        .await
-        .ok()?
-        .ok()?;
-    if let Ok(text) = std::str::from_utf8(&response[..n]) {
-        for line in text.lines() {
-            if let Some(server) = line.strip_prefix("Server: ") {
-                let _ = stream.shutdown().await;
-                return Some(server.trim().to_string());
+/// Plain-HTTP ports whose `Server` header is worth reading. TLS ports (443,
+/// 5001, 8443, ...) are deliberately absent.
+const HTTP_BANNER_PORTS: [u16; 9] = [80, 3000, 5000, 8000, 8008, 8080, 8081, 8888, 9000];
+
+const GREETING_READ_TIMEOUT: Duration = Duration::from_millis(500);
+const HTTP_READ_TIMEOUT: Duration = Duration::from_millis(1000);
+const MAX_BANNER_READ_BYTES: usize = 8 * 1024;
+const MAX_BANNER_CHARS: usize = 200;
+
+fn banner_kind_for_port(port: u16) -> BannerKind {
+    match port {
+        21 | 22 => BannerKind::ServerGreeting,
+        port if HTTP_BANNER_PORTS.contains(&port) => BannerKind::HttpServerHeader,
+        _ => BannerKind::None,
+    }
+}
+
+async fn read_banner(stream: &mut TcpStream, ip: Ipv4Addr, kind: BannerKind) -> Option<String> {
+    match kind {
+        BannerKind::None => None,
+        BannerKind::ServerGreeting => {
+            let data =
+                read_until(stream, GREETING_READ_TIMEOUT, |data| data.contains(&b'\n')).await;
+            let text = String::from_utf8_lossy(&data);
+            let line = text.lines().next()?.trim();
+            // SSH identification string, or an FTP/SMTP-style "220" greeting.
+            if line.starts_with("SSH-") || line.starts_with("220") {
+                sanitize_banner(line)
+            } else {
+                None
             }
         }
-    }
-    None
-}
-
-async fn grab_ftp_banner(ip: Ipv4Addr, port: u16, timeout_duration: Duration) -> Option<String> {
-    let socket = SocketAddr::new(IpAddr::V4(ip), port);
-    let stream = timeout(timeout_duration, TcpStream::connect(socket))
-        .await
-        .ok()?
-        .ok()?;
-    let (reader, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(reader);
-    let mut line = String::new();
-    let result = timeout(Duration::from_millis(500), reader.read_line(&mut line))
-        .await
-        .ok()?
-        .ok()?;
-    if result > 0 && line.starts_with("220 ") {
-        let _ = writer.shutdown().await;
-        return Some(line.trim().to_string());
-    }
-    None
-}
-
-async fn grab_banner_for_port(
-    ip: Ipv4Addr,
-    port: u16,
-    timeout_duration: Duration,
-) -> Option<String> {
-    match port {
-        22 => grab_ssh_banner(ip, port, timeout_duration).await,
-        21 => grab_ftp_banner(ip, port, timeout_duration).await,
-        80 | 443 | 8080 | 8443 | 8000 | 3000 | 5000 | 9000 => {
-            grab_http_banner(ip, port, timeout_duration).await
+        BannerKind::HttpServerHeader => {
+            let request = format!(
+                "HEAD / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                ip
+            );
+            stream.write_all(request.as_bytes()).await.ok()?;
+            let data = read_until(stream, HTTP_READ_TIMEOUT, |data| {
+                data.windows(4).any(|window| window == b"\r\n\r\n")
+            })
+            .await;
+            parse_http_server_header(&String::from_utf8_lossy(&data))
+                .and_then(|server| sanitize_banner(&server))
         }
-        _ => None,
     }
+}
+
+/// Reads from `stream` until `done` says the data is complete, the peer
+/// closes, `MAX_BANNER_READ_BYTES` arrive, or `budget` runs out, and returns
+/// whatever arrived.
+async fn read_until(
+    stream: &mut TcpStream,
+    budget: Duration,
+    done: impl Fn(&[u8]) -> bool,
+) -> Vec<u8> {
+    let deadline = tokio::time::Instant::now() + budget;
+    let mut data = Vec::new();
+    let mut chunk = [0u8; 1024];
+
+    while data.len() < MAX_BANNER_READ_BYTES && !done(&data) {
+        match tokio::time::timeout_at(deadline, stream.read(&mut chunk)).await {
+            Ok(Ok(read)) if read > 0 => data.extend_from_slice(&chunk[..read]),
+            _ => break,
+        }
+    }
+
+    data
+}
+
+/// Extracts the `Server` header from an HTTP response head. Header names are
+/// case-insensitive, and some servers omit the space after the colon.
+fn parse_http_server_header(response: &str) -> Option<String> {
+    response
+        .lines()
+        .skip(1)
+        .take_while(|line| !line.is_empty())
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("server"))
+        .map(|(_, value)| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Banners come from arbitrary devices: drop control characters and cap the
+/// length before they reach the UI and the cache.
+fn sanitize_banner(raw: &str) -> Option<String> {
+    let cleaned = raw
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(MAX_BANNER_CHARS)
+        .collect::<String>();
+    let trimmed = cleaned.trim();
+
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 fn parse_ssh_banner(banner: &str) -> Option<(Option<String>, Option<String>)> {
@@ -2378,6 +2441,179 @@ mod tests {
             select_interface(&interfaces, "en0", Some("10.0.0.0/24")).expect("interface exists");
 
         assert_eq!(selected.ip, "10.0.0.8");
+    }
+
+    /// Serves `port` on loopback, counting accepted connections and running
+    /// `respond` on each one.
+    async fn loopback_server<F, Fut>(respond: F) -> (u16, Arc<std::sync::atomic::AtomicUsize>)
+    where
+        F: Fn(TcpStream) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = ()> + Send,
+    {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback listener");
+        let port = listener.local_addr().expect("local addr").port();
+        let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = accepted.clone();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::SeqCst);
+                respond(stream).await;
+            }
+        });
+        (port, accepted)
+    }
+
+    async fn probe_loopback(port: u16, kind: BannerKind) -> Option<PortProbeOutcome> {
+        probe_port(
+            Ipv4Addr::LOCALHOST,
+            port,
+            kind,
+            Duration::from_millis(500),
+            Arc::new(Semaphore::new(4)),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn probe_reads_ssh_banner_on_the_probe_connection() {
+        let (port, accepted) = loopback_server(|mut stream| async move {
+            let _ = stream
+                .write_all(b"SSH-2.0-OpenSSH_9.6 Ubuntu-3ubuntu13\r\n")
+                .await;
+            sleep(Duration::from_millis(50)).await;
+        })
+        .await;
+
+        let outcome = probe_loopback(port, BannerKind::ServerGreeting).await;
+
+        let Some(PortProbeOutcome::Open(info)) = outcome else {
+            panic!("expected an open port");
+        };
+        assert_eq!(
+            info.banner.as_deref(),
+            Some("SSH-2.0-OpenSSH_9.6 Ubuntu-3ubuntu13")
+        );
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            1,
+            "one connection per probe"
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_reads_http_server_header_case_insensitively() {
+        let (port, accepted) = loopback_server(|mut stream| async move {
+            let mut request = [0u8; 512];
+            let _ = stream.read(&mut request).await;
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nserver: nginx/1.24.0 (Ubuntu)\r\n\r\n")
+                .await;
+        })
+        .await;
+
+        let outcome = probe_loopback(port, BannerKind::HttpServerHeader).await;
+
+        let Some(PortProbeOutcome::Open(info)) = outcome else {
+            panic!("expected an open port");
+        };
+        assert_eq!(info.banner.as_deref(), Some("nginx/1.24.0 (Ubuntu)"));
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            1,
+            "one connection per probe"
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_reports_open_port_when_server_stays_silent() {
+        let (port, _) = loopback_server(|stream| async move {
+            sleep(Duration::from_millis(900)).await;
+            drop(stream);
+        })
+        .await;
+
+        let started = std::time::Instant::now();
+        let outcome = probe_loopback(port, BannerKind::ServerGreeting).await;
+
+        let Some(PortProbeOutcome::Open(info)) = outcome else {
+            panic!("expected an open port");
+        };
+        assert!(info.banner.is_none());
+        assert!(
+            started.elapsed() < Duration::from_millis(800),
+            "banner wait is bounded"
+        );
+    }
+
+    #[test]
+    fn parse_http_server_header_handles_case_and_missing_header() {
+        assert_eq!(
+            parse_http_server_header("HTTP/1.1 200 OK\r\nSERVER: lighttpd/1.4\r\n\r\n"),
+            Some("lighttpd/1.4".to_string())
+        );
+        assert_eq!(
+            parse_http_server_header("HTTP/1.1 200 OK\r\nServer:Apache\r\n\r\n"),
+            Some("Apache".to_string())
+        );
+        assert_eq!(parse_http_server_header("HTTP/1.1 200 OK\r\n\r\n"), None);
+    }
+
+    #[test]
+    fn banner_kind_skips_tls_ports() {
+        assert_eq!(banner_kind_for_port(22), BannerKind::ServerGreeting);
+        assert_eq!(banner_kind_for_port(21), BannerKind::ServerGreeting);
+        assert_eq!(banner_kind_for_port(8080), BannerKind::HttpServerHeader);
+        for tls_port in [443, 5001, 8443] {
+            assert_eq!(banner_kind_for_port(tls_port), BannerKind::None);
+        }
+    }
+
+    #[test]
+    fn deeper_profiles_probe_everything_lighter_ones_do() {
+        let quick = ports_for_profile(&PortProfile::Quick);
+        let standard = ports_for_profile(&PortProfile::Standard);
+        let deep = ports_for_profile(&PortProfile::Deep);
+
+        for port in &quick {
+            assert!(
+                standard.contains(port),
+                "Standard is missing Quick port {}",
+                port
+            );
+        }
+        for port in &standard {
+            assert!(
+                deep.contains(port),
+                "Deep is missing Standard port {}",
+                port
+            );
+        }
+    }
+
+    #[test]
+    fn every_profile_probes_signature_ports() {
+        for profile in [PortProfile::Quick, PortProfile::Standard, PortProfile::Deep] {
+            let ports = ports_for_profile(&profile);
+            for port in SIGNATURE_PORTS {
+                assert!(ports.contains(&port), "{:?} is missing {}", profile, port);
+            }
+        }
+    }
+
+    #[test]
+    fn tcp_profiles_skip_udp_only_services() {
+        let standard = ports_for_profile(&PortProfile::Standard);
+        let quick = ports_for_profile(&PortProfile::Quick);
+        for port in [67, 68, 69, 123, 137, 138, 161, 500, 1812, 1900, 5353] {
+            assert!(
+                !standard.contains(&port),
+                "Standard probes UDP-only {}",
+                port
+            );
+            assert!(!quick.contains(&port), "Quick probes UDP-only {}", port);
+        }
     }
 
     #[test]
