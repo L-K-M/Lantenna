@@ -52,7 +52,31 @@ pub struct FingerbankResult {
     pub device_type: Option<String>,
     pub os_guess: Option<String>,
     pub confidence: Option<u8>,
+    /// RFC 3339 UTC timestamp (`Utc::now().to_rfc3339()`); cache expiry is
+    /// computed from it.
     pub fetched_at: String,
+}
+
+impl FingerbankResult {
+    /// A remembered "Fingerbank doesn't know this device", so unknown MACs are
+    /// not queried again on every scan.
+    pub fn no_match(fetched_at: String) -> Self {
+        Self {
+            vendor: None,
+            model: None,
+            device_type: None,
+            os_guess: None,
+            confidence: None,
+            fetched_at,
+        }
+    }
+
+    pub fn is_no_match(&self) -> bool {
+        self.vendor.is_none()
+            && self.model.is_none()
+            && self.device_type.is_none()
+            && self.os_guess.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

@@ -951,19 +951,41 @@ async fn build_fingerprint(
 
     let mut fingerbank_to_cache = None;
     if let Some(mac) = mac_address.as_deref().filter(|_| !private_mac) {
-        let fingerbank = match storage.get_cached_fingerbank(mac) {
-            Ok(Some(cached)) => Some(cached),
-            _ => {
-                let fetched = lookup_fingerbank(mac, host.name.as_deref()).await;
-                if let Some(ref result) = fetched {
-                    fingerbank_to_cache = Some((mac.to_string(), result.clone()));
-                }
-                fetched
+        let cached = match storage.get_cached_fingerbank(mac) {
+            Ok(cached) => cached,
+            Err(error) => {
+                log::warn!("Failed to read Fingerbank cache for {}: {}", mac, error);
+                None
             }
         };
+        let from_cache = cached.is_some();
+
+        let fingerbank = match cached {
+            Some(result) => Some(result),
+            None => match lookup_fingerbank(mac, host.name.as_deref()).await {
+                FingerbankLookup::Found(result) => {
+                    fingerbank_to_cache = Some((mac.to_string(), result.clone()));
+                    Some(result)
+                }
+                FingerbankLookup::NoMatch => {
+                    let no_match = FingerbankResult::no_match(Utc::now().to_rfc3339());
+                    fingerbank_to_cache = Some((mac.to_string(), no_match));
+                    None
+                }
+                FingerbankLookup::Unavailable => None,
+            },
+        }
+        .filter(|result| !result.is_no_match());
 
         if let Some(fingerbank) = fingerbank {
-            sources.push("fingerbank".to_string());
+            sources.push(
+                if from_cache {
+                    "fingerbank-cache"
+                } else {
+                    "fingerbank"
+                }
+                .to_string(),
+            );
 
             if manufacturer.is_none() {
                 manufacturer = fingerbank.vendor.clone();
@@ -1317,7 +1339,9 @@ fn http_client() -> &'static reqwest::Client {
 }
 
 /// Vendor lookups need only the OUI (the first three octets), so that is all
-/// that leaves the machine.
+/// that leaves the machine. The API accepts `AA:BB:CC`. Vendors on MA-M and
+/// MA-S blocks (28- and 36-bit prefixes) resolve to the block owner, but the
+/// bundled local database, consulted first, covers most of those.
 fn maclookup_url(oui: &str) -> String {
     format!("https://api.maclookup.app/v2/macs/{}", oui)
 }
@@ -1356,9 +1380,21 @@ struct FingerbankQueryParams<'a> {
     fqdn: Option<&'a str>,
 }
 
-async fn lookup_fingerbank_with_params(
-    params: FingerbankQueryParams<'_>,
-) -> Option<FingerbankResult> {
+/// Outcome of a Fingerbank query. Only `Found` and `NoMatch` are cached;
+/// `Unavailable` (no API key, network or server error) is retried next scan.
+enum FingerbankLookup {
+    Found(FingerbankResult),
+    NoMatch,
+    Unavailable,
+}
+
+async fn lookup_fingerbank_with_params(params: FingerbankQueryParams<'_>) -> FingerbankLookup {
+    lookup_fingerbank_response(params)
+        .await
+        .unwrap_or(FingerbankLookup::Unavailable)
+}
+
+async fn lookup_fingerbank_response(params: FingerbankQueryParams<'_>) -> Option<FingerbankLookup> {
     let api_key = std::env::var("FINGERBANK_API_KEY").ok()?;
 
     let mut request = http_client()
@@ -1392,6 +1428,10 @@ async fn lookup_fingerbank_with_params(
         .send()
         .await
         .ok()?;
+
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Some(FingerbankLookup::NoMatch);
+    }
 
     if !response.status().is_success() {
         return None;
@@ -1435,17 +1475,17 @@ async fn lookup_fingerbank_with_params(
         string_at_path(&value, &["device", "device_type"]),
     ]);
 
-    Some(FingerbankResult {
+    Some(FingerbankLookup::Found(FingerbankResult {
         vendor,
         model,
         device_type,
         os_guess,
         confidence,
         fetched_at: Utc::now().to_rfc3339(),
-    })
+    }))
 }
 
-async fn lookup_fingerbank(mac: &str, hostname: Option<&str>) -> Option<FingerbankResult> {
+async fn lookup_fingerbank(mac: &str, hostname: Option<&str>) -> FingerbankLookup {
     lookup_fingerbank_with_params(FingerbankQueryParams {
         mac,
         hostname,
@@ -1574,14 +1614,17 @@ fn infer_device_profile(
     }
 
     // Apple before the SMB/SSH rules below: a Mac with file sharing or remote
-    // login enabled used to come out as "Windows-like" or "Linux".
-    if has_any(&[548, 3689])
-        || contains_hint(&["apple", "macbook", "imac", "mac mini", "mac studio"])
-    {
+    // login enabled used to come out as "Windows-like" or "Linux". Only the
+    // vendor or name implies Apple: AFP and DAAP are also served by netatalk,
+    // older NAS firmware, owntone and iTunes for Windows.
+    if contains_hint(&["apple", "macbook", "imac", "mac mini", "mac studio"]) {
         set_if_none(&mut inferred_type, "Apple device");
         set_if_none(&mut inferred_os, "Apple OS family");
         confidence_boost = confidence_boost.saturating_add(16);
-        notes.push("Apple vendor, name or AFP/DAAP services detected".to_string());
+        notes.push("Apple vendor or device name detected".to_string());
+    } else if has_any(&[548, 3689]) {
+        confidence_boost = confidence_boost.saturating_add(6);
+        notes.push("AFP/DAAP file or media sharing detected".to_string());
     }
 
     if has_any(&[6443, 2375]) {
@@ -2388,6 +2431,8 @@ mod tests {
 
     #[tokio::test]
     async fn enrichment_recomputes_fingerprint_when_ports_change() {
+        // Loopback has no ARP entry, so no MAC and therefore no online vendor
+        // or Fingerbank lookup: the test stays offline.
         let storage = Arc::new(Storage::in_memory());
 
         let first = enrich_host_with_cache(
@@ -2457,6 +2502,30 @@ mod tests {
 
         assert_eq!(device_type.as_deref(), Some("Workstation/Server"));
         assert_eq!(os_guess.as_deref(), Some("Windows-like"));
+    }
+
+    #[test]
+    fn itunes_on_windows_stays_windows() {
+        let desktop = host("192.168.1.52", Some("gaming-pc"), &[135, 445, 3389, 3689]);
+
+        let (_, os_guess, _, _, _) = infer_device_profile(&desktop, None, None);
+
+        assert_eq!(os_guess.as_deref(), Some("Windows-like"));
+    }
+
+    #[test]
+    fn nas_with_afp_is_not_labelled_apple() {
+        let nas = host(
+            "192.168.1.31",
+            Some("diskstation"),
+            &[22, 139, 445, 548, 5000, 5001],
+        );
+
+        let (device_type, os_guess, _, _, _) =
+            infer_device_profile(&nas, Some("Synology Incorporated"), None);
+
+        assert_eq!(device_type.as_deref(), Some("NAS/Storage"));
+        assert_eq!(os_guess.as_deref(), Some("Linux/Unix-like"));
     }
 
     #[test]

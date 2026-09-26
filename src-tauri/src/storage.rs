@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
 const FINGERBANK_CACHE_TTL_DAYS: i64 = 90;
+/// "No match" answers expire sooner so newly catalogued devices get picked up.
+const FINGERBANK_NO_MATCH_TTL_DAYS: i64 = 7;
 const MAX_FINGERBANK_CACHE_ENTRIES: usize = 5000;
 const MAX_OUI_VENDOR_CACHE_ENTRIES: usize = 4096;
 
@@ -185,9 +187,16 @@ fn prune_stored_data(data: &mut StoredData) {
 }
 
 fn prune_fingerbank_cache(cache: &mut HashMap<String, FingerbankResult>) {
-    let cutoff = Utc::now() - ChronoDuration::days(FINGERBANK_CACHE_TTL_DAYS);
+    let now = Utc::now();
+    let cutoff = now - ChronoDuration::days(FINGERBANK_CACHE_TTL_DAYS);
+    let no_match_cutoff = now - ChronoDuration::days(FINGERBANK_NO_MATCH_TTL_DAYS);
 
     cache.retain(|_, result| {
+        let cutoff = if result.is_no_match() {
+            no_match_cutoff
+        } else {
+            cutoff
+        };
         parse_fetched_at(result)
             .map(|timestamp| timestamp >= cutoff)
             .unwrap_or(true)
@@ -266,6 +275,26 @@ mod tests {
 
         assert!(!cache.contains_key("old"));
         assert!(cache.contains_key("fresh"));
+    }
+
+    #[test]
+    fn fingerbank_no_match_entries_expire_sooner() {
+        let now = Utc::now();
+        let week_old = now - ChronoDuration::days(FINGERBANK_NO_MATCH_TTL_DAYS + 1);
+        let mut matched = fingerbank_result_at(week_old);
+        matched.vendor = Some("Acme".to_string());
+
+        let mut cache = HashMap::new();
+        cache.insert("matched".to_string(), matched);
+        cache.insert(
+            "no-match".to_string(),
+            FingerbankResult::no_match(week_old.to_rfc3339()),
+        );
+
+        prune_fingerbank_cache(&mut cache);
+
+        assert!(cache.contains_key("matched"));
+        assert!(!cache.contains_key("no-match"));
     }
 
     #[test]
