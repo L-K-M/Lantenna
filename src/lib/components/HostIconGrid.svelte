@@ -45,14 +45,15 @@
     async function openHost(host: Host) {
         const target = primaryPortTarget(host);
         if (!target) {
-            notifications.add(`${host.ip} has no open web, file sharing or remote login port.`, 'info');
+            notifications.add(`${host.ip} has no open web, file sharing, remote login or screen sharing port.`, 'info');
             return;
         }
 
         try {
             await TauriService.openExternalUrl(target.url);
         } catch (error) {
-            const message = typeof error === 'string' ? error : `Failed to open ${target.url}`;
+            const message =
+                typeof error === 'string' ? error : error instanceof Error ? error.message : `Failed to open ${target.url}`;
             notifications.add(message, 'error');
         }
     }
