@@ -218,6 +218,7 @@ pub fn list_network_interfaces() -> Result<Vec<NetworkInterface>> {
             cidr: prefix,
             subnet: format!("{}/{}", network, prefix),
             host_count,
+            is_default_route: false,
         });
     }
 
@@ -2315,6 +2316,7 @@ mod tests {
             cidr: 24,
             subnet: subnet.to_string(),
             host_count: 254,
+            is_default_route: false,
         }
     }
 
