@@ -48,6 +48,11 @@ into the backlog below.
   (per-row memoization) meets #23 (relative "Last Seen", refreshed every
   minute), keep Last Seen **out** of #21's `rowView` cache, or put `now` in the
   cache key. Otherwise the relative time freezes.
+- Also when resolving #21 against #23, keep `customNames` referenced directly
+  in the `$: sortedHosts` statement (#21 passes it to `sortHosts`). #23's
+  `isUnnamed()` reads `customNames` inside a function, which Svelte's `$:`
+  doesn't track, so without it a rename won't re-sort the list. The bug is on
+  main too.
 - `CHANGELOG.md` was left untouched to avoid nine-way conflicts. Add entries
   for the merged PRs in one follow-up commit.
 
@@ -188,6 +193,21 @@ into a shared component (see FEAT-9).
 its final events report `0/1` or `1/1` (the host), with `found` =
 open-port count. The UI only shows the running values, but pick one unit for
 the whole stream: report the final port counts.
+
+**BUG-15: Macs with Screen Sharing get the KVM icon (S).** In
+`$lib/util/hostIcons.ts`, `hasKvmLikePort` fires on 5900–5902 or any `vnc`
+service. That check runs before the Mac-name, NAS and OS branches, so a
+"Johns-MacBook-Pro" with Screen Sharing on shows as "KVM device". This matters
+more now that the icon view (#24) makes the icon the main visual. Fix: keep
+623 (IPMI) and the name hints (`pikvm`, `idrac`, `ilo`, `bmc`), and treat VNC
+alone as no evidence. Test that a Mac with 5900 open gets `pc-mac` and that
+PiKVM still gets `kvm`.
+
+**BUG-16: iOS devices get the desktop Mac icon (S).** `isMacLike()` includes
+`'ios'`, and the mobile branch only checks name hints. An iPhone whose
+`os_guess` says iOS but whose name has no "iPhone" in it shows as "Apple host".
+Fix: drop `'ios'` from `isMacLike` and add an `ios`/`ipados` → mobile branch
+before the Mac fallback.
 
 ### Performance
 
@@ -363,6 +383,17 @@ only", "Replied to ping". Carry a `discovered_via` field from `run_scan`.
 **UX-6: Rename inline (S).** Double-click the Name cell to edit, like the
 Finder. (Double-clicking the row opens the host after #23, so use a slow second
 click or ⌘-Return for rename.)
+
+**UX-7: "port 22" in the filter matches nothing (S).** After #23 the filter
+placeholder says "…port…", and every term must match. The word "port" never
+appears in the searchable text, so "port 22" empties the list while "22"
+works. In `hostSearch.ts`, treat `port`/`ports` as stopwords, or support
+`port:22`, and add tests for both.
+
+**UX-8: Cap the ports tooltip (S).** `describePorts()` in `HostTable.svelte`
+lists every open port in the row's `title`. After a Deep Scan of a busy server
+that gets unwieldy. Show about 24 and then "+N more". The inspector already
+has the full list.
 
 ### Visual and theming
 
