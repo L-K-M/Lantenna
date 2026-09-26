@@ -100,7 +100,7 @@
         }
 
         // Tiles are buttons, but arrow keys on them should move the selection.
-        if (target.closest('.icon-grid')) {
+        if (target.closest('.tile')) {
             return false;
         }
 
