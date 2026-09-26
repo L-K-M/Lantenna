@@ -179,15 +179,15 @@ persisted state today.
 (`192.168.100.254`), star + icon + address + NEW may not fit in about 190 px.
 Check after #23 and move the badge to the name cell if needed.
 
+**BUG-13: The icon view has no context menu (S).** After #24, right-clicking a
+tile doesn't offer Hide or Clear Friendly Name. Extract the list's context menu
+into a shared component (see FEAT-9).
+
 **BUG-14: Deep Scan progress mixes units (S).** `scan_host_ports` in
 `commands.rs` reports ports scanned out of ports in total while running, but
 its final events report `0/1` or `1/1` (the host), with `found` =
 open-port count. The UI only shows the running values, but pick one unit for
 the whole stream: report the final port counts.
-
-**BUG-13: The icon view has no context menu (S).** After #24, right-clicking a
-tile doesn't offer Hide or Clear Friendly Name. Extract the list's context menu
-into a shared component (see FEAT-9).
 
 ### Performance
 
