@@ -4,10 +4,11 @@
 
 use crate::models::NetworkInterface;
 
-/// Name of the interface that owns the IPv4 default route, if any.
+/// Name of the interface that owns the IPv4 default route, if any. Blocks on
+/// a subprocess; call it off the async runtime.
 #[cfg(target_os = "macos")]
 pub fn default_route_interface() -> Option<String> {
-    let output = std::process::Command::new("route")
+    let output = std::process::Command::new("/sbin/route")
         .args(["-n", "get", "default"])
         .output()
         .ok()?;

@@ -297,7 +297,24 @@ function isLinkLocalAddress(ip: string): boolean {
  * Internet Sharing bridges, VPN tunnels, Apple Wireless Direct Link, container
  * and tap/tun devices.
  */
-const VIRTUAL_INTERFACE_PREFIXES = ['bridge', 'utun', 'vmnet', 'vboxnet', 'awdl', 'llw', 'docker', 'veth', 'tap', 'tun', 'zt', 'feth'];
+const VIRTUAL_INTERFACE_PREFIXES = [
+  'bridge',
+  'utun',
+  'vmnet',
+  'vboxnet',
+  'awdl',
+  'llw',
+  'docker',
+  'veth',
+  'tap',
+  'tun',
+  'wg',
+  'tailscale',
+  'ppp',
+  'ipsec',
+  'zt',
+  'feth'
+];
 
 function isVirtualInterface(item: NetworkInterface): boolean {
   return VIRTUAL_INTERFACE_PREFIXES.some((prefix) => item.name.startsWith(prefix));
@@ -307,8 +324,11 @@ function pickDefaultInterface(interfaces: NetworkInterface[]): NetworkInterface 
   const scannable = interfaces.filter((item) => item.host_count > 0 && !isLinkLocalAddress(item.ip));
 
   // The interface that carries the default route is the network in use, unless
-  // it is a full-tunnel VPN.
-  const defaultRoute = scannable.find((item) => item.is_default_route && !isVirtualInterface(item));
+  // it is a full-tunnel VPN, or has a public address: never start out aimed at
+  // someone else's address space.
+  const defaultRoute = scannable.find(
+    (item) => item.is_default_route && !isVirtualInterface(item) && isPrivateAddress(item.ip)
+  );
   if (defaultRoute) {
     return defaultRoute;
   }
