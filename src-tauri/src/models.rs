@@ -73,9 +73,11 @@ pub struct ScanOptions {
     pub max_hosts: Option<usize>,
 }
 
-/// Stage of a scan. `scanned`/`total` in [`ScanProgress`] count addresses
-/// during `Discovery`, quiet addresses during `Ping`, live hosts during
-/// `Ports`, and hosts during `Fingerprint`.
+/// Stage of a scan. For a network scan, `scanned`/`total` in [`ScanProgress`]
+/// count addresses during `Discovery`, quiet addresses during `Ping`, live
+/// hosts during `Ports`, and hosts during `Fingerprint`. A single-host Deep
+/// Scan (`scan_host_ports`) reports `Ports` with `scanned`/`total` counting
+/// that host's ports instead.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ScanPhase {

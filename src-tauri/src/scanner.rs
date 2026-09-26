@@ -470,6 +470,9 @@ where
         ));
 
         let mut probes = stream::iter(live_ips.into_iter().map(|ip| {
+            // Hosts found via ARP or ping did not answer the discovery ports
+            // either; probe those again too, as a retry for devices that were
+            // slow to wake from power saving during the sweep.
             let ports = if answered.contains(&ip) {
                 unprobed_ports.clone()
             } else {
