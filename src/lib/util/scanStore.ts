@@ -294,8 +294,8 @@ function isLinkLocalAddress(ip: string): boolean {
 
 /**
  * Name prefixes of interfaces that are rarely the LAN you mean to scan: VM and
- * Internet Sharing bridges, VPN tunnels, Apple Wireless Direct Link, container
- * and tap/tun devices.
+ * Internet Sharing bridges (including Parallels' vnic adapters), VPN tunnels,
+ * Apple Wireless Direct Link, container and tap/tun devices.
  */
 const VIRTUAL_INTERFACE_PREFIXES = [
   'bridge',
@@ -313,7 +313,8 @@ const VIRTUAL_INTERFACE_PREFIXES = [
   'ppp',
   'ipsec',
   'zt',
-  'feth'
+  'feth',
+  'vnic'
 ];
 
 function isVirtualInterface(item: NetworkInterface): boolean {
