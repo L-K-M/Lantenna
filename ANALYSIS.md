@@ -138,7 +138,9 @@ first, fix the message, and offer a custom range (FEAT-3).
 **BUG-5: The mDNS sweep ignores the selected interface (M).**
 `sweep_mdns_services` binds `0.0.0.0:0`, so queries go out on the default
 interface only. Bind to the selected interface's address and set
-`IP_MULTICAST_IF`. Also send QU questions for PTR (12) instead of ANY.
+`IP_MULTICAST_IF`. Also send QU questions for PTR (12) instead of ANY, and
+set the query ID to 0 (`build_mdns_query` derives one from the clock), as RFC
+6762 §18.1 asks for multicast queries. Nothing correlates replies by ID.
 
 **BUG-6: Window shade and zoom probably fight `minHeight: 560` (S, needs a
 Mac).** `WindowManager.toggleShade` sets the height to 36 px, and
@@ -176,6 +178,12 @@ persisted state today.
 **BUG-12: The NEW badge can overflow the IP column (S).** On long addresses
 (`192.168.100.254`), star + icon + address + NEW may not fit in about 190 px.
 Check after #23 and move the badge to the name cell if needed.
+
+**BUG-14: Deep Scan progress mixes units (S).** `scan_host_ports` in
+`commands.rs` reports ports scanned out of ports in total while running, but
+its final events report `0/1` or `1/1` (the host), with `found` =
+open-port count. The UI only shows the running values, but pick one unit for
+the whole stream: report the final port counts.
 
 **BUG-13: The icon view has no context menu (S).** After #24, right-clicking a
 tile doesn't offer Hide or Clear Friendly Name. Extract the list's context menu
