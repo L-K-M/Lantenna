@@ -20,6 +20,7 @@ const VENDOR_ALIASES: [prefix: string, short: string][] = [
   ['sony interactive', 'Sony'],
   ['amazon technologies', 'Amazon'],
   ['intel corporate', 'Intel'],
+  ['hewlett packard enterprise', 'HPE'],
   ['hewlett packard', 'HP'],
   ['cisco systems', 'Cisco'],
   ['murata manufacturing', 'Murata']
