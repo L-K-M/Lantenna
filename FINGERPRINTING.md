@@ -93,6 +93,17 @@ Extended Fingerbank API to support all parameters:
 
 The `FingerbankQueryParams` struct enables future integration with DHCP fingerprinting.
 
+#### Freshness and privacy
+
+- Fingerprints are rebuilt from the latest scan every time, so device type,
+  OS guess and notes follow the current open ports. Only network lookups are
+  cached: OUI vendors per OUI, and Fingerbank answers per MAC for 90 days.
+- Vendor lookups on maclookup.app send only the OUI (first three octets), never
+  the full MAC.
+- Locally administered MACs (bit `0x02` of the first octet: randomized
+  "private" Wi-Fi addresses, VMs, containers) are never sent to maclookup.app
+  or Fingerbank. The UI shows their vendor as "Private address".
+
 ---
 
 ## Implementation Status Summary

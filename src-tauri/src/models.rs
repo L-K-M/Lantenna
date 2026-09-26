@@ -43,6 +43,18 @@ pub struct DeviceFingerprint {
     pub last_updated: String,
 }
 
+/// What Fingerbank said about a MAC address. Cached per MAC so an online
+/// lookup isn't repeated on every scan.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FingerbankResult {
+    pub vendor: Option<String>,
+    pub model: Option<String>,
+    pub device_type: Option<String>,
+    pub os_guess: Option<String>,
+    pub confidence: Option<u8>,
+    pub fetched_at: String,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PortProfile {
