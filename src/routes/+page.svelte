@@ -10,6 +10,7 @@
     getSystem7WindowStyle
   } from '@lkmc/system7-ui';
 
+  import HostIconGrid from '$lib/components/HostIconGrid.svelte';
   import HostInspector from '$lib/components/HostInspector.svelte';
   import HostTable from '$lib/components/HostTable.svelte';
   import ScanToolbar from '$lib/components/ScanToolbar.svelte';
@@ -20,9 +21,29 @@
   import { notifications } from '$lib/util/notifications';
   import { scanStore } from '$lib/util/scanStore';
   import { windowFocused } from '$lib/util/windowState';
-  import type { SystemColors } from '$lib/types';
+  import type { HostViewMode, SystemColors } from '$lib/types';
+
+  const VIEW_MODE_STORAGE_KEY = 'lantenna.viewMode';
 
   let isWindowShaded = false;
+  let viewMode: HostViewMode = loadViewMode();
+
+  function loadViewMode(): HostViewMode {
+    try {
+      return localStorage.getItem(VIEW_MODE_STORAGE_KEY) === 'icons' ? 'icons' : 'list';
+    } catch {
+      return 'list';
+    }
+  }
+
+  function setViewMode(mode: HostViewMode) {
+    viewMode = mode;
+    try {
+      localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
+    } catch {
+      // Only a convenience; the view still switches.
+    }
+  }
   let systemColors: SystemColors | null = null;
 
   $: ({
@@ -182,6 +203,8 @@
         approach={scanApproach}
         {scanning}
         {query}
+        {viewMode}
+        onViewModeChange={setViewMode}
         onInterfaceChange={(name) => scanStore.setInterface(name)}
         onApproachChange={(approach) => scanStore.setScanApproach(approach)}
         onStart={() => scanStore.startScan()}
@@ -194,21 +217,36 @@
       {/if}
 
       <section class="results-layout">
-        <HostTable
-          hosts={filteredHosts}
-          loading={loading || scanning}
-          {selectedHostIp}
-          {customNames}
-          {favoriteIps}
-          {hiddenIps}
-          {staleFavoriteIps}
-          {newHostIps}
-          emptyText={tableEmptyText}
-          onSelectHost={(ip) => scanStore.setSelectedHost(ip)}
-          onToggleFavorite={(ip) => scanStore.toggleFavorite(ip)}
-          onToggleHidden={(ip) => scanStore.toggleHidden(ip)}
-          onClearCustomName={(ip) => scanStore.setCustomName(ip, '')}
-        />
+        {#if viewMode === 'icons'}
+          <HostIconGrid
+            hosts={filteredHosts}
+            loading={loading || scanning}
+            {selectedHostIp}
+            {customNames}
+            {favoriteIps}
+            {hiddenIps}
+            {staleFavoriteIps}
+            {newHostIps}
+            emptyText={tableEmptyText}
+            onSelectHost={(ip) => scanStore.setSelectedHost(ip)}
+          />
+        {:else}
+          <HostTable
+            hosts={filteredHosts}
+            loading={loading || scanning}
+            {selectedHostIp}
+            {customNames}
+            {favoriteIps}
+            {hiddenIps}
+            {staleFavoriteIps}
+            {newHostIps}
+            emptyText={tableEmptyText}
+            onSelectHost={(ip) => scanStore.setSelectedHost(ip)}
+            onToggleFavorite={(ip) => scanStore.toggleFavorite(ip)}
+            onToggleHidden={(ip) => scanStore.toggleHidden(ip)}
+            onClearCustomName={(ip) => scanStore.setCustomName(ip, '')}
+          />
+        {/if}
         <HostInspector
           host={selectedHost}
           {customNames}

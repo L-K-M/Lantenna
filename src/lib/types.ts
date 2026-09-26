@@ -1,6 +1,7 @@
 export type PortProfile = 'quick' | 'standard' | 'deep';
 export type DiscoveryMode = 'tcp' | 'hybrid';
 export type ScanApproach = 'fast' | 'balanced' | 'thorough';
+export type HostViewMode = 'list' | 'icons';
 
 export interface NetworkInterface {
   name: string;
