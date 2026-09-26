@@ -73,8 +73,23 @@ pub struct ScanOptions {
     pub max_hosts: Option<usize>,
 }
 
+/// Stage of a scan. `scanned`/`total` in [`ScanProgress`] count addresses
+/// during `Discovery`, quiet addresses during `Ping`, live hosts during
+/// `Ports`, and hosts during `Fingerprint`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ScanPhase {
+    #[default]
+    Discovery,
+    Ping,
+    Ports,
+    Fingerprint,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanProgress {
+    #[serde(default)]
+    pub phase: ScanPhase,
     pub scanned: usize,
     pub total: usize,
     pub found: usize,

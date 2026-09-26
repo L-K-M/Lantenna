@@ -535,6 +535,7 @@ function createScanStore() {
             progress: state.progress
               ? { ...state.progress, running: false, current_ip: null }
               : {
+                  phase: 'fingerprint',
                   scanned: event.payload.hosts.length,
                   total: event.payload.hosts.length,
                   found: event.payload.hosts.length,
@@ -788,6 +789,7 @@ function createScanStore() {
           staleFavoriteIps,
           newHostIps: [],
           progress: {
+            phase: 'discovery',
             scanned: 0,
             total: 0,
             found: 0,
@@ -844,6 +846,7 @@ function createScanStore() {
       update((state) => ({
         ...state,
         hostScanProgress: {
+          phase: 'ports',
           scanned: 0,
           total: 0,
           found: 0,

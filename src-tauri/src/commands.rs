@@ -1,6 +1,6 @@
 use crate::models::{
-    Host, NetworkInterface, PortProfile, ScanErrorPayload, ScanOptions, ScanProgress, ScanResult,
-    SystemColors,
+    Host, NetworkInterface, PortProfile, ScanErrorPayload, ScanOptions, ScanPhase, ScanProgress,
+    ScanResult, SystemColors,
 };
 use crate::scanner;
 use crate::storage::Storage;
@@ -172,6 +172,7 @@ pub async fn scan_host_ports(
                 "main",
                 "host-scan-progress",
                 ScanProgress {
+                    phase: ScanPhase::Ports,
                     scanned,
                     total,
                     found,
@@ -189,6 +190,7 @@ pub async fn scan_host_ports(
                 "main",
                 "host-scan-progress",
                 ScanProgress {
+                    phase: ScanPhase::Ports,
                     scanned: 0,
                     total: 1,
                     found: 0,
@@ -206,6 +208,7 @@ pub async fn scan_host_ports(
         "main",
         "host-scan-progress",
         ScanProgress {
+            phase: ScanPhase::Ports,
             scanned: 1,
             total: 1,
             found: host.open_ports.len(),

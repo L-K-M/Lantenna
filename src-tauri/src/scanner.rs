@@ -1,6 +1,6 @@
 use crate::models::{
     DeviceFingerprint, DiscoveryMode, Host, NetworkInterface, PortInfo, PortProfile, ScanOptions,
-    ScanProgress, ScanResult,
+    ScanPhase, ScanProgress, ScanResult,
 };
 use crate::storage::Storage;
 use anyhow::{Context, Result};
@@ -10,7 +10,7 @@ use if_addrs::{get_if_addrs, IfAddr};
 use ipnet::Ipv4Net;
 use ndb_oui::OuiDb;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Command as StdCommand;
@@ -19,11 +19,21 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, OnceLock,
 };
+use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::{sleep, timeout, Duration};
+
+/// Ports probed on every target address to find live hosts. A host is live
+/// when any of them answers, open or refused. On the local subnet each probe
+/// also makes the kernel ARP for the address, so hosts that silently drop the
+/// SYNs still turn up in the ARP table read right after the sweep.
+const DISCOVERY_PORTS: [u16; 5] = [22, 80, 443, 445, 62078];
+
+const HOSTNAME_LOOKUP_TIMEOUT: Duration = Duration::from_millis(250);
+const HOSTNAME_LOOKUP_CONCURRENCY: usize = 16;
 
 fn available_workers() -> usize {
     std::thread::available_parallelism()
@@ -271,7 +281,6 @@ where
 
     let timeout_ms = options.timeout_ms.unwrap_or(350).clamp(50, 5000);
     let timeout_duration = Duration::from_millis(timeout_ms);
-    let ports = Arc::new(ports_for_profile(&options.port_profile));
     let workers = available_workers();
     let host_concurrency = host_concurrency_for_profile(&options.port_profile, workers);
     let port_concurrency = port_concurrency_for_profile(&options.port_profile, workers);
@@ -290,22 +299,33 @@ where
         timeout_ms
     );
 
+    let is_cancelled = || cancel_flag.load(Ordering::Relaxed);
+    let mut throttle = ProgressThrottle::new(PROGRESS_EVENT_INTERVAL);
+    let mut report_progress = |progress: ScanProgress| {
+        if throttle.should_emit(&progress, Instant::now()) {
+            on_progress(progress);
+        }
+    };
+
+    // Live hosts keyed by numeric address, so results come out in address order.
+    let mut hosts: BTreeMap<u32, Host> = BTreeMap::new();
+    // Hosts that answered a discovery probe. The others were found through ARP
+    // or ICMP and get the discovery ports probed again in the port phase.
+    let mut answered = HashSet::new();
+
+    // Phase 1: sweep every address with a few ports to find live hosts. Probing
+    // the full profile here made each empty address cost one timeout per profile
+    // port; now it costs one round of DISCOVERY_PORTS.
     let total = targets.len();
     let mut scanned = 0usize;
-    let mut found = 0usize;
-    let mut hosts = Vec::new();
-    let mut unreachable_targets = Vec::new();
+    let mut quiet_targets = Vec::new();
+    let discovery_ports = Arc::new(DISCOVERY_PORTS.to_vec());
+    let discovery_concurrency = (global_connection_limit / DISCOVERY_PORTS.len()).max(1) * 2;
 
-    on_progress(ScanProgress {
-        scanned,
-        total,
-        found,
-        running: true,
-        current_ip: None,
-    });
+    report_progress(scan_progress(ScanPhase::Discovery, 0, total, 0, true, None));
 
-    let mut stream = stream::iter(targets.into_iter().map(|ip| {
-        let ports = ports.clone();
+    let mut sweep = stream::iter(targets.into_iter().map(|ip| {
+        let discovery_ports = discovery_ports.clone();
         let cancel_flag = cancel_flag.clone();
         let connection_semaphore = connection_semaphore.clone();
         async move {
@@ -313,119 +333,297 @@ where
                 return (ip, None);
             }
 
-            let host = scan_host_internal(
+            let (open_ports, reachable) = scan_open_ports(
                 ip,
-                ports,
+                discovery_ports,
                 timeout_duration,
-                port_concurrency,
+                DISCOVERY_PORTS.len(),
                 connection_semaphore,
                 cancel_flag,
+                |_, _, _| {},
             )
             .await;
-            (ip, host)
+            if !reachable {
+                return (ip, None);
+            }
+
+            let name = resolve_hostname_with_timeout(ip, HOSTNAME_LOOKUP_TIMEOUT).await;
+            (ip, Some(discovered_host(ip, name, open_ports)))
         }
     }))
-    .buffer_unordered(host_concurrency);
+    .buffer_unordered(discovery_concurrency);
 
-    while let Some((current_ip, maybe_host)) = stream.next().await {
+    while let Some((ip, maybe_host)) = sweep.next().await {
         scanned += 1;
 
-        if let Some(host) = maybe_host {
-            found += 1;
-            on_host(host.clone());
-            hosts.push(host);
-        } else {
-            unreachable_targets.push(current_ip);
+        match maybe_host {
+            Some(host) => {
+                answered.insert(ip);
+                on_host(host.clone());
+                hosts.insert(ipv4_to_u32(ip), host);
+            }
+            None => quiet_targets.push(ip),
         }
 
-        let cancelled = cancel_flag.load(Ordering::Relaxed);
-        let current_ip_text = current_ip.to_string();
-
-        on_progress(ScanProgress {
+        let cancelled = is_cancelled();
+        report_progress(scan_progress(
+            ScanPhase::Discovery,
             scanned,
             total,
-            found,
-            running: !cancelled,
-            current_ip: Some(current_ip_text),
-        });
+            hosts.len(),
+            !cancelled,
+            Some(ip),
+        ));
 
         if cancelled {
             break;
         }
     }
+    drop(sweep);
 
-    let cancelled = cancel_flag.load(Ordering::Relaxed);
-    if !cancelled && !unreachable_targets.is_empty() {
-        let mut discovered_ips = hosts
-            .iter()
-            .filter_map(|host| Ipv4Addr::from_str(&host.ip).ok())
-            .collect::<HashSet<Ipv4Addr>>();
-
-        let arp_table = read_arp_table().await;
-        let arp_ips = arp_table
+    // Every probe above made the kernel ARP for its address, so on the local
+    // subnet the ARP table now lists live hosts that ignored all the SYNs.
+    // Read it right away: entries for hosts that never answered age out fast.
+    if !is_cancelled() && !quiet_targets.is_empty() {
+        let arp_ips = read_arp_table()
+            .await
             .keys()
             .filter_map(|ip| Ipv4Addr::from_str(ip).ok())
             .collect::<HashSet<Ipv4Addr>>();
 
-        let discovered_via_arp = unreachable_targets
-            .iter()
-            .copied()
-            .filter(|ip| arp_ips.contains(ip) && !discovered_ips.contains(ip))
-            .collect::<Vec<Ipv4Addr>>();
+        let (seen_in_arp, still_quiet): (Vec<Ipv4Addr>, Vec<Ipv4Addr>) = quiet_targets
+            .into_iter()
+            .partition(|ip| arp_ips.contains(ip));
+        quiet_targets = still_quiet;
 
-        for ip in &discovered_via_arp {
-            discovered_ips.insert(*ip);
+        for host in hosts_with_names(seen_in_arp).await {
+            on_host(host.clone());
+            hosts.insert(ipv4_to_u32(parse_ipv4_or_zero(&host.ip)), host);
         }
+    }
 
-        for ip in discovered_via_arp {
-            if cancel_flag.load(Ordering::Relaxed) {
-                break;
+    if options.discovery_mode == DiscoveryMode::Hybrid
+        && !is_cancelled()
+        && !quiet_targets.is_empty()
+    {
+        let quiet_total = quiet_targets.len();
+        let found_before_ping = hosts.len();
+        let icmp_timeout = Duration::from_millis(timeout_ms.clamp(200, 1200));
+
+        report_progress(scan_progress(
+            ScanPhase::Ping,
+            0,
+            quiet_total,
+            found_before_ping,
+            true,
+            None,
+        ));
+
+        let replies = discover_hosts_via_icmp(
+            quiet_targets,
+            icmp_timeout,
+            cancel_flag.clone(),
+            |checked, replied| {
+                report_progress(scan_progress(
+                    ScanPhase::Ping,
+                    checked,
+                    quiet_total,
+                    found_before_ping + replied,
+                    !is_cancelled(),
+                    None,
+                ));
+            },
+        )
+        .await;
+
+        for host in hosts_with_names(replies).await {
+            on_host(host.clone());
+            hosts.insert(ipv4_to_u32(parse_ipv4_or_zero(&host.ip)), host);
+        }
+    }
+
+    // Phase 2: run the chosen profile against live hosts only.
+    let live_total = hosts.len();
+    if !is_cancelled() && live_total > 0 {
+        let profile_ports = ports_for_profile(&options.port_profile);
+        let unprobed_ports = Arc::new(
+            profile_ports
+                .iter()
+                .copied()
+                .filter(|port| !DISCOVERY_PORTS.contains(port))
+                .collect::<Vec<u16>>(),
+        );
+        let all_profile_ports = Arc::new(profile_ports);
+        let live_ips = hosts
+            .keys()
+            .map(|raw_ip| Ipv4Addr::from(*raw_ip))
+            .collect::<Vec<Ipv4Addr>>();
+        let mut probed = 0usize;
+
+        report_progress(scan_progress(
+            ScanPhase::Ports,
+            0,
+            live_total,
+            live_total,
+            true,
+            None,
+        ));
+
+        let mut probes = stream::iter(live_ips.into_iter().map(|ip| {
+            let ports = if answered.contains(&ip) {
+                unprobed_ports.clone()
+            } else {
+                all_profile_ports.clone()
+            };
+            let cancel_flag = cancel_flag.clone();
+            let connection_semaphore = connection_semaphore.clone();
+            async move {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    return (ip, Vec::new());
+                }
+
+                let (open_ports, _) = scan_open_ports(
+                    ip,
+                    ports,
+                    timeout_duration,
+                    port_concurrency,
+                    connection_semaphore,
+                    cancel_flag,
+                    |_, _, _| {},
+                )
+                .await;
+                (ip, open_ports)
+            }
+        }))
+        .buffer_unordered(host_concurrency);
+
+        while let Some((ip, open_ports)) = probes.next().await {
+            probed += 1;
+
+            if let Some(host) = hosts.get_mut(&ipv4_to_u32(ip)) {
+                if !open_ports.is_empty() {
+                    merge_open_ports(&mut host.open_ports, open_ports);
+                    host.last_seen = Utc::now().to_rfc3339();
+                    on_host(host.clone());
+                }
             }
 
-            let name = resolve_hostname_with_timeout(ip, Duration::from_millis(250)).await;
-            let host = discovered_host(ip, name);
-            on_host(host.clone());
-            hosts.push(host);
-        }
+            let cancelled = is_cancelled();
+            report_progress(scan_progress(
+                ScanPhase::Ports,
+                probed,
+                live_total,
+                live_total,
+                !cancelled,
+                Some(ip),
+            ));
 
-        if options.discovery_mode == DiscoveryMode::Hybrid {
-            let icmp_candidates = unreachable_targets
-                .into_iter()
-                .filter(|ip| !discovered_ips.contains(ip))
-                .collect::<Vec<Ipv4Addr>>();
-
-            let icmp_timeout = Duration::from_millis(timeout_ms.clamp(200, 1200));
-            let discovered_via_icmp =
-                discover_hosts_via_icmp(icmp_candidates, icmp_timeout, cancel_flag.clone()).await;
-
-            for ip in discovered_via_icmp {
-                if cancel_flag.load(Ordering::Relaxed) {
-                    break;
-                }
-
-                if !discovered_ips.insert(ip) {
-                    continue;
-                }
-
-                let name = resolve_hostname_with_timeout(ip, Duration::from_millis(250)).await;
-                let host = discovered_host(ip, name);
-                on_host(host.clone());
-                hosts.push(host);
+            if cancelled {
+                break;
             }
         }
     }
 
-    hosts.sort_by(|a, b| {
-        ipv4_to_u32(parse_ipv4_or_zero(&a.ip)).cmp(&ipv4_to_u32(parse_ipv4_or_zero(&b.ip)))
-    });
+    let cancelled = is_cancelled();
+
+    // Enrichment runs after this returns; tell the UI what it is waiting for.
+    report_progress(scan_progress(
+        ScanPhase::Fingerprint,
+        0,
+        hosts.len(),
+        hosts.len(),
+        !cancelled,
+        None,
+    ));
 
     Ok(ScanResult {
         started_at,
         completed_at: Some(Utc::now().to_rfc3339()),
         cancelled,
-        hosts,
+        hosts: hosts.into_values().collect(),
         options,
     })
+}
+
+fn scan_progress(
+    phase: ScanPhase,
+    scanned: usize,
+    total: usize,
+    found: usize,
+    running: bool,
+    current_ip: Option<Ipv4Addr>,
+) -> ScanProgress {
+    ScanProgress {
+        phase,
+        scanned,
+        total,
+        found,
+        running,
+        current_ip: current_ip.map(|ip| ip.to_string()),
+    }
+}
+
+/// Minimum spacing between progress events within a phase. The UI redraws on
+/// every event, and one event per address made large scans stutter.
+const PROGRESS_EVENT_INTERVAL: Duration = Duration::from_millis(80);
+
+/// Rate-limits progress events. The first and last event of each phase, and
+/// any event of a stopped scan, always go through so the UI never shows a
+/// stale phase or count.
+struct ProgressThrottle {
+    interval: Duration,
+    last_emit: Option<Instant>,
+    last_phase: Option<ScanPhase>,
+}
+
+impl ProgressThrottle {
+    fn new(interval: Duration) -> Self {
+        Self {
+            interval,
+            last_emit: None,
+            last_phase: None,
+        }
+    }
+
+    fn should_emit(&mut self, progress: &ScanProgress, now: Instant) -> bool {
+        let phase_changed = self.last_phase != Some(progress.phase);
+        let boundary =
+            progress.scanned == 0 || progress.scanned >= progress.total || !progress.running;
+        let due = self
+            .last_emit
+            .is_none_or(|last| now.duration_since(last) >= self.interval);
+
+        if !(phase_changed || boundary || due) {
+            return false;
+        }
+
+        self.last_emit = Some(now);
+        self.last_phase = Some(progress.phase);
+        true
+    }
+}
+
+/// Adds newly found open ports to a host's list, keeping it sorted and free of
+/// duplicates.
+fn merge_open_ports(existing: &mut Vec<PortInfo>, found: Vec<PortInfo>) {
+    for port in found {
+        if !existing.iter().any(|known| known.port == port.port) {
+            existing.push(port);
+        }
+    }
+    existing.sort_by_key(|port| port.port);
+}
+
+/// Builds hosts for addresses that never answered TCP but showed up in ARP or
+/// replied to ping, resolving their names concurrently.
+async fn hosts_with_names(ips: Vec<Ipv4Addr>) -> Vec<Host> {
+    stream::iter(ips.into_iter().map(|ip| async move {
+        let name = resolve_hostname_with_timeout(ip, HOSTNAME_LOOKUP_TIMEOUT).await;
+        discovered_host(ip, name, Vec::new())
+    }))
+    .buffer_unordered(HOSTNAME_LOOKUP_CONCURRENCY)
+    .collect()
+    .await
 }
 
 pub async fn scan_single_host_with_progress<F>(
@@ -458,7 +656,7 @@ where
         on_progress,
     )
     .await;
-    let name = resolve_hostname_with_timeout(parsed_ip, Duration::from_millis(250)).await;
+    let name = resolve_hostname_with_timeout(parsed_ip, HOSTNAME_LOOKUP_TIMEOUT).await;
 
     Ok(Host {
         ip,
@@ -470,27 +668,35 @@ where
     })
 }
 
-fn discovered_host(ip: Ipv4Addr, name: Option<String>) -> Host {
+fn discovered_host(ip: Ipv4Addr, name: Option<String>, open_ports: Vec<PortInfo>) -> Host {
     Host {
         ip: ip.to_string(),
         name,
         reachable: true,
-        open_ports: Vec::new(),
+        open_ports,
         last_seen: Utc::now().to_rfc3339(),
         fingerprint: None,
     }
 }
 
-async fn discover_hosts_via_icmp(
+/// Pings `targets` and returns those that replied. `on_progress` receives the
+/// number of addresses checked and the number that replied so far.
+async fn discover_hosts_via_icmp<F>(
     targets: Vec<Ipv4Addr>,
     probe_timeout: Duration,
     cancel_flag: Arc<AtomicBool>,
-) -> Vec<Ipv4Addr> {
+    mut on_progress: F,
+) -> Vec<Ipv4Addr>
+where
+    F: FnMut(usize, usize),
+{
     if targets.is_empty() {
         return Vec::new();
     }
 
-    let concurrency = available_workers().clamp(4, 24);
+    // Each probe is a `ping` child that mostly sits waiting for a reply that
+    // never comes, so concurrency is bounded by process count, not CPU.
+    let concurrency = (available_workers() * 4).clamp(16, 48);
     let mut discovered = Vec::new();
 
     let mut stream = stream::iter(targets.into_iter().map(|ip| {
@@ -509,14 +715,17 @@ async fn discover_hosts_via_icmp(
     }))
     .buffer_unordered(concurrency);
 
+    let mut checked = 0usize;
     while let Some(result) = stream.next().await {
         if cancel_flag.load(Ordering::Relaxed) {
             break;
         }
 
+        checked += 1;
         if let Some(ip) = result {
             discovered.push(ip);
         }
+        on_progress(checked, discovered.len());
     }
 
     discovered.sort_by_key(|ip| ipv4_to_u32(*ip));
@@ -573,44 +782,6 @@ async fn ping_host(ip: Ipv4Addr, timeout_duration: Duration) -> bool {
         }
         Err(_) => false,
     }
-}
-
-async fn scan_host_internal(
-    ip: Ipv4Addr,
-    ports: Arc<Vec<u16>>,
-    timeout_duration: Duration,
-    port_concurrency: usize,
-    connection_semaphore: Arc<Semaphore>,
-    cancel_flag: Arc<AtomicBool>,
-) -> Option<Host> {
-    let (open_ports, reachable) = scan_open_ports(
-        ip,
-        ports,
-        timeout_duration,
-        port_concurrency,
-        connection_semaphore,
-        cancel_flag.clone(),
-        |_, _, _| {},
-    )
-    .await;
-    if !reachable {
-        return None;
-    }
-
-    if cancel_flag.load(Ordering::Relaxed) {
-        return None;
-    }
-
-    let name = resolve_hostname_with_timeout(ip, Duration::from_millis(250)).await;
-
-    Some(Host {
-        ip: ip.to_string(),
-        name,
-        reachable,
-        open_ports,
-        last_seen: Utc::now().to_rfc3339(),
-        fingerprint: None,
-    })
 }
 
 async fn scan_open_ports<F>(
@@ -2364,6 +2535,71 @@ mod tests {
 
         assert_eq!(targets.len(), 10);
         assert!(targets.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    fn progress_at(phase: ScanPhase, scanned: usize, total: usize) -> ScanProgress {
+        scan_progress(phase, scanned, total, 0, true, None)
+    }
+
+    #[test]
+    fn progress_throttle_limits_events_within_a_phase() {
+        let mut throttle = ProgressThrottle::new(Duration::from_secs(3600));
+        let start = Instant::now();
+
+        assert!(throttle.should_emit(&progress_at(ScanPhase::Discovery, 0, 254), start));
+        assert!(!throttle.should_emit(&progress_at(ScanPhase::Discovery, 1, 254), start));
+        assert!(!throttle.should_emit(&progress_at(ScanPhase::Discovery, 200, 254), start));
+        assert!(
+            throttle.should_emit(&progress_at(ScanPhase::Discovery, 254, 254), start),
+            "the last event of a phase always goes through"
+        );
+    }
+
+    #[test]
+    fn progress_throttle_passes_phase_changes_stops_and_due_events() {
+        let mut throttle = ProgressThrottle::new(Duration::from_millis(80));
+        let start = Instant::now();
+
+        assert!(throttle.should_emit(&progress_at(ScanPhase::Discovery, 3, 254), start));
+        assert!(throttle.should_emit(&progress_at(ScanPhase::Ports, 1, 20), start));
+
+        let stopped = scan_progress(ScanPhase::Ports, 2, 20, 0, false, None);
+        assert!(throttle.should_emit(&stopped, start));
+
+        assert!(!throttle.should_emit(&progress_at(ScanPhase::Ports, 3, 20), start));
+        let later = start + Duration::from_millis(81);
+        assert!(throttle.should_emit(&progress_at(ScanPhase::Ports, 4, 20), later));
+    }
+
+    #[test]
+    fn merge_open_ports_keeps_ports_sorted_and_unique() {
+        let open = |port: u16| PortInfo {
+            port,
+            state: "open".to_string(),
+            service: service_name(port).map(ToString::to_string),
+            banner: None,
+        };
+        let mut known = vec![open(22), open(443)];
+
+        merge_open_ports(&mut known, vec![open(8080), open(22), open(80)]);
+
+        let ports = known.iter().map(|port| port.port).collect::<Vec<u16>>();
+        assert_eq!(ports, vec![22, 80, 443, 8080]);
+    }
+
+    #[test]
+    fn discovery_ports_are_probed_by_every_profile() {
+        for profile in [PortProfile::Quick, PortProfile::Standard, PortProfile::Deep] {
+            let ports = ports_for_profile(&profile);
+            for port in DISCOVERY_PORTS {
+                assert!(
+                    ports.contains(&port),
+                    "{:?} should include discovery port {}",
+                    profile,
+                    port
+                );
+            }
+        }
     }
 
     #[test]
