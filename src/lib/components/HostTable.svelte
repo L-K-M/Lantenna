@@ -221,7 +221,8 @@
             await TauriService.openExternalUrl(target.url);
         } catch (error) {
             const message =
-                typeof error === 'string' ? error : error instanceof Error ? error.message : `Failed to open ${target.url}`;
+                (typeof error === 'string' ? error : error instanceof Error ? error.message : '').trim() ||
+                `Failed to open ${target.url}`;
             notifications.add(message, 'error');
         }
     }
