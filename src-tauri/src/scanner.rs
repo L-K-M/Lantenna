@@ -2173,46 +2173,62 @@ fn parse_mdns_response(data: &[u8]) -> Option<Vec<DiscoveredService>> {
     Some(services)
 }
 
+/// Longest domain name allowed on the wire (RFC 1035, section 2.3.4).
+const MAX_DNS_NAME_WIRE_LEN: usize = 255;
+
+/// Compression pointers followed before a name is rejected. Real responders
+/// nest at most a few levels; the cap guarantees termination on pointer cycles.
+const MAX_DNS_COMPRESSION_JUMPS: usize = 16;
+
+/// Decodes a (possibly compressed) DNS name starting at `start` and returns it
+/// with the offset just past the name in the original record.
+///
+/// mDNS replies come from any device on the LAN, so the packet is untrusted:
+/// truncated labels, reserved label types, pointer cycles and overlong names
+/// all return `None` instead of looping or producing a partial name.
 fn parse_dns_name(data: &[u8], start: usize) -> Option<(String, usize)> {
     let mut name = String::new();
     let mut offset = start;
-    let mut jumped = false;
-    let mut jump_offset = 0usize;
+    let mut end_of_name = None;
+    let mut jumps = 0usize;
+    let mut wire_len = 0usize;
+
     loop {
-        if offset >= data.len() {
-            break;
-        }
-        let len = data[offset] as usize;
+        let len = *data.get(offset)? as usize;
+
         if len == 0 {
-            offset += 1;
-            break;
+            return Some((name, end_of_name.unwrap_or(offset + 1)));
         }
-        if (len & 0xC0) == 0xC0 {
-            if offset + 1 >= data.len() {
-                break;
+
+        match len & 0xC0 {
+            0xC0 => {
+                let low = *data.get(offset + 1)? as usize;
+                jumps += 1;
+                if jumps > MAX_DNS_COMPRESSION_JUMPS {
+                    return None;
+                }
+
+                end_of_name.get_or_insert(offset + 2);
+                offset = ((len & 0x3F) << 8) | low;
             }
-            let ptr = ((len & 0x3F) << 8) | (data[offset + 1] as usize);
-            if !jumped {
-                jump_offset = offset + 2;
-                jumped = true;
+            0x00 => {
+                let label = data.get(offset + 1..offset + 1 + len)?;
+                wire_len += len + 1;
+                // +1 for the terminating root label.
+                if wire_len + 1 > MAX_DNS_NAME_WIRE_LEN {
+                    return None;
+                }
+
+                if !name.is_empty() {
+                    name.push('.');
+                }
+                name.push_str(&String::from_utf8_lossy(label));
+                offset += len + 1;
             }
-            offset = ptr;
-            continue;
+            // 0x40 and 0x80 are reserved/obsolete label types.
+            _ => return None,
         }
-        offset += 1;
-        if offset + len > data.len() {
-            break;
-        }
-        if !name.is_empty() {
-            name.push('.');
-        }
-        if let Ok(label) = std::str::from_utf8(&data[offset..offset + len]) {
-            name.push_str(label);
-        }
-        offset += len;
     }
-    let final_offset = if jumped { jump_offset } else { offset };
-    Some((name, final_offset))
 }
 
 fn extract_service_type(name: &str) -> Option<String> {
@@ -2450,6 +2466,101 @@ mod tests {
 
         assert_eq!(software.as_deref(), Some("OpenSSH_9.6"));
         assert!(os_guess.is_none());
+    }
+
+    /// Runs `parse` on a helper thread so a parser that never terminates fails
+    /// the test instead of hanging the whole suite.
+    fn run_with_deadline<T: Send + 'static>(
+        parse: impl FnOnce() -> T + Send + 'static,
+    ) -> Option<T> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(parse());
+        });
+        receiver.recv_timeout(Duration::from_secs(2)).ok()
+    }
+
+    fn mdns_response_header(answer_count: u16) -> Vec<u8> {
+        let mut packet = vec![0x00, 0x00, 0x84, 0x00, 0x00, 0x00];
+        packet.extend_from_slice(&answer_count.to_be_bytes());
+        packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+        packet
+    }
+
+    #[test]
+    fn parse_dns_name_follows_compression_pointers() {
+        let mut packet = mdns_response_header(0);
+        encode_dns_name(&mut packet, "_airplay._tcp.local");
+        let second_name = packet.len();
+        packet.extend_from_slice(&[0x02, b't', b'v', 0xC0, 0x0C]);
+
+        let (name, next_offset) = parse_dns_name(&packet, second_name).expect("valid name");
+
+        assert_eq!(name, "tv._airplay._tcp.local");
+        assert_eq!(next_offset, packet.len());
+    }
+
+    #[test]
+    fn parse_dns_name_rejects_self_referencing_pointer() {
+        let mut packet = mdns_response_header(1);
+        packet.extend_from_slice(&[0xC0, 0x0C]);
+
+        let result = run_with_deadline(move || parse_dns_name(&packet, 12));
+
+        assert_eq!(
+            result,
+            Some(None),
+            "parser must terminate and reject the name"
+        );
+    }
+
+    #[test]
+    fn parse_dns_name_rejects_pointer_cycle_through_labels() {
+        let mut packet = mdns_response_header(1);
+        packet.extend_from_slice(&[0x01, b'a', 0xC0, 0x0C]);
+
+        let result = run_with_deadline(move || parse_dns_name(&packet, 12));
+
+        assert_eq!(
+            result,
+            Some(None),
+            "parser must terminate and reject the name"
+        );
+    }
+
+    #[test]
+    fn parse_dns_name_rejects_truncated_label() {
+        let mut packet = mdns_response_header(1);
+        packet.extend_from_slice(&[0x05, b'a', b'b']);
+
+        assert_eq!(parse_dns_name(&packet, 12), None);
+    }
+
+    #[test]
+    fn parse_dns_name_rejects_overlong_name() {
+        let mut packet = mdns_response_header(1);
+        for _ in 0..5 {
+            packet.push(63);
+            packet.extend_from_slice(&[b'x'; 63]);
+        }
+        packet.push(0);
+
+        assert_eq!(parse_dns_name(&packet, 12), None);
+    }
+
+    #[test]
+    fn parse_mdns_response_survives_pointer_loop() {
+        let mut packet = mdns_response_header(1);
+        packet.extend_from_slice(&[0xC0, 0x0C]);
+        packet.extend_from_slice(&[0; 10]);
+
+        let result = run_with_deadline(move || parse_mdns_response(&packet).is_none());
+
+        assert_eq!(
+            result,
+            Some(true),
+            "a malformed packet must be dropped, not spin"
+        );
     }
 
     #[test]
