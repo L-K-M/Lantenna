@@ -11,6 +11,7 @@ import type {
   ScanProgress,
   ScanResult
 } from '$lib/types';
+import { errorMessage } from './errors';
 import { notifications } from './notifications';
 
 interface ScanStoreState {
@@ -24,9 +25,10 @@ interface ScanStoreState {
   hiddenIps: string[];
   showHiddenEntries: boolean;
   staleFavoriteIps: string[];
-  progress: ScanProgress | null;
-  hostScanProgress: ScanProgress | null;
   scanning: boolean;
+  stopping: boolean;
+  /** Hosts from the previous results not yet confirmed by the running scan. */
+  pendingIps: string[];
   loading: boolean;
   error: string | null;
   query: string;
@@ -375,9 +377,9 @@ const initialState: ScanStoreState = {
   hiddenIps: initialHiddenIps,
   showHiddenEntries: false,
   staleFavoriteIps: initialStaleFavoriteIps,
-  progress: null,
-  hostScanProgress: null,
   scanning: false,
+  stopping: false,
+  pendingIps: [],
   loading: false,
   error: null,
   query: '',
@@ -423,19 +425,36 @@ function scanTargetMatches(previousTarget: string | null, interfaceName: string,
   return previousTarget === `${interfaceName}|` || previousTarget === interfaceName;
 }
 
+/** Replaces or appends `host`; callers sort (via mergeStaleFavoritesIntoHosts). */
 function upsertHost(hosts: Host[], host: Host): Host[] {
   const index = hosts.findIndex((item) => item.ip === host.ip);
   if (index >= 0) {
     const next = [...hosts];
     next[index] = host;
-    return sortHosts(next);
+    return next;
   }
 
-  return sortHosts([...hosts, host]);
+  return [...hosts, host];
 }
+
+interface ScanProgressState {
+  progress: ScanProgress | null;
+  hostScanProgress: ScanProgress | null;
+}
+
+/**
+ * Progress lives apart from the main scan state. A scan sends many progress
+ * events, and routing them through the main store made every one re-derive
+ * and re-render the whole host table.
+ */
+export const scanProgress = writable<ScanProgressState>({ progress: null, hostScanProgress: null });
 
 function createScanStore() {
   const { subscribe, update } = writable<ScanStoreState>(initialState);
+  let currentProgress: ScanProgressState = { progress: null, hostScanProgress: null };
+  scanProgress.subscribe((value) => {
+    currentProgress = value;
+  });
   let currentState = initialState;
   let favoriteHostSnapshots: FavoriteHostSnapshots = { ...initialFavoriteHostSnapshots };
   let latestScanTarget: string | null = null;
@@ -472,7 +491,19 @@ function createScanStore() {
         update((state) => {
           rememberFavoriteHost(event.payload, state.favoriteIps);
           const staleFavoriteIps = state.staleFavoriteIps.filter((ip) => ip !== event.payload.ip);
-          const hosts = upsertHost(state.hosts, event.payload);
+          const pendingIps = state.pendingIps.includes(event.payload.ip)
+            ? state.pendingIps.filter((ip) => ip !== event.payload.ip)
+            : state.pendingIps;
+          // Found hosts arrive unfingerprinted; enrichment runs at the end of the
+          // scan. Keep the previous fingerprint until then so rows don't flip to
+          // "Not fingerprinted yet" and back.
+          const previous = event.payload.fingerprint
+            ? null
+            : state.hosts.find((host) => host.ip === event.payload.ip);
+          const found = previous?.fingerprint
+            ? { ...event.payload, fingerprint: previous.fingerprint }
+            : event.payload;
+          const hosts = upsertHost(state.hosts, found);
           const shouldMarkNew = activeComparisonEnabled && !activeBaselineIps.has(event.payload.ip);
           const newHostIps = shouldMarkNew
             ? uniqueSortedIps([...state.newHostIps, event.payload.ip])
@@ -482,6 +513,7 @@ function createScanStore() {
             ...state,
             hosts: mergeStaleFavoritesIntoHosts(hosts, staleFavoriteIps, favoriteHostSnapshots),
             staleFavoriteIps,
+            pendingIps,
             newHostIps
           };
         });
@@ -490,20 +522,19 @@ function createScanStore() {
 
     unlisteners.push(
       await listen<ScanProgress>('scan-progress', (event) => {
-        update((state) => ({
-          ...state,
-          progress: event.payload,
-          scanning: event.payload.running
-        }));
+        scanProgress.update((value) => ({ ...value, progress: event.payload }));
+
+        // Only scan-complete and scan-error end a scan: the backend keeps
+        // fingerprinting after the last progress event, even when cancelled.
+        if (event.payload.running && !currentState.scanning) {
+          update((state) => ({ ...state, scanning: true }));
+        }
       })
     );
 
     unlisteners.push(
       await listen<ScanProgress>('host-scan-progress', (event) => {
-        update((state) => ({
-          ...state,
-          hostScanProgress: event.payload
-        }));
+        scanProgress.update((value) => ({ ...value, hostScanProgress: event.payload }));
       })
     );
 
@@ -531,20 +562,26 @@ function createScanStore() {
             hosts: mergeStaleFavoritesIntoHosts(scannedHosts, staleFavoriteIps, favoriteHostSnapshots),
             staleFavoriteIps,
             newHostIps,
+            pendingIps: [],
             scanning: false,
-            progress: state.progress
-              ? { ...state.progress, running: false, current_ip: null }
-              : {
-                  scanned: event.payload.hosts.length,
-                  total: event.payload.hosts.length,
-                  found: event.payload.hosts.length,
-                  running: false,
-                  current_ip: null
-                },
+            stopping: false,
             lastScanAt: event.payload.completed_at,
             error: null
           };
         });
+
+        scanProgress.update((value) => ({
+          ...value,
+          progress: value.progress
+            ? { ...value.progress, running: false, current_ip: null }
+            : {
+                scanned: event.payload.hosts.length,
+                total: event.payload.hosts.length,
+                found: event.payload.hosts.length,
+                running: false,
+                current_ip: null
+              }
+        }));
 
         if (!wasCancelled) {
           latestScanTarget = completedTarget;
@@ -566,7 +603,18 @@ function createScanStore() {
       await listen<ScanErrorPayload>('scan-error', (event) => {
         activeComparisonEnabled = false;
         activeBaselineIps = new Set();
-        update((state) => ({ ...state, scanning: false, error: event.payload.message, newHostIps: [] }));
+        update((state) => ({
+          ...state,
+          scanning: false,
+          stopping: false,
+          pendingIps: [],
+          error: event.payload.message,
+          newHostIps: []
+        }));
+        scanProgress.update((value) => ({
+          ...value,
+          progress: value.progress ? { ...value.progress, running: false } : null
+        }));
         notifications.add(event.payload.message, 'error');
       })
     );
@@ -616,7 +664,7 @@ function createScanStore() {
           };
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to initialize scanner';
+        const message = errorMessage(error, 'Failed to initialize scanner');
         update((state) => ({ ...state, loading: false, error: message }));
         notifications.add(message, 'error');
       }
@@ -760,10 +808,8 @@ function createScanStore() {
         return;
       }
 
-      const previousHosts = currentState.hosts;
-      const previousStaleFavoriteIps = currentState.staleFavoriteIps;
       const previousNewHostIps = currentState.newHostIps;
-      const previousProgress = currentState.progress;
+      const previousProgress = currentProgress.progress;
       const maxHosts = selectedInterface.host_count > 0 ? Math.min(selectedInterface.host_count, MAX_SCAN_HOSTS) : null;
 
       if (selectedInterface.host_count > MAX_SCAN_HOSTS) {
@@ -776,25 +822,29 @@ function createScanStore() {
       activeComparisonEnabled = scanTargetMatches(latestScanTarget, selectedInterface.name, selectedInterface.subnet);
       activeBaselineIps = new Set(activeComparisonEnabled ? latestScanHostIps : []);
 
+      // Keep the current rows and dim them until the scan confirms each one,
+      // instead of emptying the table and refilling it row by row.
       update((next) => {
-        const staleFavoriteIps = [...next.favoriteIps];
+        const staleIps = new Set(next.staleFavoriteIps);
 
         return {
           ...next,
           scanning: true,
-          hostScanProgress: null,
+          stopping: false,
           error: null,
-          hosts: mergeStaleFavoritesIntoHosts([], staleFavoriteIps, favoriteHostSnapshots),
-          staleFavoriteIps,
-          newHostIps: [],
-          progress: {
-            scanned: 0,
-            total: 0,
-            found: 0,
-            running: true,
-            current_ip: null
-          }
+          pendingIps: next.hosts.map((host) => host.ip).filter((ip) => !staleIps.has(ip)),
+          newHostIps: []
         };
+      });
+      scanProgress.set({
+        hostScanProgress: null,
+        progress: {
+          scanned: 0,
+          total: 0,
+          found: 0,
+          running: true,
+          current_ip: null
+        }
       });
 
       try {
@@ -808,41 +858,46 @@ function createScanStore() {
           timeout_ms: scanSettings.timeoutMs,
           max_hosts: maxHosts
         });
-        notifications.add('Scan started.', 'info');
       } catch (error) {
         activeComparisonEnabled = false;
         activeBaselineIps = new Set();
-        const message = error instanceof Error ? error.message : 'Failed to start scan';
+        const message = errorMessage(error, 'Failed to start scan');
         update((next) => ({
           ...next,
           scanning: false,
           error: message,
-          hosts: previousHosts,
-          staleFavoriteIps: previousStaleFavoriteIps,
-          newHostIps: previousNewHostIps,
-          progress: previousProgress
+          pendingIps: [],
+          newHostIps: previousNewHostIps
         }));
+        scanProgress.update((value) => ({ ...value, progress: previousProgress }));
         notifications.add(message, 'error');
       }
     },
     cancelScan: async () => {
+      if (!currentState.scanning || currentState.stopping) {
+        return;
+      }
+
+      // Stay in the scanning state until scan-complete arrives: the backend
+      // still finishes the current phase and fingerprints what it found, and
+      // starting another scan before then fails with "already running".
+      update((state) => ({ ...state, stopping: true }));
+
       try {
         await TauriService.cancelScan();
-        update((state) => ({ ...state, scanning: false }));
-        notifications.add('Stopping scan...', 'info');
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to cancel scan';
-        notifications.add(message, 'error');
+        update((state) => ({ ...state, stopping: false }));
+        notifications.add(errorMessage(error, 'Failed to cancel scan'), 'error');
       }
     },
     refreshHostPorts: async (ip: string, profile: PortProfile = 'deep') => {
-      if (currentState.hostScanProgress?.running) {
+      if (currentProgress.hostScanProgress?.running) {
         notifications.add('A host deep scan is already in progress.', 'info');
         return;
       }
 
-      update((state) => ({
-        ...state,
+      scanProgress.update((value) => ({
+        ...value,
         hostScanProgress: {
           scanned: 0,
           total: 0,
@@ -851,6 +906,20 @@ function createScanStore() {
           current_ip: ip
         }
       }));
+
+      const finishHostScan = (found: number | null) => {
+        scanProgress.update((value) => {
+          if (!value.hostScanProgress || value.hostScanProgress.current_ip !== ip) {
+            return value;
+          }
+
+          const finished =
+            found === null
+              ? { ...value.hostScanProgress, running: false }
+              : { ...value.hostScanProgress, scanned: 1, total: 1, found, running: false };
+          return { ...value, hostScanProgress: finished };
+        });
+      };
 
       try {
         const host = await TauriService.scanHostPorts(ip, profile);
@@ -861,17 +930,6 @@ function createScanStore() {
           return {
             ...state,
             staleFavoriteIps,
-            hostScanProgress:
-              state.hostScanProgress && state.hostScanProgress.current_ip === host.ip
-                ? {
-                    ...state.hostScanProgress,
-                    scanned: 1,
-                    total: 1,
-                    found: host.open_ports.length,
-                    running: false,
-                    current_ip: host.ip
-                  }
-                : state.hostScanProgress,
             hosts: mergeStaleFavoritesIntoHosts(
               upsertHost(state.hosts, host),
               staleFavoriteIps,
@@ -879,17 +937,11 @@ function createScanStore() {
             )
           };
         });
+        finishHostScan(host.open_ports.length);
         notifications.add(`Deep scan complete for ${ip}.`, 'success');
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to scan host ports';
-        update((state) => ({
-          ...state,
-          hostScanProgress:
-            state.hostScanProgress && state.hostScanProgress.current_ip === ip
-              ? { ...state.hostScanProgress, running: false }
-              : state.hostScanProgress
-        }));
-        notifications.add(message, 'error');
+        finishHostScan(null);
+        notifications.add(errorMessage(error, 'Failed to scan host ports'), 'error');
       }
     }
   };

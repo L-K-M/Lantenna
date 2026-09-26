@@ -17,7 +17,7 @@
   import { TauriService } from '$lib/tauri';
   import { WindowManager } from '$lib/windowManager';
   import { notifications } from '$lib/util/notifications';
-  import { scanStore } from '$lib/util/scanStore';
+  import { scanProgress, scanStore } from '$lib/util/scanStore';
   import { windowFocused } from '$lib/util/windowState';
   import type { SystemColors } from '$lib/types';
 
@@ -35,14 +35,16 @@
     hiddenIps,
     showHiddenEntries,
     staleFavoriteIps,
-    progress,
-    hostScanProgress,
+    pendingIps,
     scanning,
+    stopping,
     loading,
     error,
     query,
     selectedHostIp
   } = $scanStore);
+
+  $: ({ progress, hostScanProgress } = $scanProgress);
 
   $: hiddenSet = new Set(hiddenIps);
 
@@ -72,7 +74,9 @@
 
   $: hostScanTarget = hostScanProgress?.current_ip || 'selected host';
   $: fullScanActive = scanning || Boolean(progress?.running);
-  $: footerStatus = fullScanActive
+  $: footerStatus = stopping
+    ? 'Stopping scan...'
+    : fullScanActive
     ? progress
       ? `${progress.scanned}/${progress.total} scanned, ${progress.found} hosts`
       : 'Scanning...'
@@ -189,6 +193,7 @@
         selectedInterface={selectedInterface}
         approach={scanApproach}
         {scanning}
+        {stopping}
         {query}
         onInterfaceChange={(name) => scanStore.setInterface(name)}
         onApproachChange={(approach) => scanStore.setScanApproach(approach)}
@@ -210,6 +215,7 @@
           {favoriteIps}
           {hiddenIps}
           {staleFavoriteIps}
+          {pendingIps}
           {newHostIps}
           onSelectHost={(ip) => scanStore.setSelectedHost(ip)}
           onToggleFavorite={(ip) => scanStore.toggleFavorite(ip)}

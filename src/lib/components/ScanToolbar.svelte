@@ -6,6 +6,7 @@
   export let selectedInterface: string | null = null;
   export let approach: ScanApproach = 'balanced';
   export let scanning = false;
+  export let stopping = false;
   export let query = '';
 
   export let onInterfaceChange: ((name: string) => void) | undefined = undefined;
@@ -73,7 +74,7 @@
     </BalloonHelp>
 
     {#if scanning}
-      <Button onclick={onStop}>Stop Scan</Button>
+      <Button onclick={onStop} disabled={stopping}>{stopping ? 'Stopping...' : 'Stop Scan'}</Button>
     {:else}
       <Button onclick={onStart} disabled={!selectedInterface}>Start Scan</Button>
     {/if}
