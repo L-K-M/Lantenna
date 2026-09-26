@@ -13,6 +13,11 @@
     import routerIcon from '$lib/assets/host-icons/router.svg';
     import serverIcon from '$lib/assets/host-icons/server.svg';
     import { DataTable } from '@lkmc/system7-ui';
+    import { onMount, tick } from 'svelte';
+    import { TauriService } from '$lib/tauri';
+    import { formatRelativeTime, normalizeDisplayText, shortVendorName } from '$lib/util/format';
+    import { notifications } from '$lib/util/notifications';
+    import { primaryPortTarget } from '$lib/util/portTargets';
 
     export let hosts: Host[] = [];
     export let loading = false;
@@ -26,16 +31,17 @@
     export let onToggleFavorite: ((ip: string) => void) | undefined = undefined;
     export let onToggleHidden: ((ip: string) => void) | undefined = undefined;
     export let onClearCustomName: ((ip: string) => void) | undefined = undefined;
+    export let emptyText = 'No hosts yet. Start a scan.';
 
     type SortField = 'ip' | 'favorite' | 'name' | 'fingerprint' | 'ports' | 'lastSeen';
     type SortDirection = 'asc' | 'desc';
 
     const columns = [
-        { key: 'ip', label: 'IP', width: '200px', className: 'col-ip' },
-        { key: 'name', label: 'Name', width: '25%', className: 'col-name' },
-        { key: 'fingerprint', label: 'Fingerprint', width: '32%', className: 'col-fingerprint' },
+        { key: 'ip', label: 'IP', width: '190px', className: 'col-ip' },
+        { key: 'name', label: 'Name', width: '24%', className: 'col-name' },
+        { key: 'fingerprint', label: 'Fingerprint', width: '28%', className: 'col-fingerprint' },
         { key: 'ports', label: 'Open Ports', className: 'col-ports' },
-        { key: 'lastSeen', label: 'Last Seen', width: '100px', className: 'col-seen' }
+        { key: 'lastSeen', label: 'Last Seen', width: '84px', className: 'col-seen' }
     ];
 
     interface IconInfo {
@@ -49,6 +55,16 @@
         y: number;
         ip: string;
     }
+
+    // Drives the relative "Last Seen" labels.
+    let now = Date.now();
+
+    onMount(() => {
+        const timer = setInterval(() => {
+            now = Date.now();
+        }, 60_000);
+        return () => clearInterval(timer);
+    });
 
     let sortField: SortField = 'favorite';
     let sortDirection: SortDirection = 'asc';
@@ -69,6 +85,13 @@
     let contextMenuElement: HTMLDivElement | null = null;
 
     $: sortedHosts = [...hosts].sort((a, b) => {
+        if (sortField === 'name') {
+            const unnamed = Number(isUnnamed(a)) - Number(isUnnamed(b));
+            if (unnamed !== 0) {
+                return unnamed;
+            }
+        }
+
         const result = compareHosts(a, b, sortField, favoriteSet);
         if (result !== 0) {
             return sortDirection === 'asc' ? result : -result;
@@ -127,42 +150,31 @@
         }
     }
 
+    const MAX_LISTED_PORTS = 6;
+
+    /** Port numbers only, so more fit; the tooltip has the service names. */
     function formatPorts(host: Host): string {
         if (host.open_ports.length === 0) {
             return '-';
         }
 
-        const labels = host.open_ports.slice(0, 5).map((port) => {
-            if (port.service) {
-                return `${port.port} (${port.service})`;
-            }
-            return String(port.port);
-        });
-
-        if (host.open_ports.length > 5) {
-            labels.push(`+${host.open_ports.length - 5}`);
+        const numbers = host.open_ports.slice(0, MAX_LISTED_PORTS).map((port) => String(port.port));
+        if (host.open_ports.length > MAX_LISTED_PORTS) {
+            numbers.push(`+${host.open_ports.length - MAX_LISTED_PORTS}`);
         }
 
-        return labels.join(', ');
+        return numbers.join(', ');
     }
 
-    function formatTime(iso: string): string {
-        if (!iso) {
-            return '-';
-        }
+    function describePorts(host: Host): string {
+        return host.open_ports
+            .map((port) => (port.service ? `${port.port} (${port.service})` : String(port.port)))
+            .join(', ');
+    }
 
+    function formatTimestamp(iso: string): string {
         const date = new Date(iso);
-        if (Number.isNaN(date.getTime())) {
-            return '-';
-        }
-
-        const now = new Date();
-        const sameDay =
-            date.getFullYear() === now.getFullYear() &&
-            date.getMonth() === now.getMonth() &&
-            date.getDate() === now.getDate();
-
-        return sameDay ? date.toLocaleTimeString() : date.toLocaleDateString();
+        return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
     }
 
     function formatFingerprint(host: Host): string {
@@ -171,22 +183,12 @@
             return 'Not fingerprinted yet';
         }
 
-        const vendor = normalizeFingerprintText(fp.vendor || fp.manufacturer || 'Unknown vendor');
-        const kind = normalizeFingerprintText(fp.device_type || fp.os_guess || fp.model_guess || 'Unknown type');
+        const rawVendor = fp.vendor || fp.manufacturer;
+        const vendor = rawVendor ? shortVendorName(normalizeDisplayText(rawVendor)) : 'Unknown vendor';
+        const kind = normalizeDisplayText(fp.device_type || fp.os_guess || fp.model_guess || 'Unknown type');
         const confidence = Number.isFinite(fp.confidence) ? `${fp.confidence}%` : 'n/a';
 
         return `${vendor} • ${kind} (${confidence})`;
-    }
-
-    function normalizeFingerprintText(value: string): string {
-        return value
-            .normalize('NFKC')
-            .replace(/[\u0000-\u001F\u007F]/g, '')
-            .replace(/[\u200B-\u200D\uFEFF]/g, '')
-            .replace(/\s+([,.;:!?])/g, '$1')
-            .replace(/([,.;:!?])(\S)/g, '$1 $2')
-            .replace(/\s+/g, ' ')
-            .trim();
     }
 
     function toggleFavorite(event: MouseEvent, ip: string) {
@@ -222,6 +224,21 @@
     function selectHost(ip: string) {
         closeContextMenu();
         onSelectHost?.(ip);
+    }
+
+    async function openHost(host: Host) {
+        const target = primaryPortTarget(host);
+        if (!target) {
+            notifications.add(`${host.ip} has no open web, file sharing or remote login port.`, 'info');
+            return;
+        }
+
+        try {
+            await TauriService.openExternalUrl(target.url);
+        } catch (error) {
+            const message = typeof error === 'string' ? error : `Failed to open ${target.url}`;
+            notifications.add(message, 'error');
+        }
     }
 
     function openContextMenu(event: MouseEvent, ip: string) {
@@ -287,6 +304,15 @@
             return;
         }
 
+        if (event.key === 'Enter') {
+            const selected = sortedHosts.find((host) => host.ip === selectedHostIp);
+            if (selected) {
+                event.preventDefault();
+                void openHost(selected);
+            }
+            return;
+        }
+
         if (event.key === 'ArrowDown') {
             event.preventDefault();
             moveSelection(1);
@@ -349,6 +375,12 @@
 
         closeContextMenu();
         onSelectHost?.(next.ip);
+        void scrollSelectedRowIntoView();
+    }
+
+    async function scrollSelectedRowIntoView() {
+        await tick();
+        document.querySelector('.table-body-container tr.selected')?.scrollIntoView({ block: 'nearest' });
     }
 
     function moveSelection(offset: number) {
@@ -363,6 +395,10 @@
         }
 
         selectByIndex(currentIndex + offset);
+    }
+
+    function isUnnamed(host: Host): boolean {
+        return !(customNames[host.ip]?.trim() || host.name);
     }
 
     function displayName(host: Host): string {
@@ -530,7 +566,7 @@
         loading={loading && hosts.length === 0}
         empty={!loading && hosts.length === 0}
         loadingText="Scanning..."
-        emptyText="No hosts yet. Start a scan."
+        {emptyText}
         emptyColspan={5}
         bodyClass="table-body-container"
 >
@@ -615,6 +651,7 @@
                 class:stale={staleFavoriteSet.has(host.ip)}
                 class:new-entry={newHostSet.has(host.ip)}
                 onclick={() => selectHost(host.ip)}
+                ondblclick={() => openHost(host)}
                 oncontextmenu={(event) => openContextMenu(event, host.ip)}
         >
             <td class="col-ip">
@@ -642,8 +679,8 @@
                 <span class="host-name">{displayName(host)}</span>
             </td>
             <td class="col-fingerprint">{formatFingerprint(host)}</td>
-            <td class="col-ports">{formatPorts(host)}</td>
-            <td class="col-seen">{formatTime(host.last_seen)}</td>
+            <td class="col-ports" title={describePorts(host)}>{formatPorts(host)}</td>
+            <td class="col-seen" title={formatTimestamp(host.last_seen)}>{formatRelativeTime(host.last_seen, now)}</td>
         </tr>
     {/each}
 </DataTable>
@@ -756,17 +793,15 @@
     }
 
     .col-ip {
-        width: 185px;
-        min-width: 200px;
-        max-width: 200px;
+        width: 190px;
     }
 
     .col-name {
-        width: 25%;
+        width: 24%;
     }
 
     .col-fingerprint {
-        width: 32%;
+        width: 28%;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -777,9 +812,7 @@
     }
 
     .col-seen {
-        width: 100px;
-        min-width: 100px;
-        max-width: 100px;
+        width: 84px;
     }
 
     .ip-cell {
@@ -830,18 +863,13 @@
         color: #777;
     }
 
-    tr.new-entry:not(:hover):not(.selected) td {
+    tr.new-entry:not(.selected) td {
         background: #fff7bf;
     }
 
-    tr.hidden-entry:not(:hover):not(.selected) td {
+    tr.hidden-entry:not(.selected) td {
         color: #666;
         background: #f4f4f4;
-    }
-
-    tr:hover td {
-        background: var(--system7-color-accent, #000);
-        color: var(--system7-color-accent-text, #fff);
     }
 
     tr.selected td {
@@ -849,28 +877,14 @@
         color: var(--system7-color-highlight-text, #fff);
     }
 
-    tr:hover .favorite-toggle svg {
-        stroke: var(--system7-color-accent-text, #fff);
-    }
-
     tr.selected .favorite-toggle svg {
         stroke: var(--system7-color-highlight-text, #fff);
-    }
-
-    tr:hover .new-badge {
-        background: var(--system7-color-accent-text, #fff);
-        color: var(--system7-color-accent, #000);
-        border-color: var(--system7-color-accent-text, #fff);
     }
 
     tr.selected .new-badge {
         background: var(--system7-color-highlight-text, #fff);
         color: var(--system7-color-highlight, #000);
         border-color: var(--system7-color-highlight-text, #fff);
-    }
-
-    tr:hover .favorite-toggle.active svg {
-        fill: var(--system7-color-accent-text, #fff);
     }
 
     tr.selected .favorite-toggle.active svg {
