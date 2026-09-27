@@ -2,6 +2,7 @@
     import {BalloonHelp, Button, CopyIcon, DownloadIcon, TextInput} from '@lkmc/system7-ui';
     import {TauriService} from '$lib/tauri';
     import type {Host} from '$lib/types';
+    import {isPrivateMac} from '$lib/util/mac';
     import {notifications} from '$lib/util/notifications';
     import {getPortTarget} from '$lib/util/portTargets';
 
@@ -239,7 +240,10 @@
         {/if}
       </span>
         </div>
-        <div class="kv"><span>Vendor</span><span>{fp?.vendor || fp?.manufacturer || 'Unknown'}</span></div>
+        <div class="kv">
+            <span>Vendor</span>
+            <span>{fp?.vendor || fp?.manufacturer || (isPrivateMac(fp?.mac_address) ? 'Private address' : 'Unknown')}</span>
+        </div>
         <div class="kv"><span>Type</span><span>{fp?.device_type || 'Unknown'}</span></div>
         <div class="kv"><span>OS</span><span>{fp?.os_guess || 'Unknown'}</span></div>
         <div class="kv"><span>Model</span><span>{fp?.model_guess || 'Unknown'}</span></div>
