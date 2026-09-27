@@ -1719,6 +1719,9 @@ fn infer_device_profile(
     let hint_text = format!("{} {} {}", host_hints, vendor_hints, manufacturer_hints);
 
     let contains_hint = |needles: &[&str]| contains_any_hint(&hint_text, needles);
+    // Name hints with no port evidence behind them must match whole words:
+    // "pineapple" is not Apple, and "ipadmin" is not an iPad.
+    let contains_word_hint = |needles: &[&str]| contains_any_word_hint(&hint_text, needles);
 
     let has = |port: u16| ports.contains(&port);
     let has_any = |group: &[u16]| group.iter().any(|port| ports.contains(port));
@@ -1788,7 +1791,7 @@ fn infer_device_profile(
         notes.push("Plex signature detected (port 32400)".to_string());
     }
 
-    if has(62078) || contains_hint(&["iphone", "ipad", "apple watch"]) {
+    if has(62078) || contains_word_hint(&["iphone", "ipad", "apple watch"]) {
         set_if_none(&mut inferred_type, "Mobile device");
         set_if_none(&mut inferred_os, "Apple iOS/iPadOS family");
         set_if_none(&mut inferred_model, "Apple mobile device");
@@ -1811,7 +1814,15 @@ fn infer_device_profile(
     // login enabled used to come out as "Windows-like" or "Linux". Only the
     // vendor or name implies Apple: AFP and DAAP are also served by netatalk,
     // older NAS firmware, owntone and iTunes for Windows.
-    if contains_hint(&["apple", "macbook", "imac", "mac mini", "mac studio"]) {
+    if contains_word_hint(&[
+        "apple",
+        "macbook",
+        "macbookpro",
+        "macbookair",
+        "imac",
+        "mac mini",
+        "mac studio",
+    ]) {
         set_if_none(&mut inferred_type, "Apple device");
         set_if_none(&mut inferred_os, "Apple OS family");
         confidence_boost = confidence_boost.saturating_add(16);
@@ -1930,6 +1941,16 @@ fn normalize_hint_text(value: &str) -> String {
 
 fn contains_any_hint(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
+}
+
+/// Like `contains_any_hint`, but a needle only matches whole words of the
+/// `normalize_hint_text` output. Multi-word needles ("mac mini") still work.
+fn contains_any_word_hint(haystack: &str, needles: &[&str]) -> bool {
+    let words = haystack.split_whitespace().collect::<Vec<_>>().join(" ");
+    let padded = format!(" {words} ");
+    needles
+        .iter()
+        .any(|needle| padded.contains(&format!(" {needle} ")))
 }
 
 fn first_non_empty(values: Vec<Option<String>>) -> Option<String> {
@@ -2991,6 +3012,26 @@ mod tests {
         assert_eq!(device_type.as_deref(), Some("NAS/Storage"));
         assert_eq!(model_guess.as_deref(), Some("Synology NAS (DSM)"));
         assert_eq!(os_guess.as_deref(), Some("Linux/Unix-like"));
+    }
+
+    #[test]
+    fn apple_name_hints_match_whole_words_only() {
+        let pineapple = host("192.168.1.60", Some("wifi-pineapple"), &[80]);
+        let (device_type, os_guess, _, _, _) = infer_device_profile(&pineapple, None, None);
+        assert_ne!(device_type.as_deref(), Some("Apple device"));
+        assert_ne!(os_guess.as_deref(), Some("Apple OS family"));
+
+        let admin = host("192.168.1.61", Some("ipadmin01"), &[22]);
+        let (device_type, _, _, _, _) = infer_device_profile(&admin, None, None);
+        assert_ne!(device_type.as_deref(), Some("Mobile device"));
+
+        let ipad = host("192.168.1.62", Some("Lukas-iPad"), &[]);
+        let (device_type, _, _, _, _) = infer_device_profile(&ipad, None, None);
+        assert_eq!(device_type.as_deref(), Some("Mobile device"));
+
+        let laptop = host("192.168.1.64", Some("Lukas-MacBookAir.local"), &[22]);
+        let (_, os_guess, _, _, _) = infer_device_profile(&laptop, None, None);
+        assert_eq!(os_guess.as_deref(), Some("Apple OS family"));
     }
 
     #[test]

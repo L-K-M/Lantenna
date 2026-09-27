@@ -161,6 +161,7 @@
                     aria-selected={selectedHostIp === host.ip}
                     title={`${displayName(host)} (${host.ip}): ${icon.label}`}
                     onclick={() => onSelectHost?.(host.ip)}
+                    onfocus={() => onSelectHost?.(host.ip)}
                     ondblclick={() => openHost(host)}
             >
                 <span class="tile-icon">

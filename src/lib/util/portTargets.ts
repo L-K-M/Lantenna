@@ -17,13 +17,15 @@ const vncPorts = new Set([5900, 5901, 5902]);
 const telnetPorts = new Set([23, 2323]);
 const rtspPorts = new Set([554, 8554]);
 
-const IPV4_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/;
+const IPV4_OCTET = '(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)';
+const IPV4_LITERAL = new RegExp(`^${IPV4_OCTET}(\\.${IPV4_OCTET}){3}$`);
 
 /** The URL a user would open for an open port, or null when there is none. */
 export function getPortTarget(hostIp: string, port: number, service: string | null): PortTarget | null {
   // These URLs go to the OS opener; only interpolate a plain IPv4 address
-  // (host records can also come from favorites saved in localStorage).
-  if (!IPV4_LITERAL.test(hostIp)) {
+  // and a valid port (host records can also come from favorites saved in
+  // localStorage, so neither is guaranteed to be well-formed).
+  if (!IPV4_LITERAL.test(hostIp) || !Number.isInteger(port) || port < 1 || port > 65535) {
     return null;
   }
 

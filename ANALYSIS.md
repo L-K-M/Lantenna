@@ -482,7 +482,7 @@ with a 64×64 PNG.
 
 **CODE-10: Upgrade Tauri to 2.11 on both sides (M).** The Tauri CLI refuses to
 build when the `tauri` crate and `@tauri-apps/api` differ in major.minor, so
-bump them together: `cargo update -p tauri --precise 2.11.x` (it pulls a large
+bump them together: `cargo update -p tauri --precise 2.11.6` (or the newest 2.11 patch; `--precise` needs an exact version) (it pulls a large
 set of transitive updates, including brotli and cssparser) and
 `@tauri-apps/api@2.11`. Verify with a macOS `npm run tauri build`, not just CI,
 which never runs the bundler. Dependabot's api-only bump (#9) was closed for
