@@ -1,16 +1,39 @@
-import { currentMonitor, getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
+// Owner: unit A (spec 8.4). Spec: 2.10 (window ops), 8.2.
+//
+// SCAFFOLD: dragWindow and winClose work, and subscribeActivity is
+// unchanged from before the port. winShade, winZoom and winGrow are
+// ignored, and trackGrow / watchResize install nothing.
+// Final contract: apply(op) carries out Osmium's window ops on the Tauri
+// window as table 2.10 says (the collapse box's shade and min size, the
+// standard-size zoom, the grow box: Linux startResizeDragging, macOS a
+// setSize loop fed by trackGrow); watchResize keeps the shade
+// bookkeeping right when the OS resizes the window.
+
+import { getCurrentWindow, LogicalSize, type Window } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
 import type { UnlistenFn } from '@tauri-apps/api/event';
+import type { WindowOp } from 'osmium-ui';
 
 // Must match ACTIVITY_CHANGED in src-tauri/src/window_activity.rs; nothing
 // checks this at build time.
 const ACTIVITY_CHANGED = 'window-activity-changed';
 
+function reportFailure(what: string) {
+  return (error: unknown) => console.error(`Failed to ${what}:`, error);
+}
+
 export class WindowManager {
-  private static readonly TITLE_BAR_HEIGHT = 36;
-  private savedWindowSize: { width: number; height: number } | null = null;
-  private isShaded = false;
-  private appWindow = getCurrentWindow();
+  private currentWindow: Window | null = null;
+
+  /**
+   * The Tauri window, looked up on first use rather than at construction,
+   * so importing the shared instance never touches Tauri's internals (a
+   * mock backend may install them after the page's modules load).
+   */
+  private get appWindow(): Window {
+    this.currentWindow ??= getCurrentWindow();
+    return this.currentWindow;
+  }
 
   /**
    * Reports whether the window draws as active. On Linux that is GTK's
@@ -54,6 +77,43 @@ export class WindowManager {
     };
   }
 
+  /**
+   * Carry out a window op from Osmium's hostWindow (its `post`). Called
+   * synchronously from the pointer event that caused it: startDragging
+   * must be invoked before anything is awaited, or the OS drag misses
+   * the press.
+   */
+  apply(op: WindowOp): void {
+    switch (op.op) {
+      case 'dragWindow':
+        this.appWindow.startDragging().catch(reportFailure('drag the window'));
+        return;
+      case 'winClose':
+        this.appWindow.close().catch(reportFailure('close the window'));
+        return;
+      case 'winShade':
+      case 'winZoom':
+      case 'winGrow':
+        // Unit A (spec 2.10).
+        return;
+    }
+  }
+
+  /**
+   * macOS grow box: follow presses on `frame`'s .osm-grow so a later
+   * winGrow can resize the window from the press (tao can't start a
+   * resize drag on macOS). Returns the disposer.
+   */
+  trackGrow(frame: HTMLElement): () => void {
+    return () => {};
+  }
+
+  /** Keep the shade bookkeeping right when the OS resizes the window.
+   * Returns the disposer. */
+  watchResize(): () => void {
+    return () => {};
+  }
+
   async close(): Promise<void> {
     await this.appWindow.close();
   }
@@ -61,72 +121,8 @@ export class WindowManager {
   async setSize(width: number, height: number): Promise<void> {
     await this.appWindow.setSize(new LogicalSize(width, height));
   }
-
-  async resizeHeightBy(deltaHeight: number): Promise<void> {
-    if (!Number.isFinite(deltaHeight)) {
-      return;
-    }
-
-    const [scaleFactor, innerSize, outerSize, outerPosition, monitor] = await Promise.all([
-      this.appWindow.scaleFactor(),
-      this.appWindow.innerSize(),
-      this.appWindow.outerSize(),
-      this.appWindow.outerPosition(),
-      currentMonitor()
-    ]);
-
-    const logicalInnerWidth = innerSize.width / scaleFactor;
-    const logicalInnerHeight = innerSize.height / scaleFactor;
-    const logicalOuterHeight = outerSize.height / scaleFactor;
-    const chromeHeight = Math.max(0, logicalOuterHeight - logicalInnerHeight);
-
-    const requestedInnerHeight = logicalInnerHeight + deltaHeight;
-    let maxInnerHeight = Number.POSITIVE_INFINITY;
-
-    if (monitor) {
-      const monitorBottomPx = monitor.workArea.position.y + monitor.workArea.size.height;
-      const availableOuterHeightPx = monitorBottomPx - outerPosition.y;
-      if (availableOuterHeightPx > 0) {
-        maxInnerHeight = Math.max(
-          WindowManager.TITLE_BAR_HEIGHT,
-          availableOuterHeightPx / scaleFactor - chromeHeight
-        );
-      }
-    }
-
-    const targetInnerHeight = Math.max(
-      WindowManager.TITLE_BAR_HEIGHT,
-      Math.min(requestedInnerHeight, maxInnerHeight)
-    );
-
-    if (Math.abs(targetInnerHeight - logicalInnerHeight) < 0.5) {
-      return;
-    }
-
-    await this.appWindow.setSize(new LogicalSize(logicalInnerWidth, targetInnerHeight));
-  }
-
-  async toggleShade(): Promise<boolean> {
-    const scaleFactor = await this.appWindow.scaleFactor();
-
-    if (!this.isShaded) {
-      const size = await this.appWindow.innerSize();
-      const logicalWidth = size.width / scaleFactor;
-      const logicalHeight = size.height / scaleFactor;
-      this.savedWindowSize = { width: logicalWidth, height: logicalHeight };
-      await this.appWindow.setSize(new LogicalSize(logicalWidth, WindowManager.TITLE_BAR_HEIGHT));
-      this.isShaded = true;
-    } else {
-      if (this.savedWindowSize) {
-        await this.appWindow.setSize(new LogicalSize(this.savedWindowSize.width, this.savedWindowSize.height));
-      }
-      this.isShaded = false;
-    }
-
-    return this.isShaded;
-  }
-
-  async startDragging(): Promise<void> {
-    await this.appWindow.startDragging();
-  }
 }
+
+/** The one window's manager, shared by the page (hostWindow's post) and
+ * the commands (View > Zoom Window). */
+export const windowManager = new WindowManager();

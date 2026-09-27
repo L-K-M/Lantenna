@@ -1,6 +1,5 @@
 <script>
-  import '@lkmc/system7-ui/styles.css';
-  import UpdateNotice from '$lib/components/UpdateNotice.svelte';
+  import 'osmium-ui/osmium.css';
 </script>
 
 <style>
@@ -16,4 +15,3 @@
 </style>
 
 <slot />
-<UpdateNotice />

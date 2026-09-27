@@ -12,9 +12,9 @@ import type {
   ScanResult
 } from '$lib/types';
 import { errorMessage } from './errors';
-import { notifications } from './notifications';
+import { scanEvents } from './scanEvents';
 
-interface ScanStoreState {
+export interface ScanStoreState {
   interfaces: NetworkInterface[];
   selectedInterface: string | null;
   scanApproach: ScanApproach;
@@ -34,6 +34,8 @@ interface ScanStoreState {
   query: string;
   selectedHostIp: string | null;
   lastScanAt: string | null;
+  /** Whether the scan that set lastScanAt was stopped before it finished. */
+  lastScanCancelled: boolean;
 }
 
 type FavoriteHostSnapshots = Record<string, Host>;
@@ -430,7 +432,8 @@ const initialState: ScanStoreState = {
   error: null,
   query: '',
   selectedHostIp: null,
-  lastScanAt: null
+  lastScanAt: null,
+  lastScanCancelled: false
 };
 
 function ipToNumber(ip: string): number {
@@ -483,7 +486,7 @@ function upsertHost(hosts: Host[], host: Host): Host[] {
   return [...hosts, host];
 }
 
-interface ScanProgressState {
+export interface ScanProgressState {
   progress: ScanProgress | null;
   hostScanProgress: ScanProgress | null;
 }
@@ -612,6 +615,7 @@ function createScanStore() {
             scanning: false,
             stopping: false,
             lastScanAt: event.payload.completed_at,
+            lastScanCancelled: wasCancelled,
             error: null
           };
         });
@@ -637,12 +641,11 @@ function createScanStore() {
         activeComparisonEnabled = false;
         activeBaselineIps = new Set();
 
-        notifications.add(
-          wasCancelled
-            ? `Scan cancelled: ${event.payload.hosts.length} hosts discovered before stop.`
-            : `Scan complete: ${event.payload.hosts.length} hosts found.`,
-          wasCancelled ? 'info' : 'success'
-        );
+        scanEvents.emit({
+          type: 'scan-complete',
+          hostCount: event.payload.hosts.length,
+          cancelled: wasCancelled
+        });
       })
     );
 
@@ -662,7 +665,7 @@ function createScanStore() {
           ...value,
           progress: value.progress ? { ...value.progress, running: false, current_ip: null } : null
         }));
-        notifications.add(event.payload.message, 'error');
+        scanEvents.emit({ type: 'scan-error', message: event.payload.message });
       })
     );
 
@@ -706,6 +709,7 @@ function createScanStore() {
             staleFavoriteIps,
             newHostIps: [],
             lastScanAt: previous?.completed_at || state.lastScanAt,
+            lastScanCancelled: previous?.completed_at ? previous.cancelled : state.lastScanCancelled,
             loading: false,
             error: null
           };
@@ -713,7 +717,7 @@ function createScanStore() {
       } catch (error) {
         const message = errorMessage(error, 'Failed to initialize scanner');
         update((state) => ({ ...state, loading: false, error: message }));
-        notifications.add(message, 'error');
+        scanEvents.emit({ type: 'init-failed', message });
       }
     },
     destroy: () => {
@@ -851,7 +855,7 @@ function createScanStore() {
       const selectedInterface = findInterfaceByKey(currentState.interfaces, currentState.selectedInterface);
 
       if (!selectedInterface) {
-        notifications.add('Choose a network interface first.', 'error');
+        scanEvents.emit({ type: 'no-interface' });
         return;
       }
 
@@ -859,13 +863,6 @@ function createScanStore() {
       const previousProgress = currentProgress.progress;
       const previousHostScanProgress = currentProgress.hostScanProgress;
       const maxHosts = selectedInterface.host_count > 0 ? Math.min(selectedInterface.host_count, MAX_SCAN_HOSTS) : null;
-
-      if (selectedInterface.host_count > MAX_SCAN_HOSTS) {
-        notifications.add(
-          `Large subnet detected (${selectedInterface.host_count} hosts). Scanning first ${MAX_SCAN_HOSTS} hosts.`,
-          'info'
-        );
-      }
 
       activeComparisonEnabled = scanTargetMatches(latestScanTarget, selectedInterface.name, selectedInterface.subnet);
       activeBaselineIps = new Set(activeComparisonEnabled ? latestScanHostIps : []);
@@ -919,7 +916,7 @@ function createScanStore() {
           newHostIps: previousNewHostIps
         }));
         scanProgress.set({ progress: previousProgress, hostScanProgress: previousHostScanProgress });
-        notifications.add(message, 'error');
+        scanEvents.emit({ type: 'start-failed', message });
       }
     },
     cancelScan: async () => {
@@ -936,12 +933,12 @@ function createScanStore() {
         await TauriService.cancelScan();
       } catch (error) {
         update((state) => ({ ...state, stopping: false }));
-        notifications.add(errorMessage(error, 'Failed to cancel scan'), 'error');
+        scanEvents.emit({ type: 'cancel-failed', message: errorMessage(error, 'Failed to cancel scan') });
       }
     },
     refreshHostPorts: async (ip: string, profile: PortProfile = 'deep') => {
       if (currentProgress.hostScanProgress?.running) {
-        notifications.add('A host deep scan is already in progress.', 'info');
+        scanEvents.emit({ type: 'deep-scan-busy', ip });
         return;
       }
 
@@ -988,10 +985,14 @@ function createScanStore() {
           };
         });
         finishHostScan(host.open_ports.length);
-        notifications.add(`Deep scan complete for ${ip}.`, 'success');
+        scanEvents.emit({ type: 'deep-scan-done', ip, openPorts: host.open_ports.length });
       } catch (error) {
         finishHostScan(null);
-        notifications.add(errorMessage(error, 'Failed to scan host ports'), 'error');
+        scanEvents.emit({
+          type: 'deep-scan-failed',
+          ip,
+          message: errorMessage(error, 'Failed to scan host ports')
+        });
       }
     }
   };

@@ -1,3 +1,4 @@
+import type { HostIconKind } from '$lib/osm/sprites';
 import type { Host } from '$lib/types';
 import cameraIcon from '$lib/assets/host-icons/camera.svg';
 import iotIcon from '$lib/assets/host-icons/iot.svg';
@@ -15,6 +16,7 @@ import serverIcon from '$lib/assets/host-icons/server.svg';
 export interface IconInfo {
   src: string;
   label: string;
+  kind: HostIconKind;
 }
 
 function includesAny(haystack: string, needles: string[]): boolean {
@@ -72,11 +74,11 @@ export function getHostIcon(host: Host, customName: string): IconInfo {
     includesAny(allHints, ['camera', 'webcam', 'ipcam', 'cctv', 'hikvision', 'reolink', 'dahua', 'axis', 'onvif']) ||
     hasRtspLikePort
   ) {
-    return { src: cameraIcon, label: 'Camera' };
+    return { src: cameraIcon, label: 'Camera', kind: 'camera' };
   }
 
   if (includesAny(allHints, ['kvm', 'pikvm', 'ipkvm', 'ipmi', 'idrac', 'ilo', 'bmc']) || hasKvmLikePort) {
-    return { src: kvmIcon, label: 'KVM device' };
+    return { src: kvmIcon, label: 'KVM device', kind: 'kvm' };
   }
 
   if (
@@ -100,55 +102,55 @@ export function getHostIcon(host: Host, customName: string): IconInfo {
       'switch'
     ])
   ) {
-    return { src: routerIcon, label: 'Network device' };
+    return { src: routerIcon, label: 'Network device', kind: 'router' };
   }
 
   if (includesAny(allHints, ['phone', 'mobile', 'tablet', 'iphone', 'ipad', 'pixel', 'galaxy'])) {
-    return { src: mobileIcon, label: 'Mobile device' };
+    return { src: mobileIcon, label: 'Mobile device', kind: 'mobile' };
   }
 
   if (includesAny(allHints, ['printer', 'laserjet', 'deskjet', 'officejet', 'epson', 'brother'])) {
-    return { src: printerIcon, label: 'Printer' };
+    return { src: printerIcon, label: 'Printer', kind: 'printer' };
   }
 
   if (includesAny(allHints, ['tv', 'appletv', 'apple tv', 'chromecast', 'roku', 'fire tv', 'media'])) {
-    return { src: mediaIcon, label: 'TV / media device' };
+    return { src: mediaIcon, label: 'TV / media device', kind: 'media' };
   }
 
   if (includesAny(nameHints, ['macbook', 'imac', 'mac mini', 'mac studio']) || /\bmac\b/.test(nameHints)) {
-    return { src: pcMacIcon, label: 'Apple host' };
+    return { src: pcMacIcon, label: 'Apple host', kind: 'pc-mac' };
   }
 
   if (
     (includesAny(deviceType, ['workstation', 'server']) || includesAny(allHints, ['workstation', 'server'])) &&
     isWindowsLike(os)
   ) {
-    return { src: pcWindowsIcon, label: 'Windows workstation/server' };
+    return { src: pcWindowsIcon, label: 'Windows workstation/server', kind: 'pc-windows' };
   }
 
   if (includesAny(allHints, ['nas', 'synology', 'qnap', 'truenas', 'freenas', 'storage'])) {
-    return { src: serverIcon, label: 'Server / storage' };
+    return { src: serverIcon, label: 'Server / storage', kind: 'server' };
   }
 
   if (includesAny(allHints, ['iot', 'smart', 'esphome', 'tasmota', 'shelly', 'zigbee', 'zwave'])) {
-    return { src: iotIcon, label: 'IoT device' };
+    return { src: iotIcon, label: 'IoT device', kind: 'iot' };
   }
 
   if (isWindowsLike(os)) {
-    return { src: pcWindowsIcon, label: 'Windows host' };
+    return { src: pcWindowsIcon, label: 'Windows host', kind: 'pc-windows' };
   }
 
   if (isMacLike(os)) {
-    return { src: pcMacIcon, label: 'Apple host' };
+    return { src: pcMacIcon, label: 'Apple host', kind: 'pc-mac' };
   }
 
   if (isLinuxLike(os)) {
-    return { src: pcLinuxIcon, label: 'Linux host' };
+    return { src: pcLinuxIcon, label: 'Linux host', kind: 'pc-linux' };
   }
 
   if (includesAny(os, ['android'])) {
-    return { src: mobileIcon, label: 'Android host' };
+    return { src: mobileIcon, label: 'Android host', kind: 'mobile' };
   }
 
-  return { src: pcGenericIcon, label: 'Unknown host' };
+  return { src: pcGenericIcon, label: 'Unknown host', kind: 'pc-generic' };
 }

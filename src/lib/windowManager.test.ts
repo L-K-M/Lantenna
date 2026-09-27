@@ -4,12 +4,18 @@ import { WindowManager } from './windowManager';
 const native = vi.hoisted(() => ({
   listen: vi.fn(),
   invoke: vi.fn(),
-  unlisten: vi.fn()
+  unlisten: vi.fn(),
+  startDragging: vi.fn(),
+  close: vi.fn()
 }));
 
 vi.mock('@tauri-apps/api/window', async (importOriginal) => ({
   ...await importOriginal<typeof import('@tauri-apps/api/window')>(),
-  getCurrentWindow: () => ({ listen: native.listen })
+  getCurrentWindow: () => ({
+    listen: native.listen,
+    startDragging: native.startDragging,
+    close: native.close
+  })
 }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: native.invoke }));
 
@@ -23,6 +29,8 @@ beforeEach(() => {
   vi.resetAllMocks();
   native.listen.mockResolvedValue(native.unlisten);
   native.invoke.mockResolvedValue(true);
+  native.startDragging.mockResolvedValue(undefined);
+  native.close.mockResolvedValue(undefined);
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -112,4 +120,21 @@ it('reports registration failures without an unhandled rejection', async () => {
   ));
   expect(native.invoke).not.toHaveBeenCalled();
   stop();
+});
+
+it('starts a window drag within the press, before anything is awaited', () => {
+  new WindowManager().apply({ op: 'dragWindow' });
+
+  expect(native.startDragging).toHaveBeenCalledOnce();
+});
+
+it('closes the window and reports a refused close', async () => {
+  const error = new Error('close refused');
+  const report = vi.spyOn(console, 'error').mockImplementation(() => {});
+  native.close.mockRejectedValue(error);
+
+  new WindowManager().apply({ op: 'winClose' });
+
+  expect(native.close).toHaveBeenCalledOnce();
+  await vi.waitFor(() => expect(report).toHaveBeenCalledWith('Failed to close the window:', error));
 });
