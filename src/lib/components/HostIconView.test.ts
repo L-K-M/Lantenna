@@ -43,7 +43,8 @@ vi.mock('$lib/app/actions', async (importOriginal) => ({
   ...(await importOriginal<typeof import('$lib/app/actions')>()),
   openHost: spies.openHost
 }));
-vi.mock('$lib/app/contextMenus', () => ({
+vi.mock('$lib/app/contextMenus', async (importOriginal) => ({
+  installControlClick: (await importOriginal<typeof import('$lib/app/contextMenus')>()).installControlClick,
   openHostMenu: spies.openHostMenu,
   openViewMenu: spies.openViewMenu,
   installContextMenuGuard: () => () => {}
@@ -353,6 +354,23 @@ describe('contextual menus', () => {
     await fireEvent.contextMenu(grid, { clientX: 400, clientY: 300 });
     expect(spies.openViewMenu).toHaveBeenCalledWith({ x: 400, y: 300 });
     expect(spies.openHostMenu).not.toHaveBeenCalled();
+  });
+
+  it('opens the menus on a Control-click, which Linux sends no contextmenu for', async () => {
+    const { container } = render(HostIconView);
+    const grid = gridOf(container);
+    grid.getBoundingClientRect = () => new DOMRect(0, 0, 800, 600);
+    const router = tileOf(container, '10.0.0.1');
+    router.getBoundingClientRect = () => new DOMRect(0, 0, 112, 72);
+
+    const onTile = await fireEvent.mouseDown(router.querySelector('img')!, { button: 0, ctrlKey: true, clientX: 20, clientY: 30 });
+    expect(onTile).toBe(false);
+    expect(get(scanStore).selectedHostIp).toBe('10.0.0.1');
+    expect(spies.openHostMenu).toHaveBeenCalledExactlyOnceWith('10.0.0.1', { x: 20, y: 30 });
+    expect(document.activeElement).toBe(router);
+
+    await fireEvent.mouseDown(grid, { button: 0, ctrlKey: true, clientX: 400, clientY: 300 });
+    expect(spies.openViewMenu).toHaveBeenCalledExactlyOnceWith({ x: 400, y: 300 });
   });
 
   it('opens the selection’s menu on Shift-F10 or the menu key, once', async () => {

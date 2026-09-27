@@ -36,7 +36,8 @@ vi.mock('$lib/app/actions', async (importOriginal) => ({
   ...(await importOriginal<typeof import('$lib/app/actions')>()),
   openHost: spies.openHost
 }));
-vi.mock('$lib/app/contextMenus', () => ({
+vi.mock('$lib/app/contextMenus', async (importOriginal) => ({
+  installControlClick: (await importOriginal<typeof import('$lib/app/contextMenus')>()).installControlClick,
   openHostMenu: spies.openHostMenu,
   openViewMenu: spies.openViewMenu,
   installContextMenuGuard: () => () => {}
@@ -381,6 +382,35 @@ describe('contextual menus', () => {
     // Chromium also sends a contextmenu event for the key: one menu only.
     await fireEvent.contextMenu(grid);
     expect(spies.openHostMenu).toHaveBeenCalledTimes(1);
+    expect(spies.openViewMenu).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the menus on a Control-click, which Linux sends no contextmenu for', async () => {
+    const { container } = render(HostList);
+    const { grid, scroller } = parts(container);
+    const label = rowOf(container, '10.0.0.1').querySelector('.osm-lv-label')!;
+
+    const onRow = await fireEvent.mouseDown(label, { button: 0, ctrlKey: true, clientX: 70, clientY: 45 });
+    expect(onRow).toBe(false);
+    expect(get(scanStore).selectedHostIp).toBe('10.0.0.1');
+    expect(spies.openHostMenu).toHaveBeenCalledExactlyOnceWith('10.0.0.1', { x: 70, y: 45 });
+    expect(document.activeElement).toBe(grid);
+
+    // The star is part of its row: the menu, not the star.
+    const star = starOf(container, '10.0.0.2');
+    await fireEvent.pointerDown(star, { button: 0, ctrlKey: true, pointerId: 9, pointerType: 'mouse' });
+    await fireEvent.mouseDown(star, { button: 0, ctrlKey: true, clientX: 8, clientY: 30 });
+    await fireEvent.pointerUp(star, { button: 0, ctrlKey: true, pointerId: 9, pointerType: 'mouse' });
+    expect(spies.openHostMenu).toHaveBeenLastCalledWith('10.0.0.2', { x: 8, y: 30 });
+    expect(star.getAttribute('aria-pressed')).toBe('false');
+
+    await fireEvent.mouseDown(scroller, { button: 0, ctrlKey: true, clientX: 300, clientY: 400 });
+    expect(spies.openViewMenu).toHaveBeenCalledExactlyOnceWith({ x: 300, y: 400 });
+
+    // Headers are the page's; a plain press is the list's.
+    await fireEvent.mouseDown(container.querySelector('[data-column="name"] > .osm-colhead')!, { button: 0, ctrlKey: true });
+    await fireEvent.mouseDown(label, { button: 0 });
+    expect(spies.openHostMenu).toHaveBeenCalledTimes(2);
     expect(spies.openViewMenu).toHaveBeenCalledTimes(1);
   });
 

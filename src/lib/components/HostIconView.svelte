@@ -72,7 +72,7 @@
   import { attachScrollbar, centerText, installOsmium, type MenuPoint } from 'osmium-ui';
   import { openHost } from '$lib/app/actions';
   import { HOST_LIST_BALLOON } from '$lib/app/balloonTexts';
-  import { openHostMenu, openViewMenu } from '$lib/app/contextMenus';
+  import { installControlClick, openHostMenu, openViewMenu } from '$lib/app/contextMenus';
   import { hostModel, type HostModel, type HostRow } from '$lib/app/hostModel';
   import { ui } from '$lib/app/ui';
   import { activeView, type HostViewApi } from '$lib/app/views';
@@ -343,7 +343,8 @@
   }
 
   function onPointerdown(e: PointerEvent): void {
-    // Control-click and right-click belong to the contextual menu.
+    // Control-click and right-click belong to the contextual menu
+    // (contextmenu, or on Linux installControlClick).
     if (e.button !== 0 || e.ctrlKey) return;
     const ip = tileOf(e.target)?.dataset.ip;
     if (ip) scanStore.setSelectedHost(ip);
@@ -397,6 +398,10 @@
     // Osmium's bar follows the grid's scrolling and box, not its
     // content: apply() updates it when the tiles change.
     const scrollbar = attachScrollbar(host, grid, ROW_PITCH);
+
+    // Linux sends no contextmenu event for Control-click: make one
+    // (contextMenus.ts), which onContextmenu answers.
+    const stopControlClick = installControlClick(grid, grid, '.lan-icons-grid');
 
     function apply(): void {
       frame = 0;
@@ -473,6 +478,7 @@
       stopMode();
       if (frame) cancelAnimationFrame(frame);
       scrollbar.destroy();
+      stopControlClick();
     };
   });
 </script>

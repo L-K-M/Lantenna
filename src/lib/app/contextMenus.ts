@@ -13,11 +13,13 @@
 // installContextMenuGuard() keeps the browser's own menu away everywhere
 // else, text fields included (3.3; fixes BUG-13). closeContextMenu() ends
 // an open menu before a native menu command runs (see nativeMenu.ts).
+// installControlClick() makes Control-click a menu request on Linux.
 
 import { get } from 'svelte/store';
 import { showContextMenu, type OsmiumContextMenu } from 'osmium-ui';
 import { scanStore } from '$lib/util/scanStore';
 import { commandContext, hostMenuSpec, osmiumMenuEntries, rowName, viewMenuSpec } from './commands';
+import { platform } from './platform';
 
 /** The last menu opened here; its close() does nothing once it's closed. */
 let shown: OsmiumContextMenu | null = null;
@@ -55,4 +57,66 @@ export function installContextMenuGuard(): () => void {
   const guard = (e: MouseEvent) => e.preventDefault();
   window.addEventListener('contextmenu', guard);
   return () => window.removeEventListener('contextmenu', guard);
+}
+
+/** A system contextmenu event this soon after one made from a
+ * Control-click, with no press between them, is for the same press: the
+ * menu is already open. */
+const CONTROL_CLICK_MS = 500;
+
+/**
+ * Control-click opens the contextual menus on both platforms (3.3, 4.4),
+ * but only macOS sends a contextmenu event for it: GTK (WebKitGTK, and
+ * Chromium on Linux) sends none, and Osmium's list and the icon grid
+ * leave a Control-press to the contextual menu, so it did nothing. On
+ * Linux, a primary press with Control held on `area` (limited to
+ * elements matching `within`) becomes the contextmenu event a
+ * right-click sends, at the same point, which the views already answer.
+ * The press's own focus change is `keyboard`'s focus, as a right-click
+ * focuses the view. Returns the disposer (nothing to do on macOS).
+ */
+export function installControlClick(area: HTMLElement, keyboard: HTMLElement, within: string): () => void {
+  if (platform !== 'linux') return () => {};
+
+  /** When a menu request was made for the press still going on. */
+  let madeAt = -Infinity;
+  const onMouseDown = (e: MouseEvent) => {
+    madeAt = -Infinity;
+    if (e.button !== 0 || !e.ctrlKey || e.defaultPrevented) return;
+    const target = e.target;
+    if (!(target instanceof Element) || !target.closest(within)) return;
+
+    e.preventDefault();
+    keyboard.focus({ preventScroll: true });
+    madeAt = performance.now();
+    target.dispatchEvent(
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        view: window,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        screenX: e.screenX,
+        screenY: e.screenY,
+        ctrlKey: true,
+        buttons: e.buttons
+      })
+    );
+  };
+  // Should the system send one after all, for the same press (no other
+  // press came since, a right-click's included), it is dropped.
+  const dropSystemEvent = (e: MouseEvent) => {
+    if (!e.isTrusted || performance.now() - madeAt >= CONTROL_CLICK_MS) return;
+    madeAt = -Infinity;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  };
+
+  area.addEventListener('mousedown', onMouseDown);
+  area.addEventListener('contextmenu', dropSystemEvent, true);
+  return () => {
+    area.removeEventListener('mousedown', onMouseDown);
+    area.removeEventListener('contextmenu', dropSystemEvent, true);
+  };
 }

@@ -33,7 +33,7 @@
   import { openHost } from '$lib/app/actions';
   import { columnBalloon, HOST_LIST_BALLOON, SORT_ORDER_BALLOON } from '$lib/app/balloonTexts';
   import type { ColumnId } from '$lib/app/columns';
-  import { openHostMenu, openViewMenu } from '$lib/app/contextMenus';
+  import { installControlClick, openHostMenu, openViewMenu } from '$lib/app/contextMenus';
   import { hostModel, type HostModel, type HostRow } from '$lib/app/hostModel';
   import { LIST_ROW_H } from '$lib/app/layout';
   import { ui } from '$lib/app/ui';
@@ -117,6 +117,15 @@
       button.type = 'button';
       button.tabIndex = -1;
       button.className = 'lan-star';
+      // Control-click is the contextual menu's, as on the rest of the
+      // row (the press reaches the list, not the star's tracking).
+      button.addEventListener(
+        'pointerdown',
+        (e) => {
+          if (e.ctrlKey) e.stopImmediatePropagation();
+        },
+        true
+      );
       // Tracked like any Mac OS 8 press: it acts on release inside.
       trackPress(button, () => {
         const ip = button.dataset.fav;
@@ -285,6 +294,9 @@
       openViewMenu(fromKeyboard ? { x: r.left, y: r.top } : { x: e.clientX, y: e.clientY });
     };
     host.addEventListener('contextmenu', onContextMenu);
+    // Linux sends no contextmenu event for Control-click on the rows or
+    // the space below them: make one (contextMenus.ts).
+    const stopControlClick = installControlClick(host, grid, '.osm-list-view, .osm-lv-empty');
 
     // The menu key and Shift-F10 (3.2). Osmium's list answers only the
     // contextmenu event browsers send for them, and WebKit (WKWebView,
@@ -393,6 +405,7 @@
       clearInterval(timer);
       if (frame) cancelAnimationFrame(frame);
       host.removeEventListener('contextmenu', onContextMenu);
+      stopControlClick();
       host.removeEventListener('contextmenu', dropKeyMenuEvent, true);
       grid.removeEventListener('keydown', onKeyDown);
       for (const b of balloons) b.detach();
