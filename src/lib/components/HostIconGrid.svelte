@@ -167,7 +167,7 @@
                 <span class="tile-icon">
                     <img src={icon.src} alt="" width="32" height="32"/>
                     {#if favoriteSet.has(host.ip)}
-                        <span class="tile-star" aria-label="Favorite">★</span>
+                        <span class="tile-star" role="img" aria-label="Favorite">★</span>
                     {/if}
                 </span>
                 <span class="tile-name">{displayName(host)}</span>

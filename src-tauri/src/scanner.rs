@@ -1986,7 +1986,8 @@ fn contains_any_hint(haystack: &str, needles: &[&str]) -> bool {
 /// Like `contains_any_hint`, but a needle only matches whole words of the
 /// `normalize_hint_text` output. The needle's last word may carry a digit
 /// suffix ("iphone13", "imac27"), and a multi-word needle also matches its
-/// space-less compound ("applewatch"). "ipadmin01" still isn't an iPad.
+/// space-less compound, with the same suffix ("applewatch", "applewatch5").
+/// "ipadmin01" still isn't an iPad.
 fn contains_any_word_hint(haystack: &str, needles: &[&str]) -> bool {
     let words: Vec<&str> = haystack.split_whitespace().collect();
 
@@ -2011,7 +2012,10 @@ fn contains_any_word_hint(haystack: &str, needles: &[&str]) -> bool {
                 .iter()
                 .enumerate()
                 .all(|(index, word)| matches_part(index, word))
-        }) || words.contains(&joined.as_str())
+        }) || words.iter().any(|word| {
+            word.strip_prefix(joined.as_str())
+                .is_some_and(|rest| rest.chars().all(|ch| ch.is_ascii_digit()))
+        })
     })
 }
 
@@ -3125,9 +3129,15 @@ mod tests {
         let (device_type, _, _, _, _) = infer_device_profile(&phone, None, None);
         assert_eq!(device_type.as_deref(), Some("Mobile device"));
 
-        let watch = host("192.168.1.66", Some("applewatch"), &[]);
+        for name in ["applewatch", "applewatch5"] {
+            let watch = host("192.168.1.66", Some(name), &[]);
+            let (device_type, _, _, _, _) = infer_device_profile(&watch, None, None);
+            assert_eq!(device_type.as_deref(), Some("Mobile device"), "{name}");
+        }
+
+        let watch = host("192.168.1.67", Some("applewatchmini"), &[]);
         let (device_type, _, _, _, _) = infer_device_profile(&watch, None, None);
-        assert_eq!(device_type.as_deref(), Some("Mobile device"));
+        assert_ne!(device_type.as_deref(), Some("Mobile device"));
 
         let laptop = host("192.168.1.64", Some("Lukas-MacBookAir.local"), &[22]);
         let (_, os_guess, _, _, _) = infer_device_profile(&laptop, None, None);
