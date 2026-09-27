@@ -26,7 +26,7 @@
 
     const copyBalloonMessage = 'Copy this value';
     const deepScanBalloonMessage = `**Deep Scan**
-- Scans this host with the deep profile (\`1-2048\`)
+- Scans this host with the deep profile (\`1-2048\` plus every Balanced port above \`2048\`)
 - Refreshes open ports and fingerprint hints`;
     const wakeBalloonMessage = `**Wake**
 - Sends a Wake-on-LAN magic packet to this host's MAC address
