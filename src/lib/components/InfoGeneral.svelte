@@ -18,6 +18,7 @@
   import { commitName, nameFieldValue } from '$lib/app/nameCommit';
   import { balloon, checkboxBalloon, highlight } from '$lib/osm/actions';
   import { formatLongDate } from '$lib/util/format';
+  import { isImeKey } from '$lib/util/keyboard';
   import { scanStore } from '$lib/util/scanStore';
 
   let { row }: { row: HostRow | null } = $props();
@@ -72,7 +73,7 @@
 
   function onKeydown(e: KeyboardEvent): void {
     // The Return that ends an input method's composition is the method's.
-    if (e.isComposing || e.keyCode === 229) return;
+    if (isImeKey(e)) return;
 
     if (e.key === 'Enter') {
       // Keeps bindDialogKeys from pressing Open.

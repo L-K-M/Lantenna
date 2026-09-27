@@ -26,24 +26,13 @@
     showHiddenBalloon,
     type ScanButtonState
   } from '$lib/app/balloonTexts';
+  import { DEPTHS, SCOPES } from '$lib/app/choices';
   import { commandContext, describe, run, type CommandContext, type CommandRef } from '$lib/app/commands';
   import { hostModel } from '$lib/app/hostModel';
-  import { ui, type ShowScope } from '$lib/app/ui';
+  import { ui } from '$lib/app/ui';
   import { activeView, FIND_FIELD_ID } from '$lib/app/views';
-  import type { ScanApproach } from '$lib/types';
+  import { isImeKey } from '$lib/util/keyboard';
   import { findInterfaceByKey, interfaceKey, scanStore } from '$lib/util/scanStore';
-
-  const DEPTHS: readonly { approach: ScanApproach; title: string }[] = [
-    { approach: 'fast', title: 'Fast' },
-    { approach: 'balanced', title: 'Balanced' },
-    { approach: 'thorough', title: 'Thorough' }
-  ];
-
-  const SCOPES: readonly { scope: ShowScope; title: string }[] = [
-    { scope: 'all', title: 'All Hosts' },
-    { scope: 'favorites', title: 'Favorite Hosts' },
-    { scope: 'new', title: 'New Hosts' }
-  ];
 
   const SCAN_TITLES: Readonly<Record<ScanButtonState, string>> = {
     idle: 'Scan',
@@ -55,9 +44,6 @@
   const INTERFACE_ID = 'lan-interface';
   const DEPTH_ID = 'lan-depth';
   const SHOW_ID = 'lan-show';
-
-  /** A key the input method is composing with (Safari's last one). */
-  const IME_KEY_CODE = 229;
 
   let scanButton: HTMLButtonElement;
   let showHiddenBox: HTMLInputElement;
@@ -99,10 +85,10 @@
     currentInterface !== null && enabled({ id: 'scan.interface', arg: interfaceKey(currentInterface) })
   );
 
-  const depthIndex = $derived(Math.max(0, DEPTHS.findIndex((d) => d.approach === store.scanApproach)));
+  const depthIndex = $derived(Math.max(0, DEPTHS.findIndex(([approach]) => approach === store.scanApproach)));
   const depthEnabled = $derived(enabled({ id: 'scan.depth', arg: store.scanApproach }));
 
-  const scopeIndex = $derived(Math.max(0, SCOPES.findIndex((s) => s.scope === $ui.scope)));
+  const scopeIndex = $derived(Math.max(0, SCOPES.findIndex(([scope]) => scope === $ui.scope)));
   const scopeEnabled = $derived(enabled({ id: 'view.scope', arg: $ui.scope }));
 
   const showHidden = $derived(store.showHiddenEntries);
@@ -151,12 +137,12 @@
   const depthParams: PopupParams = $derived.by(() => {
     void resync;
     return {
-      items: DEPTHS.map((d) => d.title),
+      items: DEPTHS.map(([, title]) => title),
       selected: depthIndex,
       label: 'Depth',
       disabled: !depthEnabled,
       onChange: (i: number) => {
-        const { approach } = DEPTHS[i];
+        const [approach] = DEPTHS[i];
         choose({ id: 'scan.depth', arg: approach }, () => get(scanStore).scanApproach === approach);
       }
     };
@@ -165,12 +151,12 @@
   const scopeParams: PopupParams = $derived.by(() => {
     void resync;
     return {
-      items: SCOPES.map((s) => s.title),
+      items: SCOPES.map(([, title]) => title),
       selected: scopeIndex,
       label: 'Show',
       disabled: !scopeEnabled,
       onChange: (i: number) => {
-        const { scope } = SCOPES[i];
+        const [scope] = SCOPES[i];
         choose({ id: 'view.scope', arg: scope }, () => get(ui).scope === scope);
       }
     };
@@ -183,7 +169,7 @@
   }
 
   function onFindKey(e: KeyboardEvent) {
-    if (e.isComposing || e.keyCode === IME_KEY_CODE || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (isImeKey(e) || e.metaKey || e.ctrlKey || e.altKey) return;
 
     if (e.key === 'Escape') {
       // An open help balloon took this Escape to close itself.

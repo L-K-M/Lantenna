@@ -48,10 +48,12 @@ import {
   wakeHost,
   wakingIp
 } from './actions';
+import { DEPTHS, SCOPES } from './choices';
 import { noteAlert, stopAlert } from './feedback';
 import { keyboardFocus, type FocusKind } from './focus';
 import { customNameFor, knownName } from './hostNames';
 import { hostModel, type HostModel, type HostRow } from './hostModel';
+import { ipOrder } from './hostSort';
 import { cmdName, platform, type Platform } from './platform';
 import { ui, type ShowScope, type UiState } from './ui';
 import { checkForUpdatesNow } from './updates';
@@ -153,21 +155,9 @@ export type CommandPlace = 'menubar' | 'contextual';
 
 const HELP_URL = 'https://github.com/L-K-M/Lantenna#readme';
 
-const DEPTHS: readonly (readonly [ScanApproach, string])[] = [
-  ['fast', 'Fast'],
-  ['balanced', 'Balanced'],
-  ['thorough', 'Thorough']
-];
-
 const VIEW_MODES: readonly (readonly [HostViewMode, string])[] = [
   ['list', 'as List'],
   ['icons', 'as Icons']
-];
-
-const SCOPES: readonly (readonly [ShowScope, string])[] = [
-  ['all', 'All Hosts'],
-  ['favorites', 'Favorite Hosts'],
-  ['new', 'New Hosts']
 ];
 
 function titleOf<T extends string>(table: readonly (readonly [T, string])[], value: string | undefined) {
@@ -626,10 +616,6 @@ function interfaceEntries(ctx: CommandContext): SpecEntry[] {
 
 const nameOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
-function ipValue(ip: string): number {
-  return ip.split('.').reduce((n, part) => n * 256 + (Number(part) || 0), 0);
-}
-
 /** Favorites sorted by name, then IP; unnamed ones last, by IP. */
 function favoriteEntries(ctx: CommandContext): SpecEntry[] {
   const named = ctx.store.favoriteIps.map((ip) => ({ ip, name: favoriteName(ctx.store, ip) }));
@@ -637,7 +623,7 @@ function favoriteEntries(ctx: CommandContext): SpecEntry[] {
     if (a.name !== null && b.name === null) return -1;
     if (a.name === null && b.name !== null) return 1;
     const byName = a.name !== null && b.name !== null ? nameOrder.compare(a.name, b.name) : 0;
-    return byName || ipValue(a.ip) - ipValue(b.ip);
+    return byName || ipOrder(a.ip) - ipOrder(b.ip);
   });
   return named.map(({ ip }) => cmd('fav.reveal', ip));
 }
