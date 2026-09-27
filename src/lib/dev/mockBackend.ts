@@ -1,7 +1,8 @@
 // Owner: unit G (spec 8.4). Spec: 8.6 (visual verification plan).
 //
-// A pretend Tauri backend for `vite dev --mode mock` (+layout.ts imports
-// this module in that mode only; production builds never contain it).
+// A pretend Tauri backend for `vite dev --mode mock` (src/hooks.client.ts
+// imports this module in that mode only, before any route module loads;
+// production builds never contain it).
 // It calls mockWindows('main') and mockIPC(handler, { shouldMockEvents:
 // true }) from @tauri-apps/api/mocks, then answers every command the app
 // invokes: Lantenna's own (inventory 4) from fixtures.ts, and Tauri's
@@ -1371,9 +1372,10 @@ function canonical(value: unknown): string {
 
 /**
  * Whether scanStore read the seeded data. It reads localStorage when its
- * module loads, and SvelteKit may load the page's modules (scanStore
- * among them) before the layout's load() has imported this module
- * (scaffold notes 4.2). Favorites, hidden hosts and custom names are
+ * module loads. The client hook imports this module before any route
+ * module, so it always has; the check stays as a safety net for a load
+ * order that puts the page's modules (scanStore among them) first, as
+ * the layout's load() did before the hook existed (scaffold notes 4.2). Favorites, hidden hosts and custom names are
  * never changed by init(); the interface only when the stored key is
  * stale, which a seeded key is not. The favorites' snapshots show only
  * as the stale favorites' rows (before init() every favorite is stale),

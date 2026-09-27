@@ -16,7 +16,7 @@ it('boots the page and drives a rescan without console errors', async () => {
   const errors = vi.spyOn(console, 'error');
   vi.spyOn(console, 'info').mockImplementation(() => {});
 
-  // As +layout.ts does: the mock first, then (in parallel) the page.
+  // As src/hooks.client.ts does: the mock first, then the page.
   const mock = installMockBackend(parseScenario('?scenario=rescanned&view=icons&pane=0&balloons=1', 'linux'));
   expect(get(ui)).toMatchObject({ viewMode: 'icons', infoPaneShown: false, balloons: 'shown' });
 

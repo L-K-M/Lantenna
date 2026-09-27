@@ -25,8 +25,9 @@ function leaveOtherScenarioData(): void {
   );
 }
 
-/** One page load in Chromium's order: the page's modules (scanStore)
- * first, then the layout's import of the mock. */
+/** One page load in the order the reload guards against (the layout's
+ * load() before src/hooks.client.ts): the page's modules (scanStore)
+ * first, then the mock. */
 async function load() {
   vi.resetModules();
   const { scanStore } = await import('$lib/util/scanStore');
