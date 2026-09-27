@@ -17,6 +17,7 @@
   import { TauriService } from '$lib/tauri';
   import { WindowManager } from '$lib/windowManager';
   import { notifications } from '$lib/util/notifications';
+  import { describeScanProgress, isIndeterminatePhase } from '$lib/util/scanProgress';
   import { scanStore } from '$lib/util/scanStore';
   import { windowFocused } from '$lib/util/windowState';
   import type { SystemColors } from '$lib/types';
@@ -73,9 +74,7 @@
   $: hostScanTarget = hostScanProgress?.current_ip || 'selected host';
   $: fullScanActive = scanning || Boolean(progress?.running);
   $: footerStatus = fullScanActive
-    ? progress
-      ? `${progress.scanned}/${progress.total} scanned, ${progress.found} hosts`
-      : 'Scanning...'
+    ? describeScanProgress(progress)
     : hostScanProgress?.running
       ? hostScanProgress.total > 0
         ? `Deep scan ${hostScanTarget}: ${hostScanProgress.scanned}/${hostScanProgress.total} ports, ${hostScanProgress.found} open`
@@ -86,10 +85,9 @@
   $: showFooterProgress = Boolean(activeFooterProgress?.running);
   $: footerProgressMax = activeFooterProgress && activeFooterProgress.total > 0 ? activeFooterProgress.total : 1;
   $: footerProgressValue = activeFooterProgress ? Math.min(activeFooterProgress.scanned, footerProgressMax) : 0;
+  $: footerProgressIndeterminate = fullScanActive && isIndeterminatePhase(progress);
   $: footerProgressAriaLabel = fullScanActive
-    ? progress
-      ? `Scan progress: ${progress.scanned} of ${progress.total} scanned`
-      : 'Scan progress'
+    ? `Scan progress: ${describeScanProgress(progress)}`
     : hostScanProgress?.running
       ? hostScanProgress.total > 0
         ? `Deep scan progress for ${hostScanTarget}: ${hostScanProgress.scanned} of ${hostScanProgress.total} ports`
@@ -232,6 +230,7 @@
           <ProgressBar
             value={footerProgressValue}
             max={footerProgressMax}
+            indeterminate={footerProgressIndeterminate}
             height={16}
             title={footerProgressAriaLabel}
             ariaLabel={footerProgressAriaLabel}
