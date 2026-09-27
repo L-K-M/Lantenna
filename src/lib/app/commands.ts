@@ -542,7 +542,8 @@ async function paste(): Promise<void> {
   try {
     if (!navigator.clipboard?.readText) throw new Error('Clipboard is not available');
     text = await navigator.clipboard.readText();
-  } catch {
+  } catch (error) {
+    console.warn('Lantenna couldn’t read the Clipboard:', error);
     await stopAlert('Lantenna couldn’t read the Clipboard.', `Press ${cmdName}-V to paste into the field instead.`);
     return;
   }

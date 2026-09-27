@@ -325,7 +325,9 @@ it('pastes what the Clipboard holds, or says to use the key', async () => {
     go('edit.paste');
     await vi.waitFor(() => expect(exec).toHaveBeenCalledWith('insertText', false, 'NAS'));
 
-    readText.mockRejectedValueOnce(new DOMException('Denied', 'NotAllowedError'));
+    const denied = new DOMException('Denied', 'NotAllowedError');
+    readText.mockRejectedValueOnce(denied);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     go('edit.paste');
     await vi.waitFor(() =>
       expect(feedback.stopAlert).toHaveBeenCalledWith(
@@ -333,6 +335,9 @@ it('pastes what the Clipboard holds, or says to use the key', async () => {
         'Press Control-V to paste into the field instead.'
       )
     );
+    // The alert explains; the log keeps the system's reason.
+    expect(warn).toHaveBeenCalledWith('Lantenna couldn’t read the Clipboard:', denied);
+    warn.mockRestore();
   } finally {
     vi.unstubAllGlobals();
   }

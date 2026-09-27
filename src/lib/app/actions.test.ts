@@ -257,14 +257,18 @@ describe('copying', () => {
     field.remove();
   });
 
-  it('reports a clipboard that refuses both ways', async () => {
-    vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new DOMException('denied'));
+  it('reports a clipboard that refuses both ways, logging the system’s reason', async () => {
+    const refusal = new DOMException('Document is not focused.', 'NotAllowedError');
+    vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(refusal);
     vi.spyOn(document, 'execCommand').mockReturnValue(false);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await actions.copyValue('ip', '192.168.1.31');
     expect(feedback.stopAlert).toHaveBeenCalledWith(
       'Lantenna couldn’t copy to the Clipboard.',
       'explained(Clipboard write was blocked by the system)'
     );
+    expect(warn).toHaveBeenCalledWith('Lantenna couldn’t copy to the Clipboard:', expect.any(Error));
+    expect((warn.mock.calls[0]![1] as Error).cause).toBe(refusal);
   });
 
   it('copies the listed rows as tab-separated text', async () => {

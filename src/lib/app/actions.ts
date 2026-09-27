@@ -181,6 +181,8 @@ async function copyText(value: string): Promise<void> {
   try {
     await writeClipboardText(value);
   } catch (error) {
+    // The alert explains; the log keeps the system's reason (the cause).
+    console.warn('Lantenna couldn’t copy to the Clipboard:', error);
     void stopAlert('Lantenna couldn’t copy to the Clipboard.', explainError(errorMessage(error, 'Failed to copy')));
   }
 }
@@ -192,16 +194,20 @@ async function copyText(value: string): Promise<void> {
  * there (unverified; a manual check).
  */
 async function writeClipboardText(value: string): Promise<void> {
+  /** Why the API refused, if it did: the failure's cause. */
+  let refusal: unknown = undefined;
   if (navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(value);
       return;
-    } catch {
+    } catch (error) {
       // Refused: try the fallback below.
+      refusal = error;
     }
   }
 
-  if (!copyWithCopyEvent(value)) throw new Error('Clipboard write was blocked by the system');
+  if (copyWithCopyEvent(value)) return;
+  throw new Error('Clipboard write was blocked by the system', refusal === undefined ? undefined : { cause: refusal });
 }
 
 /**
