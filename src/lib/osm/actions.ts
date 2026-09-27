@@ -8,7 +8,7 @@
 
 import type { ActionReturn } from 'svelte/action';
 import { attachBalloon, mountPopup, pushButton, trackHighlight } from 'osmium-ui';
-import type { BalloonOptions, BalloonTip, PopupOptions } from 'osmium-ui';
+import type { BalloonOptions, PopupOptions } from 'osmium-ui';
 
 export interface PopupParams {
   /** Titles, { title, disabled } items (drawn dimmed, can't be chosen)
@@ -102,29 +102,38 @@ export function balloon(
   node: HTMLElement,
   content: BalloonOptions['content']
 ): ActionReturn<BalloonOptions['content']> {
-  return attachHelp(node, content, 'anchor');
+  return attachHelp(node, content, { tip: 'anchor' });
 }
 
 /**
- * `use:areaBalloon={content}`: as `balloon`, for a large area (the host
- * list, the icon grid, the window header): the tip goes where the
- * pointer rests. Osmium's default tip sits 10px in from the target's
- * bottom-right corner, which for a whole list is far from the pointer
- * and flips the balloon over other controls.
+ * Where a large area's balloon points (the host list, the icon grid, the
+ * Ports list, the window header). Osmium's default tip sits 10px in from
+ * the target's bottom-right corner, which for a whole list is far from
+ * the pointer and flips the balloon over other controls (the Find
+ * field). So the tip goes where the pointer rests, and for keyboard
+ * focus, which has no pointer, to the area's middle: Osmium clamps an
+ * "anchor" inset to the target's center, and this one is larger than
+ * any area.
  */
+export const AREA_TIP: Required<Pick<BalloonOptions, 'tip' | 'anchor'>> = {
+  tip: 'pointer',
+  anchor: { x: 1e6, y: 1e6 }
+};
+
+/** `use:areaBalloon={content}`: as `balloon`, for a large area (AREA_TIP). */
 export function areaBalloon(
   node: HTMLElement,
   content: BalloonOptions['content']
 ): ActionReturn<BalloonOptions['content']> {
-  return attachHelp(node, content, 'pointer');
+  return attachHelp(node, content, AREA_TIP);
 }
 
 function attachHelp(
   node: HTMLElement,
   content: BalloonOptions['content'],
-  tip: BalloonTip
+  placement: Pick<BalloonOptions, 'tip' | 'anchor'>
 ): ActionReturn<BalloonOptions['content']> {
-  const help = attachBalloon(node, { content, trigger: 'balloon-help', tip });
+  const help = attachBalloon(node, { content, trigger: 'balloon-help', ...placement });
 
   return {
     update(next) {

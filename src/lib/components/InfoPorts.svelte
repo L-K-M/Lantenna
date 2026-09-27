@@ -80,6 +80,7 @@
   import { attachBalloon, centerText, mountListView, type ListViewColumn, type OsmiumListView } from 'osmium-ui';
   import { openUrl } from '$lib/app/actions';
   import { PORTS_BALLOON } from '$lib/app/balloonTexts';
+  import { AREA_TIP } from '$lib/osm/actions';
   import type { HostRow } from '$lib/app/hostModel';
   import { scanProgress } from '$lib/util/scanStore';
 
@@ -162,8 +163,8 @@
     });
 
     const grid = listHost.querySelector<HTMLElement>('.osm-lv-grid');
-    // The list's tip follows the pointer (osm/actions.ts, areaBalloon).
-    const help = grid ? attachBalloon(grid, { content: PORTS_BALLOON, trigger: 'balloon-help', tip: 'pointer' }) : null;
+    // The list's tip is a large area's (osm/actions.ts, AREA_TIP).
+    const help = grid ? attachBalloon(grid, { content: PORTS_BALLOON, trigger: 'balloon-help', ...AREA_TIP }) : null;
 
     show(rows, row?.ip ?? null, scanning);
 

@@ -38,6 +38,7 @@
   import { LIST_ROW_H } from '$lib/app/layout';
   import { ui } from '$lib/app/ui';
   import { activeView, type HostViewApi } from '$lib/app/views';
+  import { AREA_TIP } from '$lib/osm/actions';
   import { STAR } from '$lib/osm/sprites';
   import { formatRelativeTime, normalizeSpaces } from '$lib/util/format';
   import { scanStore } from '$lib/util/scanStore';
@@ -353,8 +354,8 @@
 
     // Balloon Help (4.5) on Osmium's parts: the grid, each sortable
     // header and the sort order button (markup of listview.ts).
-    // The grid's tip follows the pointer (osm/actions.ts, areaBalloon).
-    const balloons: OsmiumBalloon[] = [attachBalloon(grid, { content: HOST_LIST_BALLOON, tip: 'pointer' })];
+    // The grid's tip is a large area's (osm/actions.ts, AREA_TIP).
+    const balloons: OsmiumBalloon[] = [attachBalloon(grid, { content: HOST_LIST_BALLOON, ...AREA_TIP })];
     for (const c of COLUMNS) {
       const head = host.querySelector<HTMLElement>(`[data-column="${c.id}"] > .osm-colhead`);
       if (head) balloons.push(attachBalloon(head, { content: columnBalloon(c.id) }));

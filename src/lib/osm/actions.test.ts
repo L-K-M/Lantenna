@@ -88,10 +88,16 @@ it('attaches Balloon Help and detaches it on destroy', () => {
   expect(osm.balloon.detach).toHaveBeenCalledOnce();
 });
 
-it('points an area’s balloon at the pointer, not a far corner', () => {
+it('points an area’s balloon at the pointer, or for the keyboard at its middle, not a far corner', () => {
   const target = document.createElement('div');
   const action = areaBalloon(target, 'Host list');
-  expect(osm.attachBalloon).toHaveBeenCalledWith(target, { content: 'Host list', trigger: 'balloon-help', tip: 'pointer' });
+  expect(osm.attachBalloon).toHaveBeenCalledWith(target, {
+    content: 'Host list',
+    trigger: 'balloon-help',
+    tip: 'pointer',
+    // Osmium clamps the inset to the target's center.
+    anchor: { x: 1e6, y: 1e6 }
+  });
   action.destroy?.();
   expect(osm.balloon.detach).toHaveBeenCalledOnce();
 });
