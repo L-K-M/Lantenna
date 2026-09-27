@@ -1,7 +1,7 @@
 [package]
 name = "lantenna"
 version = "1.0.1"
-description = "A System 7 LAN scanner"
+description = "A Mac OS 8 LAN scanner"
 authors = ["Lukas Mathis"]
 license = "MIT"
 edition = "2021"
