@@ -1,8 +1,10 @@
 // Owner: unit D (spec 8.4). Spec: 5.4 (Update timing), 4.1 (app.checkUpdates).
 //
 // SCAFFOLD STUB: no update check runs.
-// Final contract: scheduleUpdateCheck() runs checkForUpdate() after
-// scanStore.init() (daily throttle, skip list, silent failures) and
+// Final contract: scheduleUpdateCheck() waits until scanStore.init()
+// has settled (the store's `loading` is true from launch until then;
+// the page calls this right after starting init), then runs
+// checkForUpdate() (daily throttle, skip list, silent failures) and
 // shows a found update once per launch as a note alert, at the first
 // moment the window is active, not shaded, not scanning and has no
 // alert up. checkForUpdatesNow() is the Check for Updates… command:

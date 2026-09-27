@@ -246,7 +246,9 @@ function saveSelectedInterfaceKey(selectedInterface: string | null) {
   window.localStorage.setItem(SELECTED_INTERFACE_STORAGE_KEY, selectedInterface);
 }
 
-function interfaceKey(item: NetworkInterface): string {
+/** The `name|ip` key that identifies an interface in the store, the
+ * Interface pop-up and the Scan menu (spec 3.1 1.6). */
+export function interfaceKey(item: NetworkInterface): string {
   return `${item.name}|${item.ip}`;
 }
 
@@ -258,7 +260,12 @@ function splitInterfaceKey(value: string): { name: string; ip: string } {
   };
 }
 
-function findInterfaceByKey(interfaces: NetworkInterface[], selectedInterface: string | null): NetworkInterface | null {
+/** The interface a stored key names: the exact `name|ip`, else the only
+ * interface with that name (also for legacy keys without `|`), else null. */
+export function findInterfaceByKey(
+  interfaces: readonly NetworkInterface[],
+  selectedInterface: string | null
+): NetworkInterface | null {
   if (!selectedInterface) {
     return null;
   }
@@ -428,7 +435,9 @@ const initialState: ScanStoreState = {
   scanning: false,
   stopping: false,
   pendingIps: [],
-  loading: false,
+  // True until init() settles, so the first paint says "Reading the last
+  // scan…" (spec 2.9) rather than "no interfaces" (5.2 row 12).
+  loading: true,
   error: null,
   query: '',
   selectedHostIp: null,
@@ -675,11 +684,11 @@ function createScanStore() {
   return {
     subscribe,
     init: async () => {
-      await attachListeners();
-
       update((state) => ({ ...state, loading: true, error: null }));
 
       try {
+        await attachListeners();
+
         const [interfaces, previous] = await Promise.all([
           TauriService.getNetworkInterfaces(),
           TauriService.getScanResults()

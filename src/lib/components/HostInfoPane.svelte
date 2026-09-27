@@ -8,6 +8,10 @@
   It hides itself with the `hidden` attribute when the pane is hidden, so
   drafts and scroll positions survive. The page's CSS owns the region
   box (.lan-pane, 300px, position: relative).
+  The panels' root elements (InfoGeneral, InfoPorts, InfoFingerprint)
+  become Osmium-owned once mountTabs runs: it sets their hidden, id,
+  role and aria-labelledby. Give them a static class plus class: and
+  style: directives only, never hidden={...}, id={...} or class={...}.
 -->
 <svelte:options runes={true} />
 

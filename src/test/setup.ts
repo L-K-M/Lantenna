@@ -6,6 +6,9 @@
 //   and every mountWindow logs "Osmium fonts unavailable".
 // - Canvas 2D: text measurement (textWidth) asks for a context; null is
 //   Osmium's "can't measure" path (widths 0), taken quietly.
+// - document.execCommand: the clipboard fallback and Linux Edit menu
+//   clicks call it. It returns false (not done), as a browser does for an
+//   unsupported command; spy on it to test the other outcome.
 //
 // Only what is missing is added, so a happy-dom that grows these keeps
 // its own.
@@ -44,3 +47,11 @@ if (!('fonts' in document)) {
 HTMLCanvasElement.prototype.getContext = function getContext() {
   return null;
 } as typeof HTMLCanvasElement.prototype.getContext;
+
+if (typeof document.execCommand !== 'function') {
+  Object.defineProperty(document, 'execCommand', {
+    configurable: true,
+    writable: true,
+    value: (): boolean => false
+  });
+}

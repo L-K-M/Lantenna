@@ -8,14 +8,25 @@
 import { writable, type Writable } from 'svelte/store';
 import type { HostedWindow } from 'osmium-ui';
 
+/**
+ * Callers change stores and call the view in the same task: revealHost
+ * sets the scope, the query and Show hidden hosts, selects, then calls
+ * reveal() and focus(); Find's Return selects the first row and calls
+ * focus(); zoom reads extraHeight(). The view hands rows to Osmium once
+ * per animation frame, so focus(), reveal() and extraHeight() first
+ * apply any pending rows synchronously from the latest hostModel
+ * (Osmium's reveal and select can't scroll to a key it has no row for,
+ * and contentHeight counts the rows it has).
+ */
 export interface HostViewApi {
   /** The view's focusable element (the list's grid, the icon grid). */
   readonly element: HTMLElement;
-  /** Give the view the keyboard. */
+  /** Give the view the keyboard (after applying pending rows). */
   focus(): void;
-  /** Scroll `ip`'s row or tile into view. */
+  /** Apply pending rows, then scroll `ip`'s row or tile into view. */
   reveal(ip: string): void;
-  /** contentHeight - viewportHeight (>= 0): what zoom adds. */
+  /** contentHeight - viewportHeight (>= 0) with the latest rows: what
+   * zoom adds. */
   extraHeight(): number;
   /** Sum of the list's column widths; null in icon view. */
   idealColumnsWidth(): number | null;

@@ -13,17 +13,19 @@ function build(): Record<string, HTMLElement> {
     <input id="find" class="osm-edit">
     <label class="osm-checkbox"><input id="check" type="checkbox"></label>
     <div class="lan-list"><input id="inList"></div>
+    <textarea id="notes" readonly></textarea>
     <button id="scan">Scan</button>`;
   const byId = (id: string) => document.getElementById(id)!;
   return Object.fromEntries(
-    ['grid', 'star', 'tile', 'find', 'check', 'inList', 'scan'].map((id) => [id, byId(id)])
+    ['grid', 'star', 'tile', 'find', 'check', 'inList', 'notes', 'scan'].map((id) => [id, byId(id)])
   );
 }
 
 it('classifies the list, the icon grid, text fields and the rest', () => {
   const el = build();
   const kinds: Record<string, FocusKind> = {
-    grid: 'list', star: 'list', tile: 'icons', find: 'text', check: 'other', inList: 'text', scan: 'other'
+    grid: 'list', star: 'list', tile: 'icons', find: 'text', check: 'other', inList: 'text',
+    notes: 'readonly-text', scan: 'other'
   };
 
   for (const [id, kind] of Object.entries(kinds)) expect(classifyFocus(el[id]), id).toBe(kind);

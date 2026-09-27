@@ -6,6 +6,19 @@
 // and the views. Results go to the host status line (feedback.setHostNote),
 // failures to stop alerts (feedback.stopAlert); success of a copy is
 // silent.
+//
+// Restore from the pre-port HostInspector.svelte (`git show
+// 97d42ae:src/lib/components/HostInspector.svelte`): writeClipboardText
+// (navigator.clipboard with a hidden-textarea execCommand('copy')
+// fallback; spec 3.1 1.19 keeps it) and the wake sending. Fall back to
+// execCommand also when writeText rejects, not only when it is missing:
+// Edit > Copy IP Address from the macOS native menu runs outside a page
+// user gesture, and WKWebView may refuse the Clipboard API there
+// (unverified; a manual check).
+//
+// Must not import commands.ts: commands.ts derives commandContext from
+// wakingIp when it loads, so the cycle would read wakingIp before it
+// exists.
 
 import { readable, type Readable } from 'svelte/store';
 import type { InfoTab } from './ui';

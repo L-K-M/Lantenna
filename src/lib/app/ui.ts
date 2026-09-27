@@ -14,7 +14,7 @@ import { writable, type Readable } from 'svelte/store';
 import type { BalloonHelpState, ListViewSort } from 'osmium-ui';
 import type { HostViewMode } from '$lib/types';
 import { readJson, readString, writeJson, writeString } from '$lib/util/storage';
-import { COLUMN_IDS } from './hostSort';
+import { COLUMN_IDS } from './columns';
 
 export type ShowScope = 'all' | 'favorites' | 'new';
 export type InfoTab = 'general' | 'ports' | 'fingerprint';
@@ -119,10 +119,22 @@ function createUi() {
       patch({ listSort });
       writeJson(LIST_SORT_KEY, listSort);
     },
-    setColumnWidth(id: string, px: number) {
-      if (state.columnWidths?.[id] === px) return;
+    /** Every column's width after a divider drag (Osmium fixes all of
+     * them on the first drag, so all are stored): one update, one write. */
+    setColumnWidths(widths: Readonly<Record<string, number>>) {
+      // A programming error: stored, it would fail isColumnWidths at the
+      // next launch and lose every width.
+      if (!isColumnWidths(widths)) throw new RangeError(`invalid column widths ${JSON.stringify(widths)}`);
 
-      const columnWidths = { ...state.columnWidths, [id]: px };
+      const current = state.columnWidths;
+      const ids = Object.keys(widths);
+      const same =
+        current !== null &&
+        Object.keys(current).length === ids.length &&
+        ids.every((id) => current[id] === widths[id]);
+      if (same) return;
+
+      const columnWidths = { ...widths };
       patch({ columnWidths });
       writeJson(LIST_COLUMNS_KEY, columnWidths);
     },
@@ -144,7 +156,7 @@ export const ui: Readable<UiState> & {
   setInfoPane(shown: boolean): void;
   setInfoTab(t: InfoTab): void;
   setListSort(s: ListViewSort): void;
-  setColumnWidth(id: string, px: number): void;
+  setColumnWidths(widths: Readonly<Record<string, number>>): void;
   setBalloons(s: BalloonHelpState): void;
   setActive(a: boolean): void;
   setShaded(s: boolean): void;

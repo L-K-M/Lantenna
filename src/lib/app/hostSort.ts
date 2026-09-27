@@ -8,20 +8,8 @@
 import type { ListViewSort } from 'osmium-ui';
 import type { HostRow } from './hostModel';
 
-/** The list's column ids, in display order. ui.ts validates a stored
- * sort against them. */
-export const COLUMN_IDS = [
-  'favorite',
-  'name',
-  'ip',
-  'status',
-  'kind',
-  'vendor',
-  'ports',
-  'lastSeen'
-] as const;
-
-export type ColumnId = (typeof COLUMN_IDS)[number];
+// Defined in the scaffold's leaf module columns.ts (see its header).
+export { COLUMN_IDS, type ColumnId } from './columns';
 
 export function sortRows(rows: readonly HostRow[], sort: ListViewSort): HostRow[] {
   return [...rows];

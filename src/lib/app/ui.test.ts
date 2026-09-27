@@ -85,8 +85,8 @@ it('remembers settings on change only, and never the session state', async () =>
   ui.setInfoTab('fingerprint');
   ui.setListSort({ column: 'favorite', order: 'normal' });
   ui.setListSort({ column: 'name', order: 'normal' });
-  ui.setColumnWidth('name', 260);
-  ui.setColumnWidth('name', 260);
+  ui.setColumnWidths({ name: 260, ip: 100 });
+  ui.setColumnWidths({ name: 260, ip: 100 });
   ui.setBalloons('shown');
   ui.setScope('new');
   ui.setActive(false);
@@ -98,10 +98,24 @@ it('remembers settings on change only, and never the session state', async () =>
     ['lantenna.infoPane', 'hidden'],
     ['lantenna.infoTab', 'fingerprint'],
     ['lantenna.listSort', { column: 'name', order: 'normal' }],
-    ['lantenna.listColumns', { name: 260 }],
+    ['lantenna.listColumns', { name: 260, ip: 100 }],
     ['lantenna.balloonHelp', 'shown']
   ]);
   // The initial value plus one update per real change.
   expect(updates).toHaveBeenCalledTimes(10);
   expect(get(ui)).toMatchObject({ scope: 'new', active: false, shaded: true });
+});
+
+it('stores all column widths at once and rejects unknown columns', async () => {
+  const ui = await freshUi();
+
+  ui.setColumnWidths({ name: 281, ip: 100 });
+  ui.setColumnWidths({ name: 281 });
+  expect(() => ui.setColumnWidths({ name: 281, size: 40 })).toThrow(RangeError);
+
+  expect(storage.writes).toEqual([
+    ['lantenna.listColumns', { name: 281, ip: 100 }],
+    ['lantenna.listColumns', { name: 281 }]
+  ]);
+  expect(get(ui).columnWidths).toEqual({ name: 281 });
 });
