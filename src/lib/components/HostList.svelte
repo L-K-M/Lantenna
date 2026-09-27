@@ -72,6 +72,10 @@
   /** Relative Last Seen texts go stale by the minute (1.22). */
   const REFRESH_MS = 60_000;
 
+  /** A contextmenu event this soon after the menu key or Shift-F10 is
+   * that key's (Chromium sends one too): the menu is already open. */
+  const KEY_MENU_MS = 500;
+
   // rowClass results, one array per combination, so 4,096 rows share four.
   const ROW_CLASSES: readonly (readonly string[])[] = [[], ['lan-new'], ['lan-dim'], ['lan-new', 'lan-dim']];
 
@@ -228,10 +232,13 @@
      * row's name, as the Osmium Finder demo does. */
     function rowMenuPoint(e: MouseEvent): MenuPoint {
       if (e.target instanceof Element && e.target.closest('.osm-lv-row')) return { x: e.clientX, y: e.clientY };
+      return underSelectedName() ?? { x: e.clientX, y: e.clientY };
+    }
 
+    function underSelectedName(): MenuPoint | null {
       const label = host.querySelector('.osm-lv-row.osm-selected .osm-lv-label');
       const r = label?.getBoundingClientRect();
-      return r ? { x: r.left, y: r.bottom } : { x: e.clientX, y: e.clientY };
+      return r ? { x: r.left, y: r.bottom } : null;
     }
 
     /** Scroll `ip`'s row into view without selecting it. Osmium scrolls
@@ -268,6 +275,39 @@
       openViewMenu(fromKeyboard ? { x: r.left, y: r.top } : { x: e.clientX, y: e.clientY });
     };
     host.addEventListener('contextmenu', onContextMenu);
+
+    // The menu key and Shift-F10 (3.2). Osmium's list answers only the
+    // contextmenu event browsers send for them, and WebKit (WKWebView,
+    // WebKitGTK) sends none, so the list opens the menu from the key:
+    // the selected row's under its name, else the view's. A contextmenu
+    // event that follows the key (Chromium) is dropped before Osmium's
+    // listener and the one above see it.
+    let keyMenuAt = -Infinity;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key !== 'ContextMenu' && !(e.key === 'F10' && e.shiftKey)) return;
+
+      e.preventDefault();
+      keyMenuAt = performance.now();
+      flush();
+      const ip = view.selected;
+      if (ip !== null && view.rows.some((row) => row.ip === ip)) {
+        revealRow(ip);
+        openHostMenu(ip, underSelectedName() ?? gridCorner());
+        return;
+      }
+      openViewMenu(gridCorner());
+    };
+    const dropKeyMenuEvent = (e: MouseEvent) => {
+      if (performance.now() - keyMenuAt < KEY_MENU_MS) e.preventDefault();
+    };
+    grid.addEventListener('keydown', onKeyDown);
+    host.addEventListener('contextmenu', dropKeyMenuEvent, true);
+
+    function gridCorner(): MenuPoint {
+      const r = scroller.getBoundingClientRect();
+      return { x: r.left, y: r.top };
+    }
 
     apply(get(hostModel));
     let selection = get(scanStore).selectedHostIp;
@@ -342,6 +382,8 @@
       clearInterval(timer);
       if (frame) cancelAnimationFrame(frame);
       host.removeEventListener('contextmenu', onContextMenu);
+      host.removeEventListener('contextmenu', dropKeyMenuEvent, true);
+      grid.removeEventListener('keydown', onKeyDown);
       for (const b of balloons) b.detach();
       view.destroy();
     };

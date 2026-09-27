@@ -350,6 +350,26 @@ describe('contextual menus', () => {
     expect(spies.openHostMenu).toHaveBeenCalledWith('10.0.0.2', { x: 0, y: 0 });
   });
 
+  it('opens the menus from the menu key and Shift-F10 itself (WebKit sends no contextmenu)', async () => {
+    const { container } = render(HostList);
+    const { grid } = parts(container);
+
+    const shiftF10 = new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true, cancelable: true });
+    grid.dispatchEvent(shiftF10);
+    expect(shiftF10.defaultPrevented).toBe(true);
+    expect(spies.openViewMenu).toHaveBeenCalledTimes(1);
+
+    scanStore.setSelectedHost('10.0.0.2');
+    await nextFrame();
+    grid.dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true, cancelable: true }));
+    expect(spies.openHostMenu).toHaveBeenCalledExactlyOnceWith('10.0.0.2', { x: 0, y: 0 });
+
+    // Chromium also sends a contextmenu event for the key: one menu only.
+    await fireEvent.contextMenu(grid);
+    expect(spies.openHostMenu).toHaveBeenCalledTimes(1);
+    expect(spies.openViewMenu).toHaveBeenCalledTimes(1);
+  });
+
   it('leaves the headers to the page', async () => {
     const { container } = render(HostList);
 
