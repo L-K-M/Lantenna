@@ -91,8 +91,8 @@
       <TextInput
         value={query}
         clearable
-        placeholder="Filter by IP or host name"
-        ariaLabel="Filter by IP or host name"
+        placeholder="Filter by name, IP, vendor, port..."
+        ariaLabel="Filter hosts by name, IP, vendor, type, MAC, port or service"
         oninput={(value) => onQueryChange?.(value)}
         onclear={() => onQueryChange?.('')}
       />

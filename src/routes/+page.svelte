@@ -16,6 +16,7 @@
 
   import { TauriService } from '$lib/tauri';
   import { WindowManager } from '$lib/windowManager';
+  import { hostMatchesQuery } from '$lib/util/hostSearch';
   import { notifications } from '$lib/util/notifications';
   import { describeScanProgress, isIndeterminatePhase } from '$lib/util/scanProgress';
   import { scanStore } from '$lib/util/scanStore';
@@ -47,19 +48,10 @@
 
   $: hiddenSet = new Set(hiddenIps);
 
-  $: queryMatchedHosts = hosts.filter((host) => {
-    if (!query.trim()) {
-      return true;
-    }
+  $: queryMatchedHosts = hosts.filter((host) => hostMatchesQuery(host, customNames[host.ip] || '', query));
 
-    const needle = query.toLowerCase();
-    const customName = (customNames[host.ip] || '').toLowerCase();
-    return (
-      host.ip.includes(needle) ||
-      (host.name || '').toLowerCase().includes(needle) ||
-      customName.includes(needle)
-    );
-  });
+  $: tableEmptyText =
+    query.trim() && hosts.length > 0 ? `No hosts match “${query.trim()}”.` : 'No hosts yet. Start a scan.';
 
   $: hiddenCount = hosts.filter((host) => hiddenSet.has(host.ip)).length;
 
@@ -209,6 +201,7 @@
           {hiddenIps}
           {staleFavoriteIps}
           {newHostIps}
+          emptyText={tableEmptyText}
           onSelectHost={(ip) => scanStore.setSelectedHost(ip)}
           onToggleFavorite={(ip) => scanStore.toggleFavorite(ip)}
           onToggleHidden={(ip) => scanStore.toggleHidden(ip)}
