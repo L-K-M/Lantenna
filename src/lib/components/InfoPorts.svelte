@@ -182,6 +182,16 @@
     untrack(() => show(next, ip, loading));
   });
 
+  // A long banner wraps and the list gets shorter: keep the selected
+  // port in view (Osmium reveals its selection when it is selected
+  // again).
+  $effect(() => {
+    const key = selected?.key ?? null;
+    void caption;
+    if (key === null) return;
+    untrack(() => list?.select(key, 'silent'));
+  });
+
   function centered(node: HTMLElement): void {
     centerText(node);
   }
@@ -194,7 +204,7 @@
     <div class="lan-ports" bind:this={listHost}></div>
     <div class="lan-caption osm-small">
       {#each caption as line, i (i)}
-        <div class="lan-line" class:osm-label={i === 0 && selected !== null}>{line}</div>
+        <div class="lan-line" class:osm-label={i === 0 && selected !== null} class:lan-banner={i === 1}>{line}</div>
       {/each}
     </div>
   </div>
@@ -216,27 +226,32 @@
     overflow: hidden;
   }
 
+  /* 2.7: the list x 10..right-10, y 12..bottom-54 (osm-listview draws
+     the frame), the caption's three lines under it, 7px below; a banner
+     that wraps (2.7: the full banner) takes lines from the list. */
   .lan-body {
     position: absolute;
     inset: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 12px 10px 8px;
+    box-sizing: border-box;
   }
 
-  /* 2.7: x 10..right-10, y 12..bottom-54 (osm-listview draws the frame). */
+  .lan-body[hidden] {
+    display: none;
+  }
+
   .lan-ports {
-    position: absolute;
-    left: 10px;
-    right: 10px;
-    top: 12px;
-    bottom: 54px;
+    flex: 1 1 0;
+    min-height: 0;
   }
 
-  /* Three Geneva 10 lines under the list. */
+  /* At least three Geneva 10 lines. */
   .lan-caption {
-    position: absolute;
-    left: 10px;
-    right: 10px;
-    bottom: 8px;
-    height: 39px;
+    flex: none;
+    min-height: 39px;
+    margin-top: 7px;
     line-height: 13px;
   }
 
@@ -247,5 +262,11 @@
     user-select: text;
     -webkit-user-select: text;
     cursor: text;
+  }
+
+  /* The backend keeps 200 characters of a banner, five or six lines. */
+  .lan-line.lan-banner {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 </style>
