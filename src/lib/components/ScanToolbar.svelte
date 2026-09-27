@@ -1,18 +1,20 @@
 <script lang="ts">
   import { BalloonHelp, Button, Dropdown, TextInput } from '@lkmc/system7-ui';
-  import type { NetworkInterface, ScanApproach } from '$lib/types';
+  import type { HostViewMode, NetworkInterface, ScanApproach } from '$lib/types';
 
   export let interfaces: NetworkInterface[] = [];
   export let selectedInterface: string | null = null;
   export let approach: ScanApproach = 'balanced';
   export let scanning = false;
   export let query = '';
+  export let viewMode: HostViewMode = 'list';
 
   export let onInterfaceChange: ((name: string) => void) | undefined = undefined;
   export let onApproachChange: ((approach: ScanApproach) => void) | undefined = undefined;
   export let onStart: (() => void) | undefined = undefined;
   export let onStop: (() => void) | undefined = undefined;
   export let onQueryChange: ((value: string) => void) | undefined = undefined;
+  export let onViewModeChange: ((mode: HostViewMode) => void) | undefined = undefined;
 
   const approachOptions: { value: ScanApproach; label: string }[] = [
     { value: 'fast', label: 'Fast' },
@@ -81,6 +83,37 @@
   </div>
 
   <div class="toolbar-group right">
+    <div class="view-toggle" role="group" aria-label="View">
+      <button
+        type="button"
+        class:active={viewMode === 'list'}
+        aria-pressed={viewMode === 'list'}
+        title="View as List"
+        aria-label="View as list"
+        onclick={() => onViewModeChange?.('list')}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <rect x="2" y="3" width="12" height="2" />
+          <rect x="2" y="7" width="12" height="2" />
+          <rect x="2" y="11" width="12" height="2" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        class:active={viewMode === 'icons'}
+        aria-pressed={viewMode === 'icons'}
+        title="View as Icons"
+        aria-label="View as icons"
+        onclick={() => onViewModeChange?.('icons')}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <rect x="2" y="2" width="5" height="5" />
+          <rect x="9" y="2" width="5" height="5" />
+          <rect x="2" y="9" width="5" height="5" />
+          <rect x="9" y="9" width="5" height="5" />
+        </svg>
+      </button>
+    </div>
     <div class="search-wrap">
       <span class="search-icon" aria-hidden="true">
         <svg viewBox="0 0 16 16" role="img" focusable="false">
@@ -152,6 +185,45 @@
   .search-wrap {
     min-width: 280px;
     position: relative;
+  }
+
+  .view-toggle {
+    display: inline-flex;
+    border: 1px solid var(--system7-color-ink, #000);
+  }
+
+  .view-toggle button {
+    width: 24px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    background: var(--system7-color-paper, #fff);
+    color: var(--system7-color-ink, #000);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+
+  .view-toggle button + button {
+    border-left: 1px solid var(--system7-color-ink, #000);
+  }
+
+  .view-toggle button.active {
+    background: var(--system7-color-ink, #000);
+    color: var(--system7-color-paper, #fff);
+  }
+
+  .view-toggle button:focus-visible {
+    outline: 1px dotted var(--system7-color-ink, #000);
+    outline-offset: 2px;
+  }
+
+  .view-toggle svg {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
+    shape-rendering: crispEdges;
   }
 
   .search-wrap :global(.sys7-text-input-wrap) {
