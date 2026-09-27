@@ -111,6 +111,16 @@ group('describe', () => {
     ]);
     // No check mark: screen readers would announce a checkbox option.
     expect(describe(ref('scan.interface'), none)).toEqual({ title: 'No interfaces found', enabled: false });
+
+    // Still reading them: no interface section at all, as the pop-up.
+    const reading = context({ store: { interfaces: [], selectedInterface: null, loading: true } });
+    expect(menuBarSpec(reading)[3]!.entries).toEqual([
+      { id: 'scan.toggle' },
+      'separator',
+      { id: 'scan.depth', arg: 'fast' },
+      { id: 'scan.depth', arg: 'balanced' },
+      { id: 'scan.depth', arg: 'thorough' }
+    ]);
   });
 
   it('dims every host command without a selection', () => {

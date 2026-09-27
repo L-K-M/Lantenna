@@ -615,10 +615,13 @@ function openEntries(ctx: CommandContext): SpecEntry[] {
   return [cmd('host.open'), ...(targets.length >= 2 ? targets.map((t) => cmd('host.openUrl', t.url)) : [])];
 }
 
+/** The interfaces, or a dimmed "No interfaces found" once the store has
+ * read none. Nothing while it is still reading them, as the pop-up shows
+ * nothing then: the menu shouldn't claim what the window doesn't. */
 function interfaceEntries(ctx: CommandContext): SpecEntry[] {
-  const { interfaces } = ctx.store;
-  if (interfaces.length === 0) return [cmd('scan.interface')];
-  return interfaces.map((i) => cmd('scan.interface', interfaceKey(i)));
+  const { interfaces, loading } = ctx.store;
+  if (interfaces.length > 0) return interfaces.map((i) => cmd('scan.interface', interfaceKey(i)));
+  return loading ? [] : [cmd('scan.interface')];
 }
 
 const nameOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
@@ -640,14 +643,14 @@ function favoriteEntries(ctx: CommandContext): SpecEntry[] {
 }
 
 function scanMenu(ctx: CommandContext): MenuSpec {
+  const interfaces = interfaceEntries(ctx);
   return {
     id: 'scan',
     title: 'Scan',
     entries: [
       cmd('scan.toggle'),
       SEP,
-      ...interfaceEntries(ctx),
-      SEP,
+      ...(interfaces.length > 0 ? [...interfaces, SEP] : []),
       ...DEPTHS.map(([depth]) => cmd('scan.depth', depth))
     ]
   };
