@@ -1944,13 +1944,35 @@ fn contains_any_hint(haystack: &str, needles: &[&str]) -> bool {
 }
 
 /// Like `contains_any_hint`, but a needle only matches whole words of the
-/// `normalize_hint_text` output. Multi-word needles ("mac mini") still work.
+/// `normalize_hint_text` output. The needle's last word may carry a digit
+/// suffix ("iphone13", "imac27"), and a multi-word needle also matches its
+/// space-less compound ("applewatch"). "ipadmin01" still isn't an iPad.
 fn contains_any_word_hint(haystack: &str, needles: &[&str]) -> bool {
-    let words = haystack.split_whitespace().collect::<Vec<_>>().join(" ");
-    let padded = format!(" {words} ");
-    needles
-        .iter()
-        .any(|needle| padded.contains(&format!(" {needle} ")))
+    let words: Vec<&str> = haystack.split_whitespace().collect();
+
+    needles.iter().any(|needle| {
+        let parts: Vec<&str> = needle.split_whitespace().collect();
+        if parts.is_empty() {
+            return false;
+        }
+
+        let joined = parts.concat();
+        let matches_part = |index: usize, word: &str| {
+            let part = parts[index];
+            word == part
+                || (index + 1 == parts.len()
+                    && word
+                        .strip_prefix(part)
+                        .is_some_and(|rest| rest.chars().all(|ch| ch.is_ascii_digit())))
+        };
+
+        words.windows(parts.len()).any(|window| {
+            window
+                .iter()
+                .enumerate()
+                .all(|(index, word)| matches_part(index, word))
+        }) || words.contains(&joined.as_str())
+    })
 }
 
 fn first_non_empty(values: Vec<Option<String>>) -> Option<String> {
@@ -3027,6 +3049,14 @@ mod tests {
 
         let ipad = host("192.168.1.62", Some("Lukas-iPad"), &[]);
         let (device_type, _, _, _, _) = infer_device_profile(&ipad, None, None);
+        assert_eq!(device_type.as_deref(), Some("Mobile device"));
+
+        let phone = host("192.168.1.65", Some("iphone13"), &[]);
+        let (device_type, _, _, _, _) = infer_device_profile(&phone, None, None);
+        assert_eq!(device_type.as_deref(), Some("Mobile device"));
+
+        let watch = host("192.168.1.66", Some("applewatch"), &[]);
+        let (device_type, _, _, _, _) = infer_device_profile(&watch, None, None);
         assert_eq!(device_type.as_deref(), Some("Mobile device"));
 
         let laptop = host("192.168.1.64", Some("Lukas-MacBookAir.local"), &[22]);
