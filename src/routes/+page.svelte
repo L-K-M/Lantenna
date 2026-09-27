@@ -29,6 +29,7 @@
   import { applySystemColors } from '$lib/app/colors';
   import { installContextMenuGuard } from '$lib/app/contextMenus';
   import { bindWindow, installFeedback } from '$lib/app/feedback';
+  import { installKeyboardHome } from '$lib/app/focus';
   import { installPageKeys } from '$lib/app/keys';
   import { MIN_H, MIN_W } from '$lib/app/layout';
   import { installNativeMenu } from '$lib/app/nativeMenu';
@@ -99,6 +100,9 @@
     if (isMac) disposers.push(installNativeMenu());
     disposers.push(installPageKeys());
     disposers.push(installContextMenuGuard());
+    // The host view takes the keyboard now and whenever it has nowhere
+    // else to be (spec 3.2).
+    disposers.push(installKeyboardHome(frame));
     disposers.push(scheduleUpdateCheck());
     if (isMac) disposers.push(windowManager.trackGrow(frame));
     disposers.push(windowManager.watchResize());

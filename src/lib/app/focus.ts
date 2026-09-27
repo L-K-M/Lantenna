@@ -7,8 +7,13 @@
 //
 // Class contract: the list view's host element is div.lan-list
 // (HostList), the icon grid's is div.lan-icons (HostIconView).
+//
+// installKeyboardHome() gives the keyboard back to the host view when
+// it has nowhere left to be.
 
-import { readable, type Readable } from 'svelte/store';
+import { get, readable, type Readable } from 'svelte/store';
+import { isModal, onModalChange } from 'osmium-ui';
+import { activeView } from './views';
 
 export type FocusKind = 'list' | 'icons' | 'text' | 'readonly-text' | 'other';
 
@@ -67,3 +72,118 @@ export const keyboardFocus: Readable<FocusKind> = readable<FocusKind>('other', (
     document.removeEventListener('focusout', onFocusOut);
   };
 });
+
+/** What hides an element without removing it: a `hidden` attribute (the
+ * pane, a tab's panel) or the collapsed window (Osmium's class). */
+const HIDDEN_SELECTOR = '[hidden], .osm-shaded';
+
+/** A text selection outside the fields (pane values are selectable). */
+function hasTextSelection(): boolean {
+  const selection = window.getSelection();
+  return selection !== null && !selection.isCollapsed && selection.toString() !== '';
+}
+
+/** Whether the keyboard has no usable place: nowhere (<body>), or an
+ * element that is gone, dimmed or hidden. */
+function keyboardStranded(): boolean {
+  const el = document.activeElement;
+  if (!el || el === document.body || el === document.documentElement) return true;
+  return !el.isConnected || el.matches(':disabled') || el.closest(HIDDEN_SELECTOR) !== null;
+}
+
+/**
+ * The host view is the keyboard's home (3.2), as the Finder's front
+ * window keeps its list's keyboard: whenever the keyboard has nowhere
+ * left to be, the view (the list or the icon grid) takes it. That is at
+ * launch, after a click on the gray, when the focused control dims
+ * (Wake while sending, Deep Scan while its scan runs, Stop while
+ * stopping, the pop-ups during a scan), when its panel or the pane hides,
+ * when it goes away (the Hidden checkbox hiding the selected host) and
+ * when the window unfolds. Without it the keyboard falls to <body>,
+ * where arrows and type-select do nothing and Return presses Open.
+ *
+ * Not while an alert is up (it holds the keyboard and gives it back as
+ * it closes; the check runs again then), while the view can't take it
+ * (the window collapsed), and not for a press that selects text in the
+ * pane (3.3, for Copy): a press moves the keyboard when it ends, and
+ * only if it left no selection, since moving the focus drops the
+ * selection (Chromium while the drag starts, WebKit after it).
+ *
+ * Browsers report these moves differently, so several things start the
+ * check, which runs a microtask later, once the page has settled:
+ * focusout to nowhere (Chromium sends it for each case, WebKit only for
+ * a control that dims); changes to what `frame`'s content holds or hides
+ * (WebKit keeps the focus on an element hidden by an ancestor's `hidden`
+ * attribute, and moves it to <body> without an event when the element is
+ * removed); the frame's class (collapse and expand); and an alert
+ * closing. Returns the disposer.
+ */
+export function installKeyboardHome(frame: HTMLElement): () => void {
+  let queued = false;
+  /** A pointer button is down in the page (a click or a drag). A press
+   * the page never sees end (the OS takes the mouse to move the window)
+   * is over by the next key. */
+  let pressing = false;
+
+  const check = () => {
+    queued = false;
+    if (pressing || isModal() || !keyboardStranded() || hasTextSelection()) return;
+
+    const view = get(activeView);
+    if (!view || view.element.closest(HIDDEN_SELECTOR)) return;
+    view.focus();
+  };
+  const queue = () => {
+    if (queued) return;
+    queued = true;
+    queueMicrotask(check);
+  };
+
+  const onFocusOut = (e: FocusEvent) => {
+    if (e.relatedTarget === null) queue();
+  };
+  const onPress = () => {
+    pressing = true;
+  };
+  const onRelease = () => {
+    pressing = false;
+    queue();
+  };
+  const onKey = () => {
+    pressing = false;
+  };
+  document.addEventListener('focusout', onFocusOut);
+  document.addEventListener('pointerdown', onPress, true);
+  document.addEventListener('pointerup', onRelease, true);
+  document.addEventListener('pointercancel', onRelease, true);
+  document.addEventListener('keydown', onKey, true);
+
+  const observer = new MutationObserver(queue);
+  observer.observe(frame, { attributes: true, attributeFilter: ['class'] });
+  const content = frame.querySelector('.osm-content');
+  if (content) {
+    observer.observe(content, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['hidden', 'disabled']
+    });
+  }
+
+  const stopModal = onModalChange((modal) => {
+    if (!modal) queue();
+  });
+
+  // At launch nothing has the keyboard yet.
+  queue();
+
+  return () => {
+    document.removeEventListener('focusout', onFocusOut);
+    document.removeEventListener('pointerdown', onPress, true);
+    document.removeEventListener('pointerup', onRelease, true);
+    document.removeEventListener('pointercancel', onRelease, true);
+    document.removeEventListener('keydown', onKey, true);
+    observer.disconnect();
+    stopModal();
+  };
+}
