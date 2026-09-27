@@ -27,13 +27,19 @@ export interface HeaderInput {
   balloons: BalloonHelpState;
 }
 
+/** The header's progress bar: scanned of total, or Mac OS 8's
+ * indeterminate barber pole (Osmium N2) for a phase with no counts. */
+export type HeaderBar =
+  | { value: number; max: number; label: string }
+  | { indeterminate: true; label: string };
+
 export interface HeaderState {
   text: string;
   /** For the visually hidden live region; changes only on state-kind changes. */
   announce: string;
-  /** Chasing arrows would run (Osmium N1, not yet available). */
+  /** The chasing arrows turn (Osmium N1). */
   busy: boolean;
-  progress: { value: number; max: number; label: string } | null;
+  progress: HeaderBar | null;
   /** A small alert icon before the text (Osmium N3, not yet available):
    * stop for the error lines, caution for the interface problems. */
   icon: 'stop' | 'caution' | null;
@@ -50,6 +56,10 @@ type Bar = HeaderState['progress'];
 /** A row whose visible text is also what the live region says. */
 function row(text: string, busy: boolean, icon: HeaderState['icon'] = null): HeaderState {
   return { text, announce: text, busy, progress: null, icon };
+}
+
+function indeterminate(label: string): Bar {
+  return { indeterminate: true, label };
 }
 
 /** scanned / total, or no bar before the phase knows its total. */
@@ -81,10 +91,12 @@ function scanRow(p: ScanProgress | null, iface: NetworkInterface | null): Header
       text = `Probing ports: ${scanned} of ${plural(p.total, 'host')}.`;
       announce = 'Probing ports…';
       break;
-    case 'fingerprint':
-      // One event per scan with the host count; no per-host progress,
-      // so no bar (Osmium's indeterminate bar, N2, doesn't exist yet).
-      return row(p.total > 0 ? `Identifying ${plural(p.total, 'host')}…` : 'Finishing scan…', true);
+    case 'fingerprint': {
+      // One event per scan with the host count and no per-host progress:
+      // the indeterminate bar (Osmium N2).
+      const identifying = p.total > 0 ? `Identifying ${plural(p.total, 'host')}…` : 'Finishing scan…';
+      return { ...row(identifying, true), progress: indeterminate(`Scan progress: ${identifying}`) };
+    }
   }
 
   return { text, announce, busy: true, progress: bar(p, `Scan progress: ${text}`), icon: null };
@@ -93,7 +105,8 @@ function scanRow(p: ScanProgress | null, iface: NetworkInterface | null): Header
 /** Row 2: the bar keeps what the phase showed. */
 function stoppingRow(p: ScanProgress | null): HeaderState {
   const text = 'Stopping scan…';
-  const shown = p !== null && p.phase !== 'fingerprint' ? bar(p, `Scan progress: ${text}`) : null;
+  const label = `Scan progress: ${text}`;
+  const shown = p === null ? null : p.phase === 'fingerprint' ? indeterminate(label) : bar(p, label);
   return { ...row(text, true), progress: shown };
 }
 
@@ -168,8 +181,13 @@ export function headerState(input: HeaderInput, now: Date): HeaderState {
 
   if (iface !== null && store.lastScanAt === null && store.hosts.length === 0) {
     const hint = input.balloons === 'hidden' ? BALLOON_HINT : '';
+    // A larger subnet is sampled: say so, as row 4 will (3.1, 1.7).
+    const addresses =
+      iface.host_count > MAX_SCAN_HOSTS
+        ? `${formatCount(MAX_SCAN_HOSTS)} sampled addresses`
+        : plural(iface.host_count, 'address', 'addresses');
     return row(
-      `Click Scan to search ${plural(iface.host_count, 'address', 'addresses')} on ${iface.name} (${iface.subnet}). This computer is ${iface.ip}.${hint}`,
+      `Click Scan to search ${addresses} on ${iface.name} (${iface.subnet}). This computer is ${iface.ip}.${hint}`,
       false
     );
   }

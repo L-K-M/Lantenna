@@ -107,12 +107,16 @@ function mount() {
   };
 }
 
-it('is a Finder window header with the reserved arrows slot and a live region', () => {
+it('is a Finder window header with stopped chasing arrows and a live region', () => {
   const h = mount();
 
   expect(h.header.classList.contains('osm-placard')).toBe(true);
-  const arrows = h.header.querySelector('.lan-arrows')!;
+  // Osmium's arrows, a direct child of the placard (its measured spot),
+  // blank and hidden from screen readers while idle.
+  const arrows = h.header.querySelector(':scope > .lan-arrows')!;
+  expect(arrows.classList.contains('osm-arrows')).toBe(true);
   expect(arrows.getAttribute('aria-hidden')).toBe('true');
+  expect(arrows.hasAttribute('data-frame')).toBe(false);
   expect(arrows.childElementCount).toBe(0);
 
   expect(h.text.textContent).toMatch(/^24 hosts, 2 new, 3 hidden\. Last scan today at /);
@@ -164,11 +168,44 @@ it('shows the scan’s progress bar with its ARIA values', async () => {
   expect(Number(bar.style.getPropertyValue('--osm-value'))).toBeCloseTo(112 / 254);
   expect(describedText(bar)).toBe('Progress bar\n\nShows how far the current phase of the scan has come.');
 
+  // The fingerprint phase has no counts: the indeterminate bar (N2),
+  // without ARIA values, and no fill.
   fake.progress.set({ progress: { ...discovery(0, 11), phase: 'fingerprint', total: 11 }, hostScanProgress: null });
   await settle();
   expect(h.text.textContent).toBe('Identifying 11 hosts…');
+  const pole = h.bar()!;
+  expect(pole.classList.contains('osm-indeterminate')).toBe(true);
+  expect(pole.getAttribute('role')).toBe('progressbar');
+  expect(pole.getAttribute('aria-label')).toBe('Scan progress: Identifying 11 hosts…');
+  for (const name of ['aria-valuenow', 'aria-valuemin', 'aria-valuemax']) expect(pole.hasAttribute(name)).toBe(false);
+  expect(pole.style.getPropertyValue('--osm-value')).toBe('');
+  expect(h.text.classList.contains('lan-with-bar')).toBe(true);
+
+  // Idle again: no bar.
+  setStore({ scanning: false });
+  fake.progress.set({ progress: null, hostScanProgress: null });
+  await settle();
   expect(h.bar()).toBeNull();
   expect(h.text.classList.contains('lan-with-bar')).toBe(false);
+});
+
+it('turns the chasing arrows while busy and stops them when idle (5.2)', async () => {
+  const h = mount();
+  const arrows = h.header.querySelector<HTMLElement>('.lan-arrows')!;
+  expect(arrows.hasAttribute('data-frame')).toBe(false);
+
+  setStore({ scanning: true });
+  fake.progress.set({ progress: discovery(112, 9), hostScanProgress: null });
+  await settle();
+  expect(arrows.getAttribute('data-frame')).toBe('0');
+  expect(arrows.hasAttribute('aria-hidden')).toBe(false);
+  expect(arrows.getAttribute('role')).toBe('img');
+
+  setStore({ scanning: false });
+  fake.progress.set({ progress: null, hostScanProgress: null });
+  await settle();
+  expect(arrows.hasAttribute('data-frame')).toBe(false);
+  expect(arrows.getAttribute('aria-hidden')).toBe('true');
 });
 
 it('announces state changes, not counts', async () => {
@@ -240,4 +277,10 @@ it('dates a scan by the clock at the store change, not the last tick', async () 
   await vi.waitFor(() =>
     expect(h.text.textContent).toBe(`24 hosts, 2 new, 3 hidden. Last scan today at ${formatClock(lastScan)}.`)
   );
+});
+
+it('turns the arrows from the mount on while the last scan is read', () => {
+  setStore({ loading: true });
+  const h = mount();
+  expect(h.header.querySelector('.lan-arrows')!.getAttribute('data-frame')).toBe('0');
 });

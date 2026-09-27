@@ -112,7 +112,7 @@ describe('row by row (first match wins)', () => {
     expect(h.progress).toEqual({ value: 40, max: 245, label: 'Scan progress: Stopping scan…' });
 
     const identifying = headerState(scanning(progress('fingerprint', 0, 11), { stopping: true }), NOW);
-    expect(identifying.progress).toBeNull();
+    expect(identifying.progress).toEqual({ indeterminate: true, label: 'Scan progress: Stopping scan…' });
   });
 
   it('3: starting, before discovery knows its total', () => {
@@ -156,7 +156,15 @@ describe('row by row (first match wins)', () => {
 
   it('7 and 8: fingerprint, without a bar', () => {
     const h = headerState(scanning(progress('fingerprint', 0, 11)), NOW);
-    expect(h).toMatchObject({ text: 'Identifying 11 hosts…', busy: true, progress: null });
+    expect(h).toMatchObject({
+      text: 'Identifying 11 hosts…',
+      busy: true,
+      progress: { indeterminate: true, label: 'Scan progress: Identifying 11 hosts…' }
+    });
+    expect(headerState(scanning(progress('fingerprint', 0, 0)), NOW).progress).toEqual({
+      indeterminate: true,
+      label: 'Scan progress: Finishing scan…'
+    });
     expect(headerState(scanning(progress('fingerprint', 0, 1)), NOW).text).toBe('Identifying 1 host…');
     expect(headerState(scanning(progress('fingerprint', 0, 0)), NOW).text).toBe('Finishing scan…');
   });
@@ -254,8 +262,13 @@ describe('row by row (first match wins)', () => {
     expect(headerState(input({ store: never, balloons: 'shown' }), NOW).text).toBe(
       'Click Scan to search 254 addresses on en0 (192.168.1.0/24). This computer is 192.168.1.23.'
     );
-    expect(headerState(input({ store: never, selectedInterface: EN7 }), NOW).text).toBe(
-      'Click Scan to search 65,534 addresses on en7 (10.0.0.0/16). This computer is 10.0.4.2.'
+    // Above 4,096 addresses the scan samples, and the hint says so.
+    expect(headerState(input({ store: never, selectedInterface: EN7, balloons: 'shown' }), NOW).text).toBe(
+      'Click Scan to search 4,096 sampled addresses on en7 (10.0.0.0/16). This computer is 10.0.4.2.'
+    );
+    const exactly = { ...EN7, host_count: 4096 };
+    expect(headerState(input({ store: never, selectedInterface: exactly, balloons: 'shown' }), NOW).text).toBe(
+      'Click Scan to search 4,096 addresses on en7 (10.0.0.0/16). This computer is 10.0.4.2.'
     );
   });
 
