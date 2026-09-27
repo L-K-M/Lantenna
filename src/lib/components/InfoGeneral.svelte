@@ -16,7 +16,7 @@
   import { FAVORITE_BALLOON, HIDDEN_BALLOON, NAME_BALLOON } from '$lib/app/balloonTexts';
   import type { HostRow } from '$lib/app/hostModel';
   import { commitName, nameFieldValue } from '$lib/app/nameCommit';
-  import { balloon, highlight } from '$lib/osm/actions';
+  import { balloon, checkboxBalloon, highlight } from '$lib/osm/actions';
   import { formatLongDate } from '$lib/util/format';
   import { isPrivateMac } from '$lib/util/mac';
   import { scanStore } from '$lib/util/scanStore';
@@ -153,21 +153,11 @@
       <span class="osm-label">Last Seen:</span><span class="lan-value">{formatLongDate(row.host.last_seen)}</span>
     </div>
 
-    <label class="osm-checkbox lan-check lan-favorite" use:highlight>
-      <input
-        type="checkbox"
-        checked={row.favorite}
-        onchange={() => scanStore.toggleFavorite(ip)}
-        use:balloon={FAVORITE_BALLOON}
-      />Favorite
+    <label class="osm-checkbox lan-check lan-favorite" use:highlight use:checkboxBalloon={FAVORITE_BALLOON}>
+      <input type="checkbox" checked={row.favorite} onchange={() => scanStore.toggleFavorite(ip)} />Favorite
     </label>
-    <label class="osm-checkbox lan-check lan-hidden" use:highlight>
-      <input
-        type="checkbox"
-        checked={row.hidden}
-        onchange={() => scanStore.toggleHidden(ip)}
-        use:balloon={HIDDEN_BALLOON}
-      />Hidden
+    <label class="osm-checkbox lan-check lan-hidden" use:highlight use:checkboxBalloon={HIDDEN_BALLOON}>
+      <input type="checkbox" checked={row.hidden} onchange={() => scanStore.toggleHidden(ip)} />Hidden
     </label>
   {/if}
 </div>

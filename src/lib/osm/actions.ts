@@ -94,15 +94,46 @@ export function highlight(node: HTMLElement): void {
 /**
  * `use:balloon={content}`: Balloon Help for the element, shown only while
  * Help > Show Balloons is on (trigger "balloon-help"). Attach it to the
- * focusable control itself (a checkbox's input), not a wrapper. A new
- * `content` value replaces the message; the balloon is detached on
- * destroy.
+ * focusable control itself, not a wrapper (a checkbox takes
+ * checkboxBalloon on its label). A new `content` value replaces the
+ * message; the balloon is detached on destroy.
  */
 export function balloon(
   node: HTMLElement,
   content: BalloonOptions['content']
 ): ActionReturn<BalloonOptions['content']> {
   return attachHelp(node, content, { tip: 'anchor' });
+}
+
+/**
+ * `<label class="osm-checkbox" use:checkboxBalloon={content}><input …>Title</label>`:
+ * Balloon Help for a checkbox and its title together, as the Help
+ * Manager's hot rectangle for a check box item covers both. On the
+ * 14 x 12 box alone the tip lands inside the box and the balloon covers
+ * the title, under the pointer that rests there; on the label it points
+ * past the title. The message stays the box's description for screen
+ * readers (5.6): Osmium names it in the label's aria-describedby, which
+ * moves to the input.
+ */
+export function checkboxBalloon(
+  node: HTMLLabelElement,
+  content: BalloonOptions['content']
+): ActionReturn<BalloonOptions['content']> {
+  const help = attachBalloon(node, { content, trigger: 'balloon-help', tip: 'anchor' });
+  const input = node.querySelector('input');
+  const id = help.element.id;
+  node.removeAttribute('aria-describedby');
+  input?.setAttribute('aria-describedby', id);
+
+  return {
+    update(next) {
+      help.setContent(next);
+    },
+    destroy() {
+      help.detach();
+      if (input?.getAttribute('aria-describedby') === id) input.removeAttribute('aria-describedby');
+    }
+  };
 }
 
 /**

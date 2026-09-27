@@ -16,7 +16,7 @@
   import { get } from 'svelte/store';
   import { setButtonTitle } from 'osmium-ui';
   import type { PopupParams } from '$lib/osm/actions';
-  import { balloon, highlight, osmButton, popup } from '$lib/osm/actions';
+  import { balloon, checkboxBalloon, highlight, osmButton, popup } from '$lib/osm/actions';
   import {
     DEPTH_BALLOON,
     FIND_BALLOON,
@@ -260,14 +260,18 @@
     use:balloon={SHOW_BALLOON}
   ></button>
 
-  <label class="osm-checkbox lan-show-hidden" class:osm-disabled={!showHiddenEnabled} use:highlight>
+  <label
+    class="osm-checkbox lan-show-hidden"
+    class:osm-disabled={!showHiddenEnabled}
+    use:highlight
+    use:checkboxBalloon={showHiddenHelp}
+  >
     <input
       type="checkbox"
       checked={showHidden}
       disabled={!showHiddenEnabled}
       bind:this={showHiddenBox}
       onchange={toggleShowHidden}
-      use:balloon={showHiddenHelp}
     />
     Show hidden hosts
   </label>

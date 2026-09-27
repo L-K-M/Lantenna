@@ -1,12 +1,12 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { MENU_SEPARATOR } from 'osmium-ui';
-import { areaBalloon, balloon, osmButton, popup, type PopupParams } from './actions';
+import { areaBalloon, balloon, checkboxBalloon, osmButton, popup, type PopupParams } from './actions';
 
 const osm = vi.hoisted(() => ({
   popup: { selected: 0, setItems: vi.fn(), setSelected: vi.fn(), destroy: vi.fn() },
   mountPopup: vi.fn(),
   pushButton: vi.fn(),
-  balloon: { setContent: vi.fn(), detach: vi.fn() },
+  balloon: { element: { id: 'osm-balloon-9' }, setContent: vi.fn(), detach: vi.fn() },
   attachBalloon: vi.fn()
 }));
 
@@ -100,4 +100,30 @@ it('points an area’s balloon at the pointer, or for the keyboard at its middle
   });
   action.destroy?.();
   expect(osm.balloon.detach).toHaveBeenCalledOnce();
+});
+
+it('points a checkbox’s balloon past its title, describing the box itself', () => {
+  const label = document.createElement('label');
+  label.innerHTML = '<input type="checkbox">Show hidden hosts';
+  const input = label.querySelector('input')!;
+  // Osmium names the balloon in its target's description.
+  osm.attachBalloon.mockImplementation((target: HTMLElement) => {
+    target.setAttribute('aria-describedby', 'osm-balloon-9');
+    return osm.balloon;
+  });
+
+  const action = checkboxBalloon(label, 'Show hidden hosts checkbox');
+  expect(osm.attachBalloon).toHaveBeenCalledWith(label, {
+    content: 'Show hidden hosts checkbox',
+    trigger: 'balloon-help',
+    tip: 'anchor'
+  });
+  expect(input.getAttribute('aria-describedby')).toBe('osm-balloon-9');
+  expect(label.hasAttribute('aria-describedby')).toBe(false);
+
+  action.update!('Show hidden hosts checkbox (dimmed)');
+  expect(osm.balloon.setContent).toHaveBeenCalledWith('Show hidden hosts checkbox (dimmed)');
+  action.destroy!();
+  expect(osm.balloon.detach).toHaveBeenCalledOnce();
+  expect(input.hasAttribute('aria-describedby')).toBe(false);
 });
