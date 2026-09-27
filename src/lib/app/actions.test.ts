@@ -226,25 +226,38 @@ describe('copying', () => {
     expect(write).not.toHaveBeenCalled();
   });
 
-  it('falls back to execCommand when the Clipboard API refuses, keeping the focus', async () => {
+  it('falls back to a copy event when the Clipboard API refuses, leaving the focus alone', async () => {
     vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new DOMException('Document is not focused.'));
-    const exec = vi.spyOn(document, 'execCommand').mockReturnValue(true);
-    const list = document.createElement('div');
-    list.tabIndex = 0;
-    document.body.append(list);
-    list.focus();
+    // As WebKit does without a selection: fire `copy` at the focused
+    // element, write what its handlers set, and return false.
+    let copied: { text: string; handled: boolean } | null = null;
+    vi.spyOn(document, 'execCommand').mockImplementation((command) => {
+      if (command !== 'copy') return false;
+      const clipboardData = new DataTransfer();
+      const event = new ClipboardEvent('copy', { clipboardData, bubbles: true, cancelable: true });
+      (document.activeElement ?? document.body).dispatchEvent(event);
+      copied = { text: clipboardData.getData('text/plain'), handled: event.defaultPrevented };
+      return false;
+    });
+    // A name field with a draft in it: losing the keyboard would commit.
+    const field = document.createElement('input');
+    const focusOut = vi.fn();
+    field.addEventListener('focusout', focusOut);
+    document.body.append(field);
+    field.focus();
 
     await actions.copyValue('ip', '192.168.1.31');
 
-    expect(exec).toHaveBeenCalledWith('copy');
-    expect(document.activeElement).toBe(list);
-    expect(document.querySelector('textarea')).toBeNull();
+    expect(copied).toEqual({ text: '192.168.1.31', handled: true });
+    expect(focusOut).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(field);
     expect(feedback.stopAlert).not.toHaveBeenCalled();
-    list.remove();
+    field.remove();
   });
 
   it('reports a clipboard that refuses both ways', async () => {
     vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new DOMException('denied'));
+    vi.spyOn(document, 'execCommand').mockReturnValue(false);
     await actions.copyValue('ip', '192.168.1.31');
     expect(feedback.stopAlert).toHaveBeenCalledWith(
       'Lantenna couldn’t copy to the Clipboard.',

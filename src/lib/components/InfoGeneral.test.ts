@@ -166,6 +166,44 @@ describe('the name field', () => {
     expect(store.setCustomName).not.toHaveBeenCalled();
   });
 
+  it('keeps a name committed with Return when Escape follows', async () => {
+    const { rerender } = render(InfoGeneral, { props: { row: printer } });
+    const field = await typeName('Office Printer');
+    await fireEvent.keyDown(field, { key: 'Enter' });
+    // The model feeds the new name back, as scanStore would.
+    await rerender({ row: hostRow(host(), { customName: 'Office Printer' }) });
+
+    await fireEvent.keyDown(field, { key: 'Escape' });
+    await fireEvent.focusOut(field);
+
+    expect(field.value).toBe('Office Printer');
+    expect(store.setCustomName).toHaveBeenCalledTimes(1);
+    expect(store.setCustomName).toHaveBeenCalledWith('192.168.1.31', 'Office Printer');
+  });
+
+  it('reverts to a name a menu set while the field had the keyboard', async () => {
+    const named = hostRow(host(), { customName: 'Office Printer' });
+    const { rerender } = render(InfoGeneral, { props: { row: named } });
+
+    // Clear Custom Name while the field is focused and untouched.
+    const field = nameField();
+    await fireEvent.focusIn(field);
+    await rerender({ row: printer });
+    await fireEvent.keyDown(field, { key: 'Escape' });
+    await fireEvent.focusOut(field);
+    expect(field.value).toBe('BRN30055C123456');
+
+    // The same with an edit in progress.
+    await rerender({ row: named });
+    await typeName('Office');
+    await rerender({ row: printer });
+    await fireEvent.keyDown(field, { key: 'Escape' });
+    await fireEvent.focusOut(field);
+    expect(field.value).toBe('BRN30055C123456');
+
+    expect(store.setCustomName).not.toHaveBeenCalled();
+  });
+
   it('commits a draft to its own host when the selection changes', async () => {
     const { rerender } = render(InfoGeneral, { props: { row: printer } });
     await typeName('Office Printer');

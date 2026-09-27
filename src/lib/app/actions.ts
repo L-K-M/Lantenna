@@ -182,10 +182,10 @@ async function copyText(value: string): Promise<void> {
 }
 
 /**
- * The Clipboard API, falling back to a hidden text area and
- * execCommand('copy') when the API is missing or refuses: Edit > Copy IP
- * Address from the macOS native menu runs outside a page user gesture,
- * and WKWebView may refuse the API there (unverified; a manual check).
+ * The Clipboard API, falling back to execCommand('copy') when the API is
+ * missing or refuses: Edit > Copy IP Address from the macOS native menu
+ * runs outside a page user gesture, and WKWebView may refuse the API
+ * there (unverified; a manual check).
  */
 async function writeClipboardText(value: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
@@ -197,30 +197,35 @@ async function writeClipboardText(value: string): Promise<void> {
     }
   }
 
-  if (!copyWithTextArea(value)) throw new Error('Clipboard write was blocked by the system');
+  if (!copyWithCopyEvent(value)) throw new Error('Clipboard write was blocked by the system');
 }
 
-/** execCommand('copy') copies the selection, so select the value in a
- * hidden text area; the keyboard goes back where it was (the host list,
- * for ⌘C), since selecting moved it. */
-function copyWithTextArea(value: string): boolean {
-  const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const area = document.createElement('textarea');
-  area.value = value;
-  area.setAttribute('readonly', '');
-  area.setAttribute('aria-hidden', 'true');
-  area.style.position = 'fixed';
-  area.style.opacity = '0';
-  area.style.pointerEvents = 'none';
-  document.body.append(area);
-  area.select();
+/**
+ * execCommand('copy') fires a `copy` event, and a one-time listener puts
+ * the value on its clipboard data. Nothing gets selected, so the keyboard
+ * stays where it is: selecting a hidden text area would take it, and the
+ * name field commits its draft when it loses the keyboard. Success is the
+ * listener having run, not execCommand's result: WebKit returns false
+ * without a selection even when it copied (checked in Chromium and
+ * WebKitGTK).
+ */
+function copyWithCopyEvent(value: string): boolean {
+  let copied = false;
+  const onCopy = (e: ClipboardEvent) => {
+    if (!e.clipboardData) return;
 
+    e.clipboardData.setData('text/plain', value);
+    e.preventDefault();
+    copied = true;
+  };
+
+  document.addEventListener('copy', onCopy, true);
   try {
-    return document.execCommand('copy');
+    document.execCommand('copy');
   } finally {
-    area.remove();
-    previous?.focus({ preventScroll: true });
+    document.removeEventListener('copy', onCopy, true);
   }
+  return copied;
 }
 
 /** Get Info: show the pane and bring `tab` (default General) to the front. */

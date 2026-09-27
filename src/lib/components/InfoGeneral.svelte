@@ -33,8 +33,6 @@
   let draft = $state('');
   let shown = '';
   let draftRow: HostRow | null = null;
-  /** The value on focus, which Escape goes back to. */
-  let focusValue = '';
 
   $effect.pre(() => {
     const next = row;
@@ -84,14 +82,14 @@
       return;
     }
 
+    // Escape drops the edit in progress: back to `shown`, which is the
+    // value on focus unless a Return commit or the model (a menu's
+    // rename or Clear Custom Name) changed the name since. Going back to
+    // the older value would let the next commit undo that change.
     if (e.key === 'Escape') {
       e.preventDefault();
-      draft = focusValue;
+      draft = shown;
     }
-  }
-
-  function onFocusIn(): void {
-    focusValue = draft;
   }
 
   function onFocusOut(): void {
@@ -137,7 +135,6 @@
       bind:this={field}
       bind:value={draft}
       onkeydown={onKeydown}
-      onfocusin={onFocusIn}
       onfocusout={onFocusOut}
       use:balloon={NAME_BALLOON}
     />
