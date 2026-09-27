@@ -87,6 +87,8 @@ export async function openUrl(url: string): Promise<void> {
   try {
     await TauriService.openExternalUrl(url);
   } catch (error) {
+    // The alert explains; the log keeps the backend's own text.
+    console.warn(`Lantenna couldn’t open ${url}:`, error);
     void stopAlert(`Lantenna couldn’t open “${url}”.`, explainError(errorMessage(error, 'Failed to open link')));
   }
 }

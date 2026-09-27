@@ -134,13 +134,15 @@ describe('opening', () => {
     );
   });
 
-  it('reports an open failure in a stop alert', async () => {
+  it('reports an open failure in a stop alert, logging the backend’s text', async () => {
     native.invoke.mockRejectedValueOnce('Unsupported URL scheme');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await actions.openUrl('http://192.168.1.31:8080');
     expect(feedback.stopAlert).toHaveBeenCalledWith(
       'Lantenna couldn’t open “http://192.168.1.31:8080”.',
       'explained(Unsupported URL scheme)'
     );
+    expect(warn).toHaveBeenCalledWith('Lantenna couldn’t open http://192.168.1.31:8080:', 'Unsupported URL scheme');
   });
 });
 

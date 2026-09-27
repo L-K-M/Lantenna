@@ -33,6 +33,15 @@ const RULES: readonly Rule[] = [
   [
     /^Unsupported URL scheme$/,
     () => 'Lantenna opens only web, file sharing, remote login and screen sharing addresses.'
+  ],
+  // The open crate: every launcher (xdg-open, gio, …) ran and refused,
+  // likely on a Linux system with no default application set.
+  [/^Launcher .* failed with /s, () => 'No application is set up to open this address.'],
+  // reqwest's connection failure (DNS, refused, TLS, timeout), as the
+  // update check reports it.
+  [
+    /^error sending request for url \((?:[a-z]+:\/\/)?([^/:)]+)/,
+    (m) => `Lantenna couldn’t reach ${m[1]}. Check your Internet connection, then try again.`
   ]
 ];
 

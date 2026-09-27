@@ -82,6 +82,8 @@ async function askAboutUpdate(info: UpdateInfo, current: string | null): Promise
   try {
     await openReleasePage(info.url);
   } catch (error) {
+    // The alerts explain; the log keeps the backend's own text.
+    console.warn(`Lantenna couldn’t open ${info.url}:`, error);
     await stopAlert(
       `Lantenna couldn’t open “${info.url}”.`,
       explainError(errorMessage(error, 'Failed to open the release page'))
@@ -160,6 +162,7 @@ async function checkNow(): Promise<void> {
   try {
     info = await checkForUpdateNow();
   } catch (error) {
+    console.warn('Lantenna couldn’t check for updates:', error);
     await stopAlert(
       'Lantenna couldn’t check for updates.',
       explainError(errorMessage(error, 'Failed to check for updates'))

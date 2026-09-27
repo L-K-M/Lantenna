@@ -23,7 +23,15 @@ it.each([
   ['A scan is already running', 'Another scan is still running. Wait for it to finish, then try again.'],
   ["Invalid IPv4 address '192.168.1.300'", '“192.168.1.300” isn’t a valid IPv4 address.'],
   ["Invalid MAC address '30:05:5C'", '“30:05:5C” isn’t a valid MAC address.'],
-  ['Unsupported URL scheme', 'Lantenna opens only web, file sharing, remote login and screen sharing addresses.']
+  ['Unsupported URL scheme', 'Lantenna opens only web, file sharing, remote login and screen sharing addresses.'],
+  [
+    'Launcher "gio" "open" "https://github.com/L-K-M/Lantenna#readme" failed with ExitStatus(unix_wait_status(512))',
+    'No application is set up to open this address.'
+  ],
+  [
+    'error sending request for url (https://api.github.com/repos/L-K-M/Lantenna/releases/latest)',
+    'Lantenna couldn’t reach api.github.com. Check your Internet connection, then try again.'
+  ]
 ])('explains %j', (raw, explanation) => {
   expect(explainError(raw)).toBe(explanation);
 });

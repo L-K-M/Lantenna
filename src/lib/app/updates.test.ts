@@ -248,6 +248,7 @@ it('opens the release page from View on GitHub', async () => {
 it('says so when the release page can’t be opened', async () => {
   answer = 'ok';
   native.openError = 'Only http(s) URLs may be opened';
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   const m = await load();
   dispose = m.scheduleUpdateCheck();
   await m.scanStore.init();
@@ -257,6 +258,7 @@ it('says so when the release page can’t be opened', async () => {
     `Lantenna couldn’t open “${RELEASE.url}”.`,
     'Only http(s) URLs may be opened.'
   );
+  expect(warn).toHaveBeenCalledOnce();
 });
 
 it('remembers Skip This Version and does nothing for Later', async () => {
@@ -316,6 +318,7 @@ it('checks now: up to date', async () => {
 
 it('checks now: a failure is a stop alert, not "up to date"', async () => {
   native.updateError = 'GitHub returned HTTP 503';
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   const m = await load();
 
   await m.checkForUpdatesNow();
@@ -325,6 +328,7 @@ it('checks now: a failure is a stop alert, not "up to date"', async () => {
     'GitHub returned HTTP 503.'
   );
   expect(native.noteAlert).not.toHaveBeenCalled();
+  expect(warn).toHaveBeenCalledOnce();
 });
 
 it('offers an update the manual check already showed only once', async () => {
