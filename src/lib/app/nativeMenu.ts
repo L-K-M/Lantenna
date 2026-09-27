@@ -206,22 +206,40 @@ export function installNativeMenu(): () => void {
     throw failure.reason;
   }
 
+  /** The first build. If a call fails part way, what it made so far is
+   * released before the failure is reported: nothing else holds those
+   * handles (submenus is set only by a build that returns). */
   async function build(ctx: CommandContext): Promise<Map<string, SubmenuRecord>> {
     const records = new Map<string, SubmenuRecord>();
+    let menu: Menu | null = null;
 
-    for (const spec of menuBarSpec(ctx)) {
-      const items = await createItems(spec, ctx);
-      const submenu = await Submenu.new({ text: spec.title, items: items.map((i) => i.handle) });
-      records.set(spec.id, { submenu, title: spec.title, structure: structureOf(spec.entries), items });
+    try {
+      for (const spec of menuBarSpec(ctx)) {
+        const items = await createItems(spec, ctx);
+        const submenu = await Submenu.new({ text: spec.title, items: items.map((i) => i.handle) }).catch(
+          (error: unknown) => {
+            void release(items.map((i) => i.handle));
+            throw error;
+          }
+        );
+        records.set(spec.id, { submenu, title: spec.title, structure: structureOf(spec.entries), items });
+      }
+
+      menu = await Menu.new({ items: [...records.values()].map((r) => r.submenu) });
+      appMenu = menu;
+      if (disposed) return records;
+
+      // Tauri hands back the menu this one replaces, as a new handle.
+      const replaced = await menu.setAsAppMenu();
+      if (replaced) void release([replaced]);
+    } catch (error) {
+      const handles: Handle[] = [...records.values()].flatMap((r) => [...r.items.map((i) => i.handle), r.submenu]);
+      if (menu) handles.push(menu);
+      if (appMenu === menu) appMenu = null;
+      void release(handles);
+      throw error;
     }
 
-    const menu = await Menu.new({ items: [...records.values()].map((r) => r.submenu) });
-    appMenu = menu;
-    if (disposed) return records;
-
-    // Tauri hands back the menu this one replaces, as a new handle.
-    const replaced = await menu.setAsAppMenu();
-    if (replaced) void release([replaced]);
     // macOS adds its Help search field to this menu.
     await records.get('help')?.submenu.setAsHelpMenuForNSApp().catch(warn('set the Help menu'));
     return records;

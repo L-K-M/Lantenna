@@ -6,10 +6,19 @@ import type { CommandContext } from './commands';
 
 const tauri = vi.hoisted(() => {
   const log: string[] = [];
-  const state: { appMenu: unknown; helpMenu: unknown; failNew: boolean } = {
+  const state: {
+    appMenu: unknown;
+    helpMenu: unknown;
+    failNew: boolean;
+    /** Submenu.new fails once this many submenus exist (null: never). */
+    failSubmenuAfter: number | null;
+    made: { closed: boolean }[];
+  } = {
     appMenu: null,
     helpMenu: null,
-    failNew: false
+    failNew: false,
+    failSubmenuAfter: null,
+    made: []
   };
   let rid = 1;
 
@@ -17,6 +26,9 @@ const tauri = vi.hoisted(() => {
     readonly rid = rid++;
     closed = false;
     text = '';
+    constructor() {
+      state.made.push(this);
+    }
     async close() {
       this.closed = true;
     }
@@ -79,6 +91,8 @@ const tauri = vi.hoisted(() => {
     items: Base[] = [];
     static async new(o: { text: string; items: Base[] }) {
       if (state.failNew) throw new Error('menu new: not allowed');
+      const submenus = state.made.filter((m) => m instanceof Submenu).length;
+      if (state.failSubmenuAfter !== null && submenus >= state.failSubmenuAfter) throw new Error('menu new: out of memory');
       const s = new Submenu();
       s.text = o.text;
       s.items = [...o.items];
@@ -183,6 +197,8 @@ beforeEach(() => {
   tauri.state.appMenu = null;
   tauri.state.helpMenu = null;
   tauri.state.failNew = false;
+  tauri.state.failSubmenuAfter = null;
+  tauri.state.made.length = 0;
   vi.mocked(commands.run).mockClear();
   ctxStore.set(macContext());
   warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -402,6 +418,20 @@ it('keeps the default menu when the menu can’t be built', async () => {
   await settle();
   expect(tauri.state.appMenu).toBeNull();
   expect(warn).toHaveBeenCalledOnce();
+});
+
+it('releases what a first build made before it failed', async () => {
+  // Three menus built, the fourth's submenu refused.
+  tauri.state.failSubmenuAfter = 3;
+  dispose = installNativeMenu();
+  await vi.waitFor(() =>
+    expect(warn).toHaveBeenCalledWith('Lantenna couldn’t build the menu bar:', expect.any(Error))
+  );
+  await settle();
+
+  expect(tauri.state.made.length).toBeGreaterThan(3);
+  expect(tauri.state.made.filter((h) => !h.closed)).toEqual([]);
+  expect(tauri.state.appMenu).toBeNull();
 });
 
 it('stops syncing and ignores items once disposed', async () => {
