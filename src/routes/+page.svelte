@@ -20,7 +20,7 @@
   import { hostMatchesQuery } from '$lib/util/hostSearch';
   import { notifications } from '$lib/util/notifications';
   import { describeScanProgress, isIndeterminatePhase } from '$lib/util/scanProgress';
-  import { scanStore } from '$lib/util/scanStore';
+  import { scanProgress, scanStore } from '$lib/util/scanStore';
   import { windowFocused } from '$lib/util/windowState';
   import type { HostViewMode, SystemColors } from '$lib/types';
 
@@ -58,14 +58,16 @@
     hiddenIps,
     showHiddenEntries,
     staleFavoriteIps,
-    progress,
-    hostScanProgress,
+    pendingIps,
     scanning,
+    stopping,
     loading,
     error,
     query,
     selectedHostIp
   } = $scanStore);
+
+  $: ({ progress, hostScanProgress } = $scanProgress);
 
   $: hiddenSet = new Set(hiddenIps);
 
@@ -86,7 +88,9 @@
 
   $: hostScanTarget = hostScanProgress?.current_ip || 'selected host';
   $: fullScanActive = scanning || Boolean(progress?.running);
-  $: footerStatus = fullScanActive
+  $: footerStatus = stopping
+    ? 'Stopping scan...'
+    : fullScanActive
     ? describeScanProgress(progress)
     : hostScanProgress?.running
       ? hostScanProgress.total > 0
@@ -200,6 +204,7 @@
         selectedInterface={selectedInterface}
         approach={scanApproach}
         {scanning}
+        {stopping}
         {query}
         {viewMode}
         onViewModeChange={setViewMode}
@@ -237,6 +242,7 @@
             {favoriteIps}
             {hiddenIps}
             {staleFavoriteIps}
+            {pendingIps}
             {newHostIps}
             emptyText={tableEmptyText}
             onSelectHost={(ip) => scanStore.setSelectedHost(ip)}

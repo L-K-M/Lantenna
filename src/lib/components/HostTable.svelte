@@ -1,7 +1,7 @@
 <script lang="ts">
     import type {Host} from '$lib/types';
     import { DataTable } from '@lkmc/system7-ui';
-    import { getHostIcon } from '$lib/util/hostIcons';
+    import { getHostIcon, type IconInfo } from '$lib/util/hostIcons';
     import { onMount, tick } from 'svelte';
     import { TauriService } from '$lib/tauri';
     import { formatRelativeTime, normalizeDisplayText, shortVendorName } from '$lib/util/format';
@@ -16,6 +16,7 @@
     export let hiddenIps: string[] = [];
     export let staleFavoriteIps: string[] = [];
     export let newHostIps: string[] = [];
+    export let pendingIps: string[] = [];
     export let onSelectHost: ((ip: string) => void) | undefined = undefined;
     export let onToggleFavorite: ((ip: string) => void) | undefined = undefined;
     export let onToggleHidden: ((ip: string) => void) | undefined = undefined;
@@ -59,6 +60,39 @@
     $: hiddenSet = new Set(hiddenIps);
     $: staleFavoriteSet = new Set(staleFavoriteIps);
     $: newHostSet = new Set(newHostIps);
+    $: pendingSet = new Set(pendingIps);
+
+    interface RowView {
+        customName: string;
+        icon: IconInfo;
+        name: string;
+        fingerprint: string;
+        ports: string;
+    }
+
+    // Derived text and icons per host object. Host objects are replaced, not
+    // mutated, when a scan updates them, so identity is a safe cache key;
+    // the custom name is the only other input. "Last seen" is relative to
+    // the ticking `now`, so it is rendered per row rather than cached here.
+    const rowViews = new WeakMap<Host, RowView>();
+
+    function rowView(host: Host): RowView {
+        const customName = customNames[host.ip]?.trim() || '';
+        const cached = rowViews.get(host);
+        if (cached && cached.customName === customName) {
+            return cached;
+        }
+
+        const view: RowView = {
+            customName,
+            icon: getHostIcon(host, customName),
+            name: displayName(host),
+            fingerprint: formatFingerprint(host),
+            ports: formatPorts(host)
+        };
+        rowViews.set(host, view);
+        return view;
+    }
 
     let contextMenu: ContextMenuState = {
         open: false,
@@ -68,21 +102,32 @@
     };
     let contextMenuElement: HTMLDivElement | null = null;
 
-    $: sortedHosts = [...hosts].sort((a, b) => {
-        if (sortField === 'name') {
-            const unnamed = Number(isUnnamed(a)) - Number(isUnnamed(b));
-            if (unnamed !== 0) {
-                return unnamed;
+    $: sortedHosts = sortHosts(hosts, sortField, sortDirection, favoriteSet, customNames);
+
+    // Unnamed hosts always sort after named ones by name, in either direction.
+    function sortHosts(
+        list: Host[],
+        field: SortField,
+        direction: SortDirection,
+        favorites: Set<string>,
+        names: Record<string, string>
+    ): Host[] {
+        return [...list].sort((a, b) => {
+            if (field === 'name') {
+                const unnamed = Number(isUnnamed(a, names)) - Number(isUnnamed(b, names));
+                if (unnamed !== 0) {
+                    return unnamed;
+                }
             }
-        }
 
-        const result = compareHosts(a, b, sortField, favoriteSet);
-        if (result !== 0) {
-            return sortDirection === 'asc' ? result : -result;
-        }
+            const result = compareHosts(a, b, field, favorites);
+            if (result !== 0) {
+                return direction === 'asc' ? result : -result;
+            }
 
-        return ipToNumber(a.ip) - ipToNumber(b.ip);
-    });
+            return ipToNumber(a.ip) - ipToNumber(b.ip);
+        });
+    }
 
     function setSort(field: SortField) {
         if (sortField === field) {
@@ -122,9 +167,9 @@
             case 'favorite':
                 return Number(favorites.has(b.ip)) - Number(favorites.has(a.ip));
             case 'name':
-                return collator.compare(displayName(a), displayName(b));
+                return collator.compare(rowView(a).name, rowView(b).name);
             case 'fingerprint':
-                return collator.compare(formatFingerprint(a), formatFingerprint(b));
+                return collator.compare(rowView(a).fingerprint, rowView(b).fingerprint);
             case 'ports':
                 return a.open_ports.length - b.open_ports.length;
             case 'lastSeen':
@@ -383,8 +428,8 @@
         selectByIndex(currentIndex + offset);
     }
 
-    function isUnnamed(host: Host): boolean {
-        return !(customNames[host.ip]?.trim() || host.name);
+    function isUnnamed(host: Host, names: Record<string, string>): boolean {
+        return !(names[host.ip]?.trim() || host.name);
     }
 
     function displayName(host: Host): string {
@@ -484,8 +529,8 @@
         </tr>
     </svelte:fragment>
 
-    {#each sortedHosts as host}
-        {@const hostIcon = getHostIcon(host, customNames[host.ip] || '')}
+    {#each sortedHosts as host (host.ip)}
+        {@const view = rowView(host)}
 
         <!-- svelte-ignore a11y-click-events-have-key-events -->
         <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -494,6 +539,7 @@
                 class:hidden-entry={hiddenSet.has(host.ip)}
                 class:stale={staleFavoriteSet.has(host.ip)}
                 class:new-entry={newHostSet.has(host.ip)}
+                class:pending={pendingSet.has(host.ip)}
                 onclick={() => selectHost(host.ip)}
                 ondblclick={() => openHost(host)}
                 oncontextmenu={(event) => openContextMenu(event, host.ip)}
@@ -512,7 +558,7 @@
                             <path d="M8 1.5l2 4 4.5.6-3.3 3.1.8 4.8L8 12l-4 2 0.8-4.8L1.5 6.1l4.5-.6L8 1.5z"/>
                         </svg>
                     </button>
-                    <img class="device-icon" src={hostIcon.src} alt="" aria-hidden="true" title={hostIcon.label}/>
+                    <img class="device-icon" src={view.icon.src} alt="" aria-hidden="true" title={view.icon.label}/>
                     <span class="ip-text">{host.ip}</span>
                     {#if newHostSet.has(host.ip)}
                         <span class="new-badge">NEW</span>
@@ -520,10 +566,10 @@
                 </div>
             </td>
             <td class="col-name">
-                <span class="host-name">{displayName(host)}</span>
+                <span class="host-name">{view.name}</span>
             </td>
-            <td class="col-fingerprint">{formatFingerprint(host)}</td>
-            <td class="col-ports" title={describePorts(host)}>{formatPorts(host)}</td>
+            <td class="col-fingerprint">{view.fingerprint}</td>
+            <td class="col-ports" title={describePorts(host)}>{view.ports}</td>
             <td class="col-seen" title={formatTimestamp(host.last_seen)}>{formatRelativeTime(host.last_seen, now)}</td>
         </tr>
     {/each}
@@ -705,6 +751,11 @@
 
     tr.stale td {
         color: #777;
+    }
+
+    /* Listed by the previous scan, not yet confirmed by the running one. */
+    tr.pending:not(.selected) td {
+        color: #999;
     }
 
     tr.new-entry:not(.selected) td {

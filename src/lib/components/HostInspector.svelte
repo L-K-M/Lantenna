@@ -3,6 +3,7 @@
     import {TauriService} from '$lib/tauri';
     import type {Host} from '$lib/types';
     import {isPrivateMac} from '$lib/util/mac';
+    import {errorMessage} from '$lib/util/errors';
     import {notifications} from '$lib/util/notifications';
     import {getPortTarget} from '$lib/util/portTargets';
 
@@ -54,8 +55,7 @@
         try {
             await TauriService.openExternalUrl(url);
         } catch (error) {
-            const message = error instanceof Error ? error.message : 'Failed to open link';
-            notifications.add(message, 'error');
+            notifications.add(errorMessage(error, 'Failed to open link'), 'error');
         }
     }
 
@@ -116,8 +116,7 @@
             await TauriService.wakeHost(mac);
             notifications.add(`Wake-on-LAN packet sent to ${mac}.`, 'success');
         } catch (error) {
-            const message = error instanceof Error ? error.message : 'Failed to send Wake-on-LAN packet';
-            notifications.add(message, 'error');
+            notifications.add(errorMessage(error, 'Failed to send Wake-on-LAN packet'), 'error');
         } finally {
             wakingHost = false;
         }
