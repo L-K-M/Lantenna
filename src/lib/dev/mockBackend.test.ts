@@ -5,10 +5,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { clearMocks, mockIPC, mockWindows } from '@tauri-apps/api/mocks';
+import { emit, emitTo, listen } from '@tauri-apps/api/event';
 import { CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu } from '@tauri-apps/api/menu';
 import type { Platform } from '$lib/app/platform';
 import type { Host, ScanOptions, ScanProgress, ScanResult } from '$lib/types';
-import { HOME_HOSTS, interfacesFor, userData } from './fixtures';
+import { DISCOVERY_PORTS, HOME_HOSTS, interfacesFor, userData } from './fixtures';
 import {
   MockBackend,
   PANIC_MESSAGE,
@@ -248,6 +249,26 @@ describe('app commands (inventory 4)', () => {
     expect(backend.calls().map((call) => call.cmd)).toEqual(['is_window_active', 'open_external_url']);
     expect(backend.calls('open')[0].args).toEqual({ url: 'bogus' });
   });
+
+  it('answers nothing more once halted, pending replies included', async () => {
+    const { backend } = setup();
+    const settled: string[] = [];
+    const track = (name: string, reply: Promise<unknown>) =>
+      void reply.then(
+        () => settled.push(name),
+        () => settled.push(name)
+      );
+
+    track('pending', backend.handle('get_scan_results'));
+    backend.halt();
+    track('command', backend.handle('is_window_active'));
+    track('refused', backend.handle('get_everything'));
+    track('plugin', backend.handle('plugin:window|inner_size', { label: 'main' }));
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    expect(settled).toEqual([]);
+    expect(backend.calls().map((call) => call.cmd)).toHaveLength(4);
+  });
 });
 
 describe('window plugin', () => {
@@ -404,6 +425,53 @@ describe('menu plugin, through @tauri-apps/api/menu', () => {
     await expect(two.text()).resolves.toBe('Two');
     await two.close();
   });
+
+  it('keeps an item in its menus when the page closes its handle, as Tauri does', async () => {
+    const action = vi.fn();
+    const item = await MenuItem.new({ id: 'scan', text: 'Scan Network', action });
+    const scan = await Submenu.new({ text: 'Scan', items: [item] });
+    await (await Menu.new({ items: [scan] })).setAsAppMenu();
+
+    // items() hands out new resource ids, so closing one of those leaves
+    // the page's own handle working.
+    const [listed] = await scan.items();
+    expect(listed.rid).not.toBe(item.rid);
+    await listed.close();
+    await expect(item.text()).resolves.toBe('Scan Network');
+
+    await item.close();
+    expect(backend.menuTree()).toEqual([
+      { kind: 'Submenu', text: 'Scan', enabled: true, items: [{ kind: 'MenuItem', text: 'Scan Network', enabled: true }] }
+    ]);
+    expect(backend.clickMenu(['Scan', 'Scan Network'])).toBe(true);
+    expect(action).toHaveBeenCalledWith('scan');
+    expect((await scan.items()).map((entry) => entry.id)).toEqual(['scan']);
+
+    // Only calls addressed to the closed id fail.
+    await expect(item.setEnabled(false)).rejects.toBe(`The resource id ${item.rid} is invalid.`);
+    await expect(backend.handle('plugin:resources|close', { rid: item.rid })).rejects.toBe(
+      `The resource id ${item.rid} is invalid.`
+    );
+  });
+});
+
+describe('event plugin', () => {
+  beforeEach(() => mockWindows('main'));
+  afterEach(() => clearMocks());
+
+  it('is answered by mockIPC itself: emit arrives, emitTo is dropped, nothing is recorded', async () => {
+    const backend = setup().backend;
+    mockIPC((cmd, args) => backend.handle(cmd, args), { shouldMockEvents: true });
+    const heard: unknown[] = [];
+
+    const unlisten = await listen('probe', (event) => heard.push(event.payload));
+    await emitTo('main', 'probe', 1);
+    await emit('probe', 2);
+    unlisten();
+
+    expect(heard).toEqual([2]);
+    expect(backend.calls('plugin:event')).toEqual([]);
+  });
 });
 
 describe('scripted network scan', () => {
@@ -470,6 +538,43 @@ describe('scripted network scan', () => {
     expect(result.cancelled).toBe(true);
     expect(result.hosts.length).toBeGreaterThan(0);
     expect(result.hosts.every((host) => Number(host.ip.split('.')[3]) <= 130)).toBe(true);
+    // The port phase never ran: the sweep's ports only, fingerprinted.
+    expect(result.hosts.every((host) => host.open_ports.every((port) => DISCOVERY_PORTS.includes(port.port)))).toBe(true);
+    expect(result.hosts.find((host) => host.ip === '192.168.1.10')?.open_ports.map((port) => port.port)).toEqual([22, 80, 443, 445]);
+    expect(result.hosts.every((host) => host.fingerprint !== null)).toBe(true);
+  });
+
+  it('reports after a Stop in the port phase only the ports it probed', async () => {
+    const { backend, sent, of } = setup('?scenario=stopping&speed=0');
+
+    await backend.handle('start_scan', { options: balanced() });
+    await backend.holdPoint();
+    await backend.handle('cancel_scan');
+    backend.resume();
+    await scanUntilDone(sent);
+
+    const probed = of<ScanProgress>('scan-progress').filter((item) => item.phase === 'ports').at(-1)!;
+    expect(probed).toMatchObject({ running: false });
+    const [result] = of<ScanResult>('scan-complete');
+    expect(result.cancelled).toBe(true);
+    const ports = (ip: string) => result.hosts.find((host) => host.ip === ip)?.open_ports.map((port) => port.port);
+    const reached = result.hosts.slice(0, probed.scanned).map((host) => host.ip);
+    const rest = result.hosts.slice(probed.scanned);
+
+    // Reached: the whole profile (111 and 139 are no discovery ports).
+    expect(reached).toContain('192.168.1.10');
+    expect(ports('192.168.1.10')).toEqual(expect.arrayContaining([22, 111, 139]));
+    // Not reached: the sweep's ports, or none for ARP and ping finds.
+    const via = new Map(HOME_HOSTS.map((host) => [host.ip, host.via]));
+    for (const host of rest) {
+      const allowed = via.get(host.ip) === 'sweep' ? DISCOVERY_PORTS : [];
+      expect(host.open_ports.every((port) => allowed.includes(port.port))).toBe(true);
+    }
+    // The Apple TV (ARP, AirPlay on 7000) and the Docker host (sweep) had
+    // more ports for the profile to find.
+    expect(rest.map((host) => host.ip)).toEqual(expect.arrayContaining(['192.168.1.64', '192.168.1.91']));
+    expect(ports('192.168.1.64')).toEqual([]);
+    expect(ports('192.168.1.91')).toEqual([22, 80, 443]);
   });
 
   it('holds at "Probing ports: 4 of" for the stopping scenario', async () => {
@@ -606,11 +711,16 @@ describe('seeding', () => {
 
   it('tells whether scanStore read the seed', () => {
     const data = userData('regular', NOW);
+    // Before init() every favorite is stale and shows its snapshot, read
+    // back from JSON (key order may differ).
+    const rows = data.favoriteIps.map((ip) => JSON.parse(JSON.stringify(data.favoriteHosts[ip])) as Host);
     const state = {
       favoriteIps: [...data.favoriteIps],
       hiddenIps: [...data.hiddenIps],
       customNames: { ...data.customNames },
-      selectedInterface: 'en0|192.168.1.23'
+      selectedInterface: 'en0|192.168.1.23',
+      hosts: rows.map(({ ip, ...rest }) => ({ ...rest, ip })),
+      staleFavoriteIps: [...data.favoriteIps]
     };
 
     expect(storeMatchesSeed(state, data, iface)).toBe(true);
@@ -618,5 +728,28 @@ describe('seeding', () => {
     expect(storeMatchesSeed({ ...state, customNames: {} }, data, iface)).toBe(false);
     expect(storeMatchesSeed({ ...state, selectedInterface: 'en7|10.20.4.17' }, data, iface)).toBe(false);
     expect(storeMatchesSeed({ ...state, selectedInterface: 'en7|10.20.4.17' }, data, null)).toBe(true);
+  });
+
+  it('notices a favorite snapshot an earlier scenario left behind', () => {
+    const data = userData('regular', NOW);
+    const tv = data.favoriteHosts['192.168.1.61'];
+    // After init(): .61 is the only stale favorite; the others come from
+    // the stored scan, whatever their snapshots say.
+    const state = {
+      favoriteIps: [...data.favoriteIps],
+      hiddenIps: [...data.hiddenIps],
+      customNames: { ...data.customNames },
+      selectedInterface: 'en0|192.168.1.23',
+      hosts: [{ ...data.favoriteHosts['192.168.1.10'], name: 'changed' }, tv],
+      staleFavoriteIps: ['192.168.1.61']
+    };
+    // What a deep scan of the sleeping TV stores (reviewer's case).
+    const deepScanned = { ...tv, reachable: false, open_ports: [], last_seen: new Date(NOW).toISOString() };
+
+    expect(storeMatchesSeed(state, data, iface)).toBe(true);
+    expect(storeMatchesSeed({ ...state, hosts: [state.hosts[0], deepScanned] }, data, iface)).toBe(false);
+    expect(storeMatchesSeed({ ...state, hosts: [state.hosts[0]] }, data, iface)).toBe(false);
+    // Dated from another moment: another seed, so no match either.
+    expect(storeMatchesSeed(state, userData('regular', NOW + 1000), iface)).toBe(false);
   });
 });

@@ -53,6 +53,7 @@ import {
   ipToNumber,
   manyHosts,
   networkFor,
+  openPorts,
   portsForProfile,
   reportedHost,
   storedScan,
@@ -297,6 +298,11 @@ export function allowedPluginCommands(permissions: readonly unknown[]): Set<stri
   return allowed;
 }
 
+/** Tauri's Error::BadResourceId. */
+function badResourceId(rid: unknown): string {
+  return `The resource id ${String(rid)} is invalid.`;
+}
+
 function permissionError(cmd: string): string {
   const [plugin, command] = cmd.slice('plugin:'.length).split('|');
   return (
@@ -314,23 +320,23 @@ export interface RecordedCall {
   readonly at: number;
 }
 
-/** A menu, submenu or item created through @tauri-apps/api/menu. */
-interface MenuResource {
-  readonly rid: number;
+/** A native menu, submenu or item created through @tauri-apps/api/menu.
+ * The page reaches it through resource ids (MockBackend.resources). */
+interface NativeMenu {
   readonly id: string;
   readonly kind: 'Menu' | 'Submenu' | 'MenuItem' | 'Check' | 'Predefined' | 'Icon';
   text: string;
   enabled: boolean;
   checked: boolean;
   accelerator: string | null;
-  items: number[];
+  items: NativeMenu[];
   readonly predefined: string | null;
   readonly channel: number | null;
 }
 
 /** The recorded native menu, for the harness (spec 8.6 step 5). */
 export interface MenuNode {
-  readonly kind: MenuResource['kind'];
+  readonly kind: NativeMenu['kind'];
   readonly text: string;
   readonly enabled: boolean;
   readonly checked?: boolean;
@@ -373,6 +379,9 @@ const TICK_MS = 80;
 /** A realistic panic message: the scan task's panics end up in
  * scan-error as "The scanner stopped unexpectedly: <detail>". */
 export const PANIC_MESSAGE = 'The scanner stopped unexpectedly: index out of bounds: the len is 3 but the index is 3';
+
+/** A reply that never comes (MockBackend.halt). */
+const NEVER = new Promise<never>(() => {});
 
 /** JSON round trip: what real IPC does to arguments and results. */
 function wire<T>(value: T): T {
@@ -419,13 +428,18 @@ export class MockBackend {
   private readonly scale: number;
   private active: boolean;
   private closed = false;
+  private halted = false;
 
-  // Menus.
+  // Menus. `resources` is the webview's resource table: as in Tauri,
+  // items(), get(), remove_at() and set_as_app_menu() add a new entry
+  // for an item the page already holds, and closing an entry leaves the
+  // item itself in its menus.
   private nextRid = 1;
-  private readonly menus = new Map<number, MenuResource>();
+  private nextMenuId = 1;
+  private readonly resources = new Map<number, NativeMenu>();
   private readonly channelIndex = new Map<number, number>();
-  private appMenu: number | null = null;
-  private helpMenu: number | null = null;
+  private appMenu: NativeMenu | null = null;
+  private helpMenu: NativeMenu | null = null;
 
   // Scans.
   private stored: ScanResult | null | 'never';
@@ -453,7 +467,8 @@ export class MockBackend {
     this.hold = scenario.hold ? holdFor(scenario.name) : null;
   }
 
-  /** Every invoke the page made, oldest first (at most 5,000). */
+  /** Every invoke the page made, oldest first (at most 5,000), except
+   * the event plugin's: mockIPC answers those itself. */
   calls(prefix = ''): RecordedCall[] {
     return this.recorded.filter((call) => call.cmd.startsWith(prefix));
   }
@@ -471,10 +486,11 @@ export class MockBackend {
     return list.find((item) => item.subnet === (this.scenario.name === 'many' ? OFFICE_SUBNET : HOME_SUBNET)) ?? null;
   }
 
-  /** The user data the scenario starts with. */
-  userData(): SeededUserData {
+  /** The user data the scenario starts with, its snapshots dated from
+   * `at` (ms). */
+  userData(at = this.deps.now()): SeededUserData {
     const fresh = this.scenario.name === 'first-run' || this.scenario.name === 'empty';
-    return userData(fresh ? 'fresh' : 'regular', this.deps.now());
+    return userData(fresh ? 'fresh' : 'regular', at);
   }
 
   private initialScan(): ScanResult | null | 'never' {
@@ -507,16 +523,28 @@ export class MockBackend {
     this.recorded.push({ cmd, args, at: this.deps.now() });
     if (this.recorded.length > MAX_RECORDED) this.recorded.shift();
 
-    if (cmd.startsWith('plugin:')) {
-      if (this.scenario.acl && !this.allowed.has(cmd)) return Promise.reject(permissionError(cmd));
-      try {
-        return Promise.resolve(wire(this.plugin(cmd, args)));
-      } catch (error) {
-        return Promise.reject(error);
-      }
-    }
+    const reply = cmd.startsWith('plugin:') ? this.pluginReply(cmd, args) : this.command(cmd, args).then(wire);
+    return reply.then(
+      (value) => (this.halted ? NEVER : value),
+      (error: unknown) => (this.halted ? NEVER : Promise.reject(error))
+    );
+  }
 
-    return this.command(cmd, args).then((result) => wire(result));
+  /** Stop answering: every pending and later command never settles. A
+   * page that is about to reload keeps running until the new page
+   * commits; halted, its startup (scanStore.init() above all) gets no
+   * answers and so persists nothing over the seed. */
+  halt(): void {
+    this.halted = true;
+  }
+
+  private pluginReply(cmd: string, args: Record<string, unknown>): Promise<unknown> {
+    if (this.scenario.acl && !this.allowed.has(cmd)) return Promise.reject(permissionError(cmd));
+    try {
+      return Promise.resolve(wire(this.plugin(cmd, args)));
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   private async command(cmd: string, args: Record<string, unknown>): Promise<unknown> {
@@ -598,15 +626,14 @@ export class MockBackend {
     if (plugin === 'window') return this.windowCommand(command, args);
     if (plugin === 'menu') return this.menuCommand(command, args);
     if (plugin === 'resources' && command === 'close') {
-      this.menus.delete(Number(args.rid));
+      // Only the table entry goes (ResourceTable::close); the native
+      // item stays wherever it is attached.
+      if (!this.resources.delete(Number(args.rid))) throw badResourceId(args.rid);
       return null;
     }
 
-    if (plugin === 'event' && command === 'emit_to') {
-      // mockIPC handles listen/emit/unlisten; emit_to goes to everyone.
-      this.deps.emit(String(args.event), args.payload);
-      return null;
-    }
+    // plugin:event|* never gets here: with shouldMockEvents, mockIPC
+    // answers listen, emit and unlisten itself and drops emit_to.
 
     if (plugin === 'app') {
       // getVersion() and friends read tauri.conf.json, as the real app does.
@@ -756,12 +783,10 @@ export class MockBackend {
   // -------------------------------------------------------------------
   // Menus (@tauri-apps/api/menu), recorded, not drawn
 
-  private createMenu(kind: MenuResource['kind'], options: Record<string, unknown>, handler: unknown): MenuResource {
-    const rid = this.nextRid++;
+  private createMenu(kind: NativeMenu['kind'], options: Record<string, unknown>, handler: unknown): NativeMenu {
     const predefined = kind === 'Predefined' ? predefinedName(options.item) : null;
-    const resource: MenuResource = {
-      rid,
-      id: typeof options.id === 'string' ? options.id : `mock-${rid}`,
+    const menu: NativeMenu = {
+      id: typeof options.id === 'string' ? options.id : `mock-${this.nextMenuId++}`,
       kind,
       text: typeof options.text === 'string' ? options.text : predefinedText(predefined),
       enabled: options.enabled !== false,
@@ -771,71 +796,77 @@ export class MockBackend {
       predefined,
       channel: channelId(handler ?? options.handler)
     };
-    this.menus.set(rid, resource);
 
     if (Array.isArray(options.items)) {
-      resource.items = options.items.map((item) => this.menuItemRid(item));
+      menu.items = options.items.map((item) => this.menuItem(item));
     }
 
-    return resource;
+    return menu;
+  }
+
+  /** A new resource-table entry for `menu`. */
+  private addResource(menu: NativeMenu): number {
+    const rid = this.nextRid++;
+    this.resources.set(rid, menu);
+    return rid;
   }
 
   /** An `items` entry: [rid, kind] of an existing item, or inline
    * options (Tauri's untagged MenuItemPayloadKind). */
-  private menuItemRid(item: unknown): number {
-    if (Array.isArray(item)) return Number(item[0]);
+  private menuItem(item: unknown): NativeMenu {
+    if (Array.isArray(item)) return this.requireMenu(item[0]);
 
     const options = item as Record<string, unknown>;
-    const kind: MenuResource['kind'] =
+    const kind: NativeMenu['kind'] =
       'item' in options ? 'Predefined' : 'items' in options ? 'Submenu' : 'checked' in options ? 'Check' : 'icon' in options ? 'Icon' : 'MenuItem';
-    return this.createMenu(kind, options, options.handler).rid;
+    return this.createMenu(kind, options, options.handler);
   }
 
-  private menuRef(rid: number): [number, string, string] {
-    const menu = this.requireMenu(rid);
-    return [menu.rid, menu.id, menu.kind];
+  /** What Tauri's make_item_resource! returns: a new rid for `menu`. */
+  private menuRef(menu: NativeMenu): [number, string, string] {
+    return [this.addResource(menu), menu.id, menu.kind];
   }
 
-  private requireMenu(rid: unknown): MenuResource {
-    const menu = this.menus.get(Number(rid));
-    if (!menu) throw `Lantenna mock: no menu resource ${String(rid)}`;
+  private requireMenu(rid: unknown): NativeMenu {
+    const menu = this.resources.get(Number(rid));
+    if (!menu) throw badResourceId(rid);
     return menu;
   }
 
   private menuCommand(command: string, args: Record<string, unknown>): unknown {
     switch (command) {
       case 'new': {
-        const menu = this.createMenu(args.kind as MenuResource['kind'], (args.options as Record<string, unknown>) ?? {}, args.handler);
-        return [menu.rid, menu.id];
+        const menu = this.createMenu(args.kind as NativeMenu['kind'], (args.options as Record<string, unknown>) ?? {}, args.handler);
+        return [this.addResource(menu), menu.id];
       }
       case 'create_default': {
         const menu = this.createMenu('Menu', {}, null);
-        return [menu.rid, menu.id];
+        return [this.addResource(menu), menu.id];
       }
       case 'append':
       case 'prepend':
       case 'insert': {
         const menu = this.requireMenu(args.rid);
-        const rids = (args.items as unknown[]).map((item) => this.menuItemRid(item));
+        const items = (args.items as unknown[]).map((item) => this.menuItem(item));
         const at = command === 'append' ? menu.items.length : command === 'prepend' ? 0 : Number(args.position);
-        menu.items.splice(at, 0, ...rids);
+        menu.items.splice(at, 0, ...items);
         return null;
       }
       case 'remove': {
         const menu = this.requireMenu(args.rid);
-        const rid = Number((args.item as unknown[])[0]);
-        menu.items = menu.items.filter((item) => item !== rid);
+        const item = this.requireMenu((args.item as unknown[])[0]);
+        menu.items = menu.items.filter((child) => child !== item);
         return null;
       }
       case 'remove_at': {
         const menu = this.requireMenu(args.rid);
-        const [rid] = menu.items.splice(Number(args.position), 1);
-        return rid === undefined ? null : this.menuRef(rid);
+        const [item] = menu.items.splice(Number(args.position), 1);
+        return item === undefined ? null : this.menuRef(item);
       }
       case 'items':
-        return this.requireMenu(args.rid).items.map((rid) => this.menuRef(rid));
+        return this.requireMenu(args.rid).items.map((item) => this.menuRef(item));
       case 'get': {
-        const found = this.requireMenu(args.rid).items.find((rid) => this.menus.get(rid)?.id === args.id);
+        const found = this.requireMenu(args.rid).items.find((item) => item.id === args.id);
         return found === undefined ? null : this.menuRef(found);
       }
       case 'text':
@@ -859,11 +890,11 @@ export class MockBackend {
       case 'set_as_app_menu':
       case 'set_as_window_menu': {
         const previous = this.appMenu;
-        this.appMenu = this.requireMenu(args.rid).rid;
-        return previous === null || !this.menus.has(previous) ? null : this.menuRef(previous).slice(0, 2);
+        this.appMenu = this.requireMenu(args.rid);
+        return previous === null ? null : [this.addResource(previous), previous.id];
       }
       case 'set_as_help_menu_for_nsapp':
-        this.helpMenu = this.requireMenu(args.rid).rid;
+        this.helpMenu = this.requireMenu(args.rid);
         return null;
       case 'set_as_windows_menu_for_nsapp':
       case 'set_icon':
@@ -874,20 +905,19 @@ export class MockBackend {
     throw `Lantenna mock: no handler for plugin:menu|${command}`;
   }
 
-  private menuNode(rid: number): MenuNode {
-    const menu = this.requireMenu(rid);
+  private menuNode(menu: NativeMenu): MenuNode {
     const node: Record<string, unknown> = { kind: menu.kind, text: menu.text, enabled: menu.enabled };
     if (menu.kind === 'Check') node.checked = menu.checked;
     if (menu.accelerator) node.accelerator = menu.accelerator;
     if (menu.predefined) node.predefined = menu.predefined;
-    if (rid === this.helpMenu) node.help = true;
+    if (menu === this.helpMenu) node.help = true;
     if (menu.kind === 'Menu' || menu.kind === 'Submenu') node.items = menu.items.map((item) => this.menuNode(item));
     return node as unknown as MenuNode;
   }
 
   /** The app menu's submenus, or null before setAsAppMenu. */
   menuTree(): MenuNode[] | null {
-    if (this.appMenu === null || !this.menus.has(this.appMenu)) return null;
+    if (this.appMenu === null) return null;
     return this.menuNode(this.appMenu).items as MenuNode[];
   }
 
@@ -895,13 +925,13 @@ export class MockBackend {
    * as muda would: nothing for a dimmed item; a check item toggles
    * itself before the page hears of it. Returns whether it fired. */
   clickMenu(path: readonly string[]): boolean {
-    let rids = this.appMenu === null ? [] : (this.menus.get(this.appMenu)?.items ?? []);
-    let target: MenuResource | null = null;
+    let items = this.appMenu?.items ?? [];
+    let target: NativeMenu | null = null;
 
     for (const title of path) {
-      target = rids.map((rid) => this.menus.get(rid)).find((menu) => menu?.text === title) ?? null;
+      target = items.find((item) => item.text === title) ?? null;
       if (!target) return false;
-      rids = target.items;
+      items = target.items;
     }
 
     if (!target || !target.enabled || target.channel === null) return false;
@@ -1011,6 +1041,15 @@ export class MockBackend {
     const seenAt = () => new Date(this.deps.now()).toISOString();
     const found = new Map<string, NetworkHost>();
     const answered = new Set<string>();
+    // The ports probed on each found host so far: the discovery ports
+    // after the sweep, none for a host found through ARP or ping, the
+    // profile once the port phase reached it. After a Stop, scan-complete
+    // reports only what was probed, as the backend does.
+    const probedOn = new Map<string, readonly number[]>();
+    const foundQuietly = (host: NetworkHost): Host => ({
+      ...reportedHost(host, profile, 'discovery', seenAt()),
+      open_ports: []
+    });
     const cancelled = () => this.cancelRequested;
     const failDuringDiscovery = this.scenario.name === 'error' && this.scenario.error === 'scan';
 
@@ -1027,6 +1066,7 @@ export class MockBackend {
         if (!host || host.via !== 'sweep') continue;
         found.set(ip, host);
         answered.add(ip);
+        probedOn.set(ip, DISCOVERY_PORTS);
         this.deps.emit('host-found', reportedHost(host, profile, 'discovery', seenAt()));
       }
 
@@ -1058,7 +1098,8 @@ export class MockBackend {
         const host = network.get(ip);
         if (!host || host.via !== 'arp') continue;
         found.set(ip, host);
-        this.deps.emit('host-found', reportedHost(host, profile, 'discovery', seenAt()));
+        probedOn.set(ip, []);
+        this.deps.emit('host-found', foundQuietly(host));
       }
     }
 
@@ -1095,7 +1136,8 @@ export class MockBackend {
 
       for (const host of replies) {
         found.set(host.ip, host);
-        this.deps.emit('host-found', reportedHost(host, profile, 'discovery', seenAt()));
+        probedOn.set(host.ip, []);
+        this.deps.emit('host-found', foundQuietly(host));
       }
     }
 
@@ -1112,6 +1154,7 @@ export class MockBackend {
         await this.sleep(TICK_MS);
         const next = this.nextStop('ports', probed, portStep, liveTotal);
         for (const host of live.slice(probed, next)) {
+          probedOn.set(host.ip, profilePorts);
           const probedPorts = answered.has(host.ip)
             ? profilePorts.filter((port) => !DISCOVERY_PORTS.includes(port))
             : profilePorts;
@@ -1153,7 +1196,10 @@ export class MockBackend {
       started_at: startedAt,
       completed_at: completedAt,
       cancelled: wasCancelled,
-      hosts: live.map((host) => reportedHost(host, profile, 'complete', completedAt)),
+      hosts: live.map((host) => ({
+        ...reportedHost(host, profile, 'complete', completedAt),
+        open_ports: openPorts(host, probedOn.get(host.ip) ?? [])
+      })),
       options: { ...options, subnet }
     };
     this.stored = result;
@@ -1309,6 +1355,18 @@ interface StoreUserState {
   hiddenIps: readonly string[];
   customNames: Readonly<Record<string, string>>;
   selectedInterface: string | null;
+  hosts: readonly Host[];
+  staleFavoriteIps: readonly string[];
+}
+
+/** JSON with sorted keys, so equal data compares equal whatever order
+ * its keys were written in. */
+function canonical(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v
+  );
 }
 
 /**
@@ -1317,7 +1375,9 @@ interface StoreUserState {
  * among them) before the layout's load() has imported this module
  * (scaffold notes 4.2). Favorites, hidden hosts and custom names are
  * never changed by init(); the interface only when the stored key is
- * stale, which a seeded key is not.
+ * stale, which a seeded key is not. The favorites' snapshots show only
+ * as the stale favorites' rows (before init() every favorite is stale),
+ * so those rows must be the seeded snapshots.
  */
 export function storeMatchesSeed(state: StoreUserState, data: SeededUserData, iface: NetworkInterface | null): boolean {
   const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((v, i) => v === b[i]);
@@ -1325,12 +1385,20 @@ export function storeMatchesSeed(state: StoreUserState, data: SeededUserData, if
     Object.entries(r)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([k, v]) => `${k}=${v}`);
+  const snapshotsMatch = state.staleFavoriteIps.every((ip) => {
+    const seeded = data.favoriteHosts[ip];
+    // The fixtures seed a snapshot for every favorite.
+    if (!seeded) return true;
+    const row = state.hosts.find((host) => host.ip === ip);
+    return row !== undefined && canonical(row) === canonical({ ...seeded, ip });
+  });
 
   return (
     same(state.favoriteIps, data.favoriteIps) &&
     same(state.hiddenIps, data.hiddenIps) &&
     same(names(state.customNames), names(data.customNames)) &&
-    (iface === null || state.selectedInterface === interfaceKeyOf(iface))
+    (iface === null || state.selectedInterface === interfaceKeyOf(iface)) &&
+    snapshotsMatch
   );
 }
 
@@ -1365,6 +1433,27 @@ declare global {
 
 const RELOAD_KEY = 'lantenna.mockReload';
 
+/** Left in sessionStorage for the load after a reload: which page
+ * reloaded, and when it seeded, so the new load seeds the same data. */
+interface ReloadMark {
+  readonly href: string;
+  readonly seededAt: number;
+}
+
+/** The mark a reload of this very page left, if any; removes it. */
+function takeReloadMark(): ReloadMark | null {
+  const raw = sessionStorage.getItem(RELOAD_KEY);
+  sessionStorage.removeItem(RELOAD_KEY);
+  if (raw === null) return null;
+
+  try {
+    const mark = JSON.parse(raw) as Partial<ReloadMark>;
+    return mark.href === location.href && typeof mark.seededAt === 'number' ? (mark as ReloadMark) : null;
+  } catch {
+    return null;
+  }
+}
+
 function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
@@ -1392,9 +1481,16 @@ export function installMockBackend(scenario: Scenario): MockHandle {
   });
 
   // Before anything can read it: scanStore reads these at module load.
-  const seededIface = backend.seededInterface();
-  const seeded = backend.userData();
-  if (scenario.seed) seedStorage(window.localStorage, seeded, seededIface);
+  // After a reload for the seed (drive), the same data again.
+  const reloaded = scenario.seed ? takeReloadMark() : null;
+  const seededAt = reloaded?.seededAt ?? Date.now();
+  const seed: Seed = {
+    iface: backend.seededInterface(),
+    data: backend.userData(seededAt),
+    at: seededAt,
+    reloaded: reloaded !== null
+  };
+  if (scenario.seed) seedStorage(window.localStorage, seed.data, seed.iface);
 
   mockWindows('main');
   mockIPC((cmd, args) => backend.handle(cmd, args), { shouldMockEvents: true });
@@ -1431,7 +1527,7 @@ export function installMockBackend(scenario: Scenario): MockHandle {
     stores = { store: scanStore, progress: scanProgress };
   });
 
-  void drive(backend, scenario, seeded, seededIface).then(async (outcome) => {
+  void drive(backend, scenario, seed).then(async (outcome) => {
     if (outcome === 'reloading') return;
     await nextFrame();
     await nextFrame();
@@ -1446,21 +1542,33 @@ export function installMockBackend(scenario: Scenario): MockHandle {
   return handle;
 }
 
+/** The user data installMockBackend seeded. */
+interface Seed {
+  readonly iface: NetworkInterface | null;
+  readonly data: SeededUserData;
+  /** When the snapshots are dated from (ms). */
+  readonly at: number;
+  /** This load follows a reload for the seed. */
+  readonly reloaded: boolean;
+}
+
 /** Act like the user until the scenario's picture is on screen. */
-async function drive(
-  backend: MockBackend,
-  scenario: Scenario,
-  seeded: SeededUserData,
-  seededIface: NetworkInterface | null
-): Promise<'ready' | 'reloading'> {
+async function drive(backend: MockBackend, scenario: Scenario, seed: Seed): Promise<'ready' | 'reloading'> {
   const { scanStore, scanProgress } = await import('$lib/util/scanStore');
 
-  if (scenario.seed) {
-    const reloadedFor = sessionStorage.getItem(RELOAD_KEY);
-    sessionStorage.removeItem(RELOAD_KEY);
-    if (reloadedFor !== location.href && !storeMatchesSeed(get(scanStore), seeded, seededIface)) {
-      // scanStore loaded before the seed; the next load reads it.
-      sessionStorage.setItem(RELOAD_KEY, location.href);
+  if (scenario.seed && !storeMatchesSeed(get(scanStore), seed.data, seed.iface)) {
+    if (seed.reloaded) {
+      console.error(
+        'Lantenna mock: scanStore still does not hold the seeded user data after a reload; this picture is not the scenario.'
+      );
+    } else {
+      // scanStore loaded before the seed; the next load reads it. This
+      // page runs on until the reload commits: halted, the backend no
+      // longer answers its startup, and whatever it writes anyway is
+      // seeded over again as it goes.
+      backend.halt();
+      addEventListener('pagehide', () => seedStorage(window.localStorage, seed.data, seed.iface));
+      sessionStorage.setItem(RELOAD_KEY, JSON.stringify({ href: location.href, seededAt: seed.at } satisfies ReloadMark));
       console.info('Lantenna mock: scanStore loaded before the mock seeded its data; reloading once.');
       location.reload();
       return 'reloading';
