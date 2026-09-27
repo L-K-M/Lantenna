@@ -122,7 +122,7 @@ export function installKeyboardHome(frame: HTMLElement): () => void {
   let queued = false;
   /** A pointer button is down in the page (a click or a drag). A press
    * the page never sees end (the OS takes the mouse to move the window)
-   * is over by the next key. */
+   * is over by the next key, which checks what that press left. */
   let pressing = false;
 
   const check = () => {
@@ -150,7 +150,9 @@ export function installKeyboardHome(frame: HTMLElement): () => void {
     queue();
   };
   const onKey = () => {
+    if (!pressing) return;
     pressing = false;
+    queue();
   };
   document.addEventListener('focusout', onFocusOut);
   document.addEventListener('pointerdown', onPress, true);

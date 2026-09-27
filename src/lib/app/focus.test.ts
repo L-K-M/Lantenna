@@ -181,6 +181,22 @@ describe('the keyboard\'s home', () => {
     h.dispose();
   });
 
+  it('takes it back at the next key after a press the page never saw end', async () => {
+    const h = home();
+    await settle();
+
+    // The OS took the mouse (a window move): no pointerup comes.
+    document.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    h.grid.blur();
+    await settle();
+    expect(document.activeElement).toBe(document.body);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    await settle();
+    expect(document.activeElement).toBe(h.grid);
+    h.dispose();
+  });
+
   it('waits while the window is collapsed', async () => {
     const h = home();
     await settle();
