@@ -12,6 +12,7 @@ import type {
   ScanResult
 } from '$lib/types';
 import { errorMessage } from './errors';
+import { MAX_SCAN_HOSTS } from './scanLimits';
 import { scanEvents } from './scanEvents';
 import { readJson, readString, writeJson, writeString } from './storage';
 
@@ -46,7 +47,6 @@ const FAVORITE_HOSTS_STORAGE_KEY = 'lantenna.favoriteHosts';
 const HIDDEN_IPS_STORAGE_KEY = 'lantenna.hiddenIps';
 const CUSTOM_NAMES_STORAGE_KEY = 'lantenna.customNames';
 const SELECTED_INTERFACE_STORAGE_KEY = 'lantenna.selectedInterface';
-const MAX_SCAN_HOSTS = 4096;
 
 interface ScanApproachSettings {
   portProfile: PortProfile;

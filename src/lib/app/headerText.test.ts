@@ -255,20 +255,26 @@ describe('row by row (first match wins)', () => {
 
   it('14: first launch, with the balloon hint while balloons are hidden', () => {
     const never = { lastScanAt: null, hosts: [] };
+    // The count row 4 will report: the scan skips this computer's own
+    // address, so a /24's 254 host addresses are 253 to search.
     const hinted = headerState(input({ store: never, balloons: 'hidden' }), NOW);
     expect(hinted.text).toBe(
-      'Click Scan to search 254 addresses on en0 (192.168.1.0/24). This computer is 192.168.1.23. For help, choose Show Balloons from the Help menu.'
+      'Click Scan to search 253 addresses on en0 (192.168.1.0/24). This computer is 192.168.1.23. For help, choose Show Balloons from the Help menu.'
     );
     expect(headerState(input({ store: never, balloons: 'shown' }), NOW).text).toBe(
-      'Click Scan to search 254 addresses on en0 (192.168.1.0/24). This computer is 192.168.1.23.'
+      'Click Scan to search 253 addresses on en0 (192.168.1.0/24). This computer is 192.168.1.23.'
     );
     // Above 4,096 addresses the scan samples, and the hint says so.
     expect(headerState(input({ store: never, selectedInterface: EN7, balloons: 'shown' }), NOW).text).toBe(
       'Click Scan to search 4,096 sampled addresses on en7 (10.0.0.0/16). This computer is 10.0.4.2.'
     );
-    const exactly = { ...EN7, host_count: 4096 };
+    const exactly = { ...EN7, host_count: 4097 };
     expect(headerState(input({ store: never, selectedInterface: exactly, balloons: 'shown' }), NOW).text).toBe(
       'Click Scan to search 4,096 addresses on en7 (10.0.0.0/16). This computer is 10.0.4.2.'
+    );
+    const slash30 = { ...EN0, ip: '192.168.1.22', subnet: '192.168.1.20/30', host_count: 2 };
+    expect(headerState(input({ store: never, selectedInterface: slash30, balloons: 'shown' }), NOW).text).toBe(
+      'Click Scan to search 1 address on en0 (192.168.1.20/30). This computer is 192.168.1.22.'
     );
   });
 

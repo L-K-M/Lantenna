@@ -15,6 +15,7 @@ import type { BalloonHelpState } from 'osmium-ui';
 import type { NetworkInterface, ScanProgress } from '$lib/types';
 import type { ScanProgressState, ScanStoreState } from '$lib/util/scanStore';
 import { formatCount, formatWhen, plural } from '$lib/util/format';
+import { MAX_SCAN_HOSTS } from '$lib/util/scanLimits';
 import { explainError } from './errorText';
 import type { HostModel } from './hostModel';
 
@@ -45,9 +46,14 @@ export interface HeaderState {
   icon: 'stop' | 'caution' | null;
 }
 
-/** scanStore's MAX_SCAN_HOSTS: the backend samples larger subnets evenly
- * (spec 3.1, 1.7), which the discovery text says. */
-const MAX_SCAN_HOSTS = 4096;
+/** The addresses a scan of `iface` probes: each of its subnet's host
+ * addresses but this computer's own, which is always one of them and
+ * which the backend never probes (scanner.rs, build_scan_targets); a
+ * larger subnet is sampled down to MAX_SCAN_HOSTS (spec 3.1, 1.7). */
+function scanTargets(iface: NetworkInterface): { count: number; sampled: boolean } {
+  const others = Math.max(0, iface.host_count - 1);
+  return others > MAX_SCAN_HOSTS ? { count: MAX_SCAN_HOSTS, sampled: true } : { count: others, sampled: false };
+}
 
 const BALLOON_HINT = ' For help, choose Show Balloons from the Help menu.';
 
@@ -77,7 +83,7 @@ function scanRow(p: ScanProgress | null, iface: NetworkInterface | null): Header
   let announce: string;
   switch (p.phase) {
     case 'discovery': {
-      const sampled = iface !== null && iface.host_count > MAX_SCAN_HOSTS;
+      const sampled = iface !== null && scanTargets(iface).sampled;
       const of = sampled ? `${formatCount(p.total)} sampled addresses` : plural(p.total, 'address', 'addresses');
       text = `Looking for hosts: ${scanned} of ${of}, ${plural(p.found, 'host')} found.`;
       announce = 'Looking for hosts…';
@@ -181,11 +187,12 @@ export function headerState(input: HeaderInput, now: Date): HeaderState {
 
   if (iface !== null && store.lastScanAt === null && store.hosts.length === 0) {
     const hint = input.balloons === 'hidden' ? BALLOON_HINT : '';
-    // A larger subnet is sampled: say so, as row 4 will (3.1, 1.7).
-    const addresses =
-      iface.host_count > MAX_SCAN_HOSTS
-        ? `${formatCount(MAX_SCAN_HOSTS)} sampled addresses`
-        : plural(iface.host_count, 'address', 'addresses');
+    // The count row 4 will report; a larger subnet is sampled: say so,
+    // as row 4 will (3.1, 1.7).
+    const targets = scanTargets(iface);
+    const addresses = targets.sampled
+      ? `${formatCount(targets.count)} sampled addresses`
+      : plural(targets.count, 'address', 'addresses');
     return row(
       `Click Scan to search ${addresses} on ${iface.name} (${iface.subnet}). This computer is ${iface.ip}.${hint}`,
       false

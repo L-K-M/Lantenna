@@ -139,13 +139,13 @@ it('reads the last scan first, then follows the store', async () => {
   setStore({ loading: false, lastScanAt: null, hosts: [] });
   await settle();
   expect(h.text.textContent).toBe(
-    'Click Scan to search 254 addresses on en0 (192.168.1.0/24). This computer is 192.168.1.23. For help, choose Show Balloons from the Help menu.'
+    'Click Scan to search 253 addresses on en0 (192.168.1.0/24). This computer is 192.168.1.23. For help, choose Show Balloons from the Help menu.'
   );
 
   ui.setBalloons('shown');
   await settle();
   expect(h.text.textContent).toBe(
-    'Click Scan to search 254 addresses on en0 (192.168.1.0/24). This computer is 192.168.1.23.'
+    'Click Scan to search 253 addresses on en0 (192.168.1.0/24). This computer is 192.168.1.23.'
   );
 });
 
