@@ -658,4 +658,11 @@
   :global(.osm-kbd) .lan-tile:focus-visible .lan-tile-name {
     outline: 2px solid var(--osm-focus-ring);
   }
+
+  /* The grid itself has the keyboard only while no tile is selected
+     (focusTarget): ring it inside its edges, as the list does. */
+  :global(.osm-kbd) .lan-icons-grid:focus-visible {
+    outline: 2px solid var(--osm-focus-ring);
+    outline-offset: -2px;
+  }
 </style>

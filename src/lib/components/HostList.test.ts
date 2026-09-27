@@ -258,6 +258,20 @@ describe('selection and opening', () => {
     expect(rowOf(container, '10.0.0.2').getAttribute('aria-selected')).toBe('false');
   });
 
+  it('marks having no listed selection, for the focus ring (WCAG 2.4.7)', async () => {
+    const { container } = render(HostList);
+    const list = container.querySelector('.lan-list')!;
+    expect(list.classList.contains('lan-unselected')).toBe(true);
+
+    scanStore.setSelectedHost('10.0.0.2');
+    expect(list.classList.contains('lan-unselected')).toBe(false);
+
+    // Selected, but filtered out of the rows: nothing marks it.
+    scanStore.setQuery('router');
+    await nextFrame();
+    expect(list.classList.contains('lan-unselected')).toBe(true);
+  });
+
   it('opens the selected host on Return and double-click', async () => {
     scanStore.setSelectedHost('10.0.0.2');
     const { container } = render(HostList);

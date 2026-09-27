@@ -212,6 +212,15 @@
       view.setLoading(m.loading ? 'loading' : 'loaded');
       view.setRows(m.rows, { scroll: newOrder ? 'top' : 'anchor' });
       newOrder = false;
+      markSelection();
+    }
+
+    /** Without a listed selection nothing marks the keyboard's place in
+     * the list: the CSS below rings the grid then. */
+    function markSelection(): void {
+      const ip = get(scanStore).selectedHostIp;
+      const listed = ip !== null && view.rows.some((row) => row.ip === ip);
+      host.classList.toggle('lan-unselected', !listed);
     }
 
     function applyFrame(): void {
@@ -321,6 +330,7 @@
       if (s.selectedHostIp === selection) return;
       selection = s.selectedHostIp;
       if (view.selected !== selection) view.select(selection, 'silent');
+      markSelection();
     });
 
     const stopUi = ui.subscribe((u) => {
@@ -405,10 +415,23 @@
     border: 0;
   }
 
-  /* Edge to edge, a focus ring would show only in part; the selected
-     name marks the keyboard's place (Osmium's Finder demo). */
+  /* Edge to edge, Osmium's focus ring would show only in part; the
+     selected name marks the keyboard's place (Osmium's Finder demo).
+     With no row selected (Tab into the list, the selected host hidden)
+     the ring is drawn inside the edges instead (WCAG 2.4.7). */
   :global(.osm-kbd) .lan-list :global(.osm-lv-grid:focus-visible) {
     outline: none;
+  }
+
+  /* Over the rows and the scroll bars, which would cover an outline of
+     the grid (they are positioned). */
+  :global(.osm-kbd) .lan-list:global(.lan-unselected) :global(.osm-lv-grid:focus-visible .osm-lv-body::after) {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    box-shadow: inset 0 0 0 2px var(--osm-focus-ring);
+    pointer-events: none;
   }
 
   /* The 11 x 11 star (2.6), 5px into its 22px column and 3px down its
