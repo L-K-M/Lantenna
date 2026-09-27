@@ -17,7 +17,7 @@
 <svelte:options runes={true} />
 
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { get } from 'svelte/store';
   import {
     attachBalloon,
@@ -289,6 +289,16 @@
       view.setSort(u.listSort);
     });
 
+    // Switching views keeps the keyboard in the view: the page swaps the
+    // views on Svelte's next update (activeView is still this view's
+    // until then), so the next view takes it after tick().
+    let mode = startUi.viewMode;
+    const stopMode = ui.subscribe((u) => {
+      if (u.viewMode === mode) return;
+      mode = u.viewMode;
+      if (host.contains(document.activeElement)) void tick().then(() => get(activeView)?.focus());
+    });
+
     const timer = setInterval(() => view.refresh(), REFRESH_MS);
 
     // Balloon Help (4.5) on Osmium's parts: the grid, each sortable
@@ -327,6 +337,7 @@
       stopModel();
       stopStore();
       stopUi();
+      stopMode();
       clearInterval(timer);
       if (frame) cancelAnimationFrame(frame);
       host.removeEventListener('contextmenu', onContextMenu);

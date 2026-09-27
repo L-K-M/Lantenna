@@ -7,6 +7,7 @@
 // and presses that must land inside an element stub its rectangle.
 import { fireEvent, render } from '@testing-library/svelte';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tick } from 'svelte';
 import { get } from 'svelte/store';
 import type { NetworkInterface, ScanResult } from '$lib/types';
 
@@ -49,7 +50,8 @@ vi.mock('$lib/app/contextMenus', () => ({
 }));
 
 import HostIconView, { wrapLabel } from './HostIconView.svelte';
-import { activeView } from '$lib/app/views';
+import { ui } from '$lib/app/ui';
+import { activeView, type HostViewApi } from '$lib/app/views';
 import { scanStore } from '$lib/util/scanStore';
 import { makeFingerprint, makeHost, makePorts } from '../../test/hosts';
 
@@ -174,7 +176,7 @@ describe('tiles', () => {
 
     const stale = tileOf(container, '10.0.0.50');
     expect(stale.getAttribute('role')).toBe('option');
-    expect(stale.getAttribute('aria-label')).toBe('10.0.0.50, 10.0.0.50, Unknown host, Not seen, Favorite');
+    expect(stale.getAttribute('aria-label')).toBe('10.0.0.50, Unknown host, Not seen, Favorite');
     expect(stale.classList.contains('lan-dim')).toBe(true);
     expect(stale.querySelector('.lan-tile-badge')).not.toBeNull();
 
@@ -199,11 +201,32 @@ describe('tiles', () => {
     expect(tileOf(container, '10.0.0.2').classList.contains('lan-selected')).toBe(true);
   });
 
-  it('adds Osmium’s scroll bar', () => {
+  it('keeps Osmium’s scroll bar in step with the tiles', async () => {
     const { container } = render(HostIconView);
     const host = container.querySelector('.lan-icons')!;
+    const grid = gridOf(container);
+    const bar = host.querySelector(':scope > .osm-scrollbar')!;
     expect(host.classList.contains('osm-has-scrollbar')).toBe(true);
-    expect(host.querySelector(':scope > .osm-scrollbar')).not.toBeNull();
+
+    // One 86px row per tile (happy-dom's one column) in a 100px view:
+    // the tiles change the grid's extent but not its box.
+    Object.defineProperty(grid, 'clientHeight', { configurable: true, value: 100 });
+    Object.defineProperty(grid, 'scrollHeight', {
+      configurable: true,
+      get: () => Math.max(100, 14 + 86 * tiles(container).length)
+    });
+
+    scanStore.setQuery('router');
+    await nextFrame();
+    expect(bar.classList.contains('osm-sb-off')).toBe(true);
+
+    scanStore.setQuery('');
+    await nextFrame();
+    expect(bar.classList.contains('osm-sb-off')).toBe(false);
+
+    scanStore.setQuery('zzz');
+    await nextFrame();
+    expect(bar.classList.contains('osm-sb-off')).toBe(true);
   });
 });
 
@@ -285,6 +308,30 @@ describe('keyboard', () => {
     tileOf(container, '10.0.0.3').focus();
     expect(get(scanStore).selectedHostIp).toBe('10.0.0.3');
   });
+
+  it('keeps the keyboard in the grid when the focused tile moves or goes', async () => {
+    const { container } = render(HostIconView);
+    const grid = gridOf(container);
+
+    // Favorites first (ties by IP): the router's tile moves to the front.
+    tileOf(container, '10.0.0.1').focus();
+    scanStore.toggleFavorite('10.0.0.1');
+    await nextFrame();
+    expect(tiles(container).map((t) => t.dataset.ip)).toEqual(['10.0.0.1', '10.0.0.3', '10.0.0.50', '10.0.0.2', '10.0.0.10']);
+    expect(document.activeElement).toBe(tileOf(container, '10.0.0.1'));
+    scanStore.toggleFavorite('10.0.0.1');
+    await nextFrame();
+
+    // Hiding the host takes its tile and the selection away: the grid
+    // keeps the keyboard, and no other host is selected.
+    tileOf(container, '10.0.0.2').focus();
+    scanStore.toggleHidden('10.0.0.2');
+    await nextFrame();
+    expect(tiles(container).map((t) => t.dataset.ip)).not.toContain('10.0.0.2');
+    expect(document.activeElement).toBe(grid);
+    expect(get(scanStore).selectedHostIp).toBeNull();
+    scanStore.toggleHidden('10.0.0.2');
+  });
 });
 
 describe('contextual menus', () => {
@@ -318,6 +365,17 @@ describe('contextual menus', () => {
 
     // The system's own contextmenu event for the same key.
     await fireEvent.contextMenu(printer);
+    expect(spies.openHostMenu).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the selected tile before opening its menu from the keyboard', async () => {
+    scanStore.setSelectedHost('10.0.0.10');
+    const { container } = render(HostIconView);
+    const grid = gridOf(container);
+    grid.scrollTop = 500;
+
+    await fireEvent.keyDown(tileOf(container, '10.0.0.10'), { key: 'ContextMenu' });
+    expect(grid.scrollTop).toBeLessThan(500);
     expect(spies.openHostMenu).toHaveBeenCalledTimes(1);
   });
 
@@ -370,6 +428,29 @@ describe('HostViewApi', () => {
 
     get(activeView)!.focus();
     expect(document.activeElement).toBe(tileOf(container, '10.0.0.10'));
+  });
+
+  it('takes the keyboard without selecting a host', () => {
+    const { container } = render(HostIconView);
+    get(activeView)!.focus();
+    expect(document.activeElement).toBe(gridOf(container));
+    expect(get(scanStore).selectedHostIp).toBeNull();
+  });
+
+  it('hands the keyboard to the next view when the view changes', async () => {
+    const { container } = render(HostIconView);
+    ui.setViewMode('icons');
+    scanStore.setSelectedHost('10.0.0.2');
+    get(activeView)!.focus();
+    expect(document.activeElement).toBe(tileOf(container, '10.0.0.2'));
+
+    // The page swaps the views on Svelte's next update.
+    const next: HostViewApi = { ...get(activeView)!, focus: vi.fn() };
+    ui.setViewMode('list');
+    activeView.set(next);
+    await tick();
+    expect(next.focus).toHaveBeenCalledTimes(1);
+    activeView.set(null);
   });
 });
 

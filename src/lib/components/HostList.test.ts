@@ -9,6 +9,7 @@
 // and presses that must land inside an element stub its rectangle.
 import { fireEvent, render } from '@testing-library/svelte';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tick } from 'svelte';
 import { get } from 'svelte/store';
 import type { ScanResult } from '$lib/types';
 
@@ -43,7 +44,7 @@ vi.mock('$lib/app/contextMenus', () => ({
 
 import HostList from './HostList.svelte';
 import { ui } from '$lib/app/ui';
-import { activeView } from '$lib/app/views';
+import { activeView, type HostViewApi } from '$lib/app/views';
 import { scanStore } from '$lib/util/scanStore';
 import { makeFingerprint, makeHost, makePorts } from '../../test/hosts';
 
@@ -397,6 +398,26 @@ describe('HostViewApi', () => {
 
     scanStore.setQuery('');
     expect(get(activeView)!.extraHeight()).toBe(5 * 19 - 2 * 19);
+  });
+
+  it('hands the keyboard to the next view when the view changes', async () => {
+    const { container } = render(HostList);
+    const next: HostViewApi = { ...get(activeView)!, focus: vi.fn() };
+    get(activeView)!.focus();
+    expect(document.activeElement).toBe(parts(container).grid);
+
+    // The page swaps the views on Svelte's next update.
+    ui.setViewMode('icons');
+    activeView.set(next);
+    await tick();
+    expect(next.focus).toHaveBeenCalledTimes(1);
+
+    // Back, without the keyboard: nothing to hand over.
+    (document.activeElement as HTMLElement).blur();
+    ui.setViewMode('list');
+    await tick();
+    expect(next.focus).toHaveBeenCalledTimes(1);
+    activeView.set(null);
   });
 });
 

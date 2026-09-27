@@ -67,7 +67,7 @@
 </script>
 
 <script lang="ts">
-  import { flushSync, onMount, untrack } from 'svelte';
+  import { flushSync, onMount, tick, untrack } from 'svelte';
   import { get } from 'svelte/store';
   import { attachScrollbar, centerText, installOsmium, type MenuPoint } from 'osmium-ui';
   import { openHost } from '$lib/app/actions';
@@ -120,10 +120,12 @@
     return m.loading ? m.loadingText : m.emptyText;
   }
 
-  /** The option's accessible name: what the tile shows, plus the icon's
-   * label and the row state as text (5.6). */
+  /** The option's accessible name: what the tile shows (the address
+   * once when it is also the name), plus the icon's label and the row
+   * state as text (5.6). */
   function tileLabel(row: HostRow): string {
-    const parts = [row.iconName, row.ip, row.icon.label, row.status, row.favorite ? 'Favorite' : ''];
+    const ip = row.iconName === row.ip ? '' : row.ip;
+    const parts = [row.iconName, ip, row.icon.label, row.status, row.favorite ? 'Favorite' : ''];
     return parts.filter(Boolean).join(', ');
   }
 
@@ -239,6 +241,14 @@
     scrollToTile(el);
   }
 
+  /** Where the keyboard goes when the view takes it: the selected tile
+   * while it is shown, else the grid itself, since focusing a tile
+   * selects its host (onFocusin). */
+  function focusTarget(): HTMLElement {
+    const ip = get(scanStore).selectedHostIp;
+    return (ip === null ? undefined : tiles.get(ip)) ?? grid;
+  }
+
   function selectedIndex(): number {
     const ip = get(scanStore).selectedHostIp;
     return ip === null ? -1 : rows.findIndex((row) => row.ip === ip);
@@ -273,8 +283,13 @@
     keyMenuAt = performance.now();
     const index = selectedIndex();
     const el = index < 0 ? undefined : tiles.get(rows[index].ip);
-    if (el) openHostMenu(rows[index].ip, underName(el));
-    else openViewMenu(gridCorner());
+    if (!el) {
+      openViewMenu(gridCorner());
+      return;
+    }
+
+    scrollToTile(el);
+    openHostMenu(rows[index].ip, underName(el));
   }
 
   const NAV_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown']);
@@ -379,10 +394,23 @@
     let model: HostModel = start;
     let frame = 0;
 
+    // Osmium's bar follows the grid's scrolling and box, not its
+    // content: apply() updates it when the tiles change.
+    const scrollbar = attachScrollbar(host, grid, ROW_PITCH);
+
     function apply(): void {
       frame = 0;
+      const hadFocus = grid.contains(document.activeElement);
       rows = model.rows;
       placeholder = placeholderOf(model);
+      flushSync();
+      scrollbar.update();
+
+      // The keyed each moves a reordered tile (insertBefore) and removes
+      // a gone one, and either takes the focus with it to the body. Keep
+      // the keyboard in the grid, where the tile went; no scrolling, as
+      // the list keeps its place when rows move.
+      if (hadFocus && !grid.contains(document.activeElement)) focusTarget().focus({ preventScroll: true });
     }
 
     /** Hand over rows still waiting for the frame, and draw them now
@@ -401,15 +429,13 @@
       if (!frame) frame = requestAnimationFrame(apply);
     });
 
-    const scrollbar = attachScrollbar(host, grid, ROW_PITCH);
-
     const api: HostViewApi = {
       element: grid,
       focus() {
         flush();
-        const el = tabStop === null ? undefined : tiles.get(tabStop);
-        (el ?? grid).focus({ preventScroll: true });
-        if (el) scrollToTile(el);
+        const el = focusTarget();
+        el.focus({ preventScroll: true });
+        if (el !== grid) scrollToTile(el);
       },
       reveal(ip) {
         flush();
@@ -431,9 +457,20 @@
     const el = ip === null ? undefined : tiles.get(ip);
     if (el) scrollToTile(el);
 
+    // And the keyboard: the page swaps the views on Svelte's next update
+    // (activeView is still this view's until then), so the next view
+    // takes it after tick().
+    let mode = get(ui).viewMode;
+    const stopMode = ui.subscribe((u) => {
+      if (u.viewMode === mode) return;
+      mode = u.viewMode;
+      if (host.contains(document.activeElement)) void tick().then(() => get(activeView)?.focus());
+    });
+
     return () => {
       if (get(activeView) === api) activeView.set(null);
       stopModel();
+      stopMode();
       if (frame) cancelAnimationFrame(frame);
       scrollbar.destroy();
     };
