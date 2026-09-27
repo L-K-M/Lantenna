@@ -365,17 +365,18 @@ const STAR_HEADER = [
   '.000...000.'
 ];
 
-/** The badge on a favorite's icon-view tile (9 x 9), in the accent. */
+/** The badge on a favorite's icon-view tile (9 x 9), in the accent.
+ * Its outline mirrors about column 4, as the 11 x 11 stars' do. */
 const STAR_BADGE = [
   '....0....',
   '...0q0...',
   '...0p0...',
-  '0000pp000',
+  '000qpp000',
   '0qppppmm0',
   '.0pppmm0.',
-  '..0pm0m0.',
-  '.0pm00m0.',
-  '.00....00'
+  '..0p0m0..',
+  '.0p0.0m0.',
+  '.00...00.'
 ];
 
 // ---- antenna (16 x 16) --------------------------------------------------

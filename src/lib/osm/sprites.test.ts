@@ -61,14 +61,24 @@ function sizeOf(svg: string): [number, number] {
   return [Number(m[1]), Number(m[2])];
 }
 
-/** The sprite back as a grid of colors (null: transparent), from the
- * one-run-per-subpath paths Osmium draws. */
+/** One run of pixels, as Osmium draws each subpath. */
+const RUN = /M(\d+) (\d+)h(\d+)v1H\d+z/g;
+
+/** The sprite back as a grid of lowercase #rrggbb colors (null:
+ * transparent), from the one-run-per-subpath paths Osmium draws. Throws
+ * on any path, fill or subpath it cannot read, so a change in Osmium's
+ * encoding or a color in another notation fails the tests instead of
+ * leaving pixels out of them. */
 function gridOf(svg: string): (string | null)[][] {
   const [w, h] = sizeOf(svg);
   const grid = Array.from({ length: h }, () => Array<string | null>(w).fill(null));
-  for (const [, fill, d] of svg.matchAll(/<path fill="(#[0-9a-f]{6})" d="([^"]*)"\/>/g)) {
-    for (const [, x, y, n] of d!.matchAll(/M(\d+) (\d+)h(\d+)v1H\d+z/g)) {
-      for (let i = 0; i < Number(n); i++) grid[Number(y)]![Number(x) + i] = fill!;
+  const paths = [...svg.matchAll(/<path fill="([^"]*)" d="([^"]*)"\/>/g)];
+  if (paths.length !== svg.split('<path').length - 1) throw new Error(`unreadable <path> in ${svg}`);
+  for (const [, fill, d] of paths) {
+    if (!/^#[0-9a-f]{6}$/i.test(fill!)) throw new Error(`fill "${fill}" is not #rrggbb`);
+    if (d!.replace(RUN, '') !== '') throw new Error(`path "${d}" is not one run per subpath`);
+    for (const [, x, y, n] of d!.matchAll(RUN)) {
+      for (let i = 0; i < Number(n); i++) grid[Number(y)]![Number(x) + i] = fill!.toLowerCase();
     }
   }
   return grid;
@@ -142,6 +152,18 @@ describe('registerAppSprites', () => {
           expect(['#000000', '#444444'], `${kind} at ${x},${y}`).toContain(c);
         })
       );
+    }
+  });
+
+  it('draws every star symmetric about its middle column', () => {
+    // Lighting may differ left to right; the silhouette and the outline
+    // (black, or the off star's 88 gray) may not.
+    S.registerAppSprites();
+    for (const name of ['lan-star-off', 'lan-star-on', 'lan-star-header', 'lan-star-badge']) {
+      const shape = gridOf(svgOf(name)).map((row) =>
+        row.map((c) => (c === null ? '.' : c === '#000000' || c === '#888888' ? '0' : 'f')).join('')
+      );
+      expect(shape.map((r) => [...r].reverse().join('')), name).toEqual(shape);
     }
   });
 
