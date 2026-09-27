@@ -13,6 +13,7 @@ import type {
 } from '$lib/types';
 import { errorMessage } from './errors';
 import { scanEvents } from './scanEvents';
+import { readJson, readString, writeJson, writeString } from './storage';
 
 export interface ScanStoreState {
   interfaces: NetworkInterface[];
@@ -91,98 +92,46 @@ function settingsToApproach(portProfile: PortProfile, discoveryMode: DiscoveryMo
   return 'balanced';
 }
 
-function canUseStorage(): boolean {
-  return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+// Storage goes through storage.ts, which never throws: a missing or
+// full localStorage reads as empty and drops writes with a warning,
+// instead of breaking the store's update() (spec 3.5).
+
+function isArray(value: unknown): value is unknown[] {
+  return Array.isArray(value);
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function loadStringList(key: string): string[] {
+  const list = readJson(key, isArray) ?? [];
+  return list.filter((item): item is string => typeof item === 'string');
 }
 
 function loadFavoriteIps(): string[] {
-  if (!canUseStorage()) {
-    return [];
-  }
-
-  try {
-    const raw = window.localStorage.getItem(FAVORITE_IPS_STORAGE_KEY);
-    if (!raw) {
-      return [];
-    }
-
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    return parsed.filter((item): item is string => typeof item === 'string');
-  } catch {
-    return [];
-  }
+  return loadStringList(FAVORITE_IPS_STORAGE_KEY);
 }
 
 function loadHiddenIps(): string[] {
-  if (!canUseStorage()) {
-    return [];
-  }
-
-  try {
-    const raw = window.localStorage.getItem(HIDDEN_IPS_STORAGE_KEY);
-    if (!raw) {
-      return [];
-    }
-
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    return parsed.filter((item): item is string => typeof item === 'string');
-  } catch {
-    return [];
-  }
+  return loadStringList(HIDDEN_IPS_STORAGE_KEY);
 }
 
 function saveFavoriteIps(favoriteIps: string[]) {
-  if (!canUseStorage()) {
-    return;
-  }
-
-  window.localStorage.setItem(FAVORITE_IPS_STORAGE_KEY, JSON.stringify(favoriteIps));
+  writeJson(FAVORITE_IPS_STORAGE_KEY, favoriteIps);
 }
 
 function saveHiddenIps(hiddenIps: string[]) {
-  if (!canUseStorage()) {
-    return;
-  }
-
-  window.localStorage.setItem(HIDDEN_IPS_STORAGE_KEY, JSON.stringify(hiddenIps));
+  writeJson(HIDDEN_IPS_STORAGE_KEY, hiddenIps);
 }
 
+/** Snapshots are not validated beyond being an object (as before). */
 function loadFavoriteHostSnapshots(): FavoriteHostSnapshots {
-  if (!canUseStorage()) {
-    return {};
-  }
-
-  try {
-    const raw = window.localStorage.getItem(FAVORITE_HOSTS_STORAGE_KEY);
-    if (!raw) {
-      return {};
-    }
-
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') {
-      return {};
-    }
-
-    return parsed as FavoriteHostSnapshots;
-  } catch {
-    return {};
-  }
+  return (readJson(FAVORITE_HOSTS_STORAGE_KEY, isObject) ?? {}) as FavoriteHostSnapshots;
 }
 
 function saveFavoriteHostSnapshots(snapshots: FavoriteHostSnapshots) {
-  if (!canUseStorage()) {
-    return;
-  }
-
-  window.localStorage.setItem(FAVORITE_HOSTS_STORAGE_KEY, JSON.stringify(snapshots));
+  writeJson(FAVORITE_HOSTS_STORAGE_KEY, snapshots);
 }
 
 function normalizeIpList(ips: string[]): string[] {
@@ -191,59 +140,26 @@ function normalizeIpList(ips: string[]): string[] {
 }
 
 function loadCustomNames(): Record<string, string> {
-  if (!canUseStorage()) {
-    return {};
-  }
+  const stored = readJson(CUSTOM_NAMES_STORAGE_KEY, isObject) ?? {};
+  const entries = Object.entries(stored).filter(
+    (entry): entry is [string, string] => typeof entry[0] === 'string' && typeof entry[1] === 'string'
+  );
 
-  try {
-    const raw = window.localStorage.getItem(CUSTOM_NAMES_STORAGE_KEY);
-    if (!raw) {
-      return {};
-    }
-
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') {
-      return {};
-    }
-
-    const entries = Object.entries(parsed).filter(
-      (entry): entry is [string, string] => typeof entry[0] === 'string' && typeof entry[1] === 'string'
-    );
-
-    return Object.fromEntries(entries);
-  } catch {
-    return {};
-  }
+  return Object.fromEntries(entries);
 }
 
 function saveCustomNames(customNames: Record<string, string>) {
-  if (!canUseStorage()) {
-    return;
-  }
-
-  window.localStorage.setItem(CUSTOM_NAMES_STORAGE_KEY, JSON.stringify(customNames));
+  writeJson(CUSTOM_NAMES_STORAGE_KEY, customNames);
 }
 
 function loadSelectedInterfaceKey(): string | null {
-  if (!canUseStorage()) {
-    return null;
-  }
-
-  const raw = window.localStorage.getItem(SELECTED_INTERFACE_STORAGE_KEY);
+  const raw = readString(SELECTED_INTERFACE_STORAGE_KEY);
   return raw && raw.length > 0 ? raw : null;
 }
 
+/** null (or empty) removes the key. */
 function saveSelectedInterfaceKey(selectedInterface: string | null) {
-  if (!canUseStorage()) {
-    return;
-  }
-
-  if (!selectedInterface) {
-    window.localStorage.removeItem(SELECTED_INTERFACE_STORAGE_KEY);
-    return;
-  }
-
-  window.localStorage.setItem(SELECTED_INTERFACE_STORAGE_KEY, selectedInterface);
+  writeString(SELECTED_INTERFACE_STORAGE_KEY, selectedInterface || null);
 }
 
 /** The `name|ip` key that identifies an interface in the store, the

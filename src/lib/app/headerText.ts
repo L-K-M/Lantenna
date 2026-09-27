@@ -1,13 +1,21 @@
 // Owner: unit D (spec 8.4). Spec: 5.2, 5.6.
 //
-// SCAFFOLD STUB: headerState returns an empty, idle header.
-// Final contract: pure; the first matching row of table 5.2 decides the
-// text, busy flag and progress bar; `announce` changes only when the
-// kind of state changes (5.6).
+// Pure: what the Finder window header under the control strip says.
+// The first matching row of table 5.2 decides the text, the busy flag
+// and the progress bar.
+//
+// `announce` is what the header's visually hidden live region says
+// (5.6). It changes when the kind of state changes (scan started, phase
+// changed, stopping, finished, error), not with every count: during a
+// phase it names the phase without its counts; idle, it is the unfiltered
+// idle sentence (row 15), so typing in Find or changing Show: says
+// nothing, while hiding a host is heard.
 
 import type { BalloonHelpState } from 'osmium-ui';
-import type { NetworkInterface } from '$lib/types';
+import type { NetworkInterface, ScanProgress } from '$lib/types';
 import type { ScanProgressState, ScanStoreState } from '$lib/util/scanStore';
+import { formatCount, formatWhen, plural } from '$lib/util/format';
+import { explainError } from './errorText';
 import type { HostModel } from './hostModel';
 
 export interface HeaderInput {
@@ -26,9 +34,145 @@ export interface HeaderState {
   /** Chasing arrows would run (Osmium N1, not yet available). */
   busy: boolean;
   progress: { value: number; max: number; label: string } | null;
+  /** A small alert icon before the text (Osmium N3, not yet available):
+   * stop for the error lines, caution for the interface problems. */
   icon: 'stop' | 'caution' | null;
 }
 
+/** scanStore's MAX_SCAN_HOSTS: the backend samples larger subnets evenly
+ * (spec 3.1, 1.7), which the discovery text says. */
+const MAX_SCAN_HOSTS = 4096;
+
+const BALLOON_HINT = ' For help, choose Show Balloons from the Help menu.';
+
+type Bar = HeaderState['progress'];
+
+/** A row whose visible text is also what the live region says. */
+function row(text: string, busy: boolean, icon: HeaderState['icon'] = null): HeaderState {
+  return { text, announce: text, busy, progress: null, icon };
+}
+
+/** scanned / total, or no bar before the phase knows its total. */
+function bar(p: ScanProgress, label: string): Bar {
+  if (p.total <= 0) return null;
+  return { value: Math.min(Math.max(0, p.scanned), p.total), max: p.total, label };
+}
+
+/** Rows 3 to 8: a network scan, from its latest progress event. */
+function scanRow(p: ScanProgress | null, iface: NetworkInterface | null): HeaderState {
+  if (p === null || (p.phase === 'discovery' && p.total <= 0)) return row('Starting scan…', true);
+
+  const scanned = formatCount(p.scanned);
+  let text: string;
+  let announce: string;
+  switch (p.phase) {
+    case 'discovery': {
+      const sampled = iface !== null && iface.host_count > MAX_SCAN_HOSTS;
+      const of = sampled ? `${formatCount(p.total)} sampled addresses` : plural(p.total, 'address', 'addresses');
+      text = `Looking for hosts: ${scanned} of ${of}, ${plural(p.found, 'host')} found.`;
+      announce = 'Looking for hosts…';
+      break;
+    }
+    case 'ping':
+      text = `Pinging quiet addresses: ${scanned} of ${formatCount(p.total)}, ${plural(p.found, 'host')} found.`;
+      announce = 'Pinging quiet addresses…';
+      break;
+    case 'ports':
+      text = `Probing ports: ${scanned} of ${plural(p.total, 'host')}.`;
+      announce = 'Probing ports…';
+      break;
+    case 'fingerprint':
+      // One event per scan with the host count; no per-host progress,
+      // so no bar (Osmium's indeterminate bar, N2, doesn't exist yet).
+      return row(p.total > 0 ? `Identifying ${plural(p.total, 'host')}…` : 'Finishing scan…', true);
+  }
+
+  return { text, announce, busy: true, progress: bar(p, `Scan progress: ${text}`), icon: null };
+}
+
+/** Row 2: the bar keeps what the phase showed. */
+function stoppingRow(p: ScanProgress | null): HeaderState {
+  const text = 'Stopping scan…';
+  const shown = p !== null && p.phase !== 'fingerprint' ? bar(p, `Scan progress: ${text}`) : null;
+  return { ...row(text, true), progress: shown };
+}
+
+/** Row 9: a deep scan while no network scan runs. */
+function deepScanRow(p: ScanProgress): HeaderState {
+  const ip = p.current_ip ?? '';
+  const pending = ip ? `Deep scan of ${ip}…` : 'Deep scan…';
+  if (p.total <= 0) return row(pending, true);
+
+  const text = `Deep scan of ${ip}: ${formatCount(p.scanned)} of ${plural(p.total, 'port')}, ${formatCount(p.found)} open.`;
+  const label = `Deep scan progress for ${ip}: ${formatCount(p.scanned)} of ${plural(p.total, 'port')}`;
+  return { text, announce: pending, busy: true, progress: bar(p, label), icon: null };
+}
+
+/** " Last scan today at 3:42 PM." or " The last scan was stopped …",
+ * nothing before the first scan (or for an unreadable date). */
+function lastScanSentence(store: ScanStoreState, now: Date): string {
+  if (store.lastScanAt === null || Number.isNaN(Date.parse(store.lastScanAt))) return '';
+
+  const when = formatWhen(store.lastScanAt, now);
+  return store.lastScanCancelled ? ` The last scan was stopped ${when}.` : ` Last scan ${when}.`;
+}
+
+/** Rows 15 and 16. */
+function idleRow(input: HeaderInput, now: Date): HeaderState {
+  const { model } = input;
+  const counts = [plural(model.universe, 'host')];
+  if (model.newCount > 0) counts.push(`${formatCount(model.newCount)} new`);
+  if (model.hiddenCount > 0) counts.push(`${formatCount(model.hiddenCount)} hidden`);
+
+  const last = lastScanSentence(input.store, now);
+  const unfiltered = `${counts.join(', ')}.${last}`;
+  // The Show scope or the Find query leaves hosts out.
+  const narrowed = model.rows.length < model.universe;
+  const text = narrowed
+    ? `Showing ${formatCount(model.rows.length)} of ${plural(model.universe, 'host')}.${last}`
+    : unfiltered;
+
+  return { text, announce: unfiltered, busy: false, progress: null, icon: null };
+}
+
 export function headerState(input: HeaderInput, now: Date): HeaderState {
-  return { text: '', announce: '', busy: false, progress: null, icon: null };
+  const { store, progress } = input;
+  const scan = progress.progress;
+
+  if (store.loading) return row('Reading the last scan…', true);
+  if (store.stopping) return stoppingRow(scan);
+  if (store.scanning || scan?.running === true) return scanRow(scan, input.selectedInterface);
+
+  const deep = progress.hostScanProgress;
+  if (deep?.running === true) return deepScanRow(deep);
+
+  if (store.error !== null) {
+    const explanation = explainError(store.error);
+    const lead =
+      input.lastError?.kind === 'init' ? 'Lantenna couldn’t start its scanner.' : 'The last scan didn’t finish.';
+    return row(explanation ? `${lead} ${explanation}` : lead, false, 'stop');
+  }
+
+  if (store.interfaces.length === 0) {
+    return row('No network interface with an IPv4 subnet was found.', false, 'caution');
+  }
+
+  const iface = input.selectedInterface;
+  if (iface !== null && iface.host_count === 0) {
+    return row(
+      `${iface.name} (${iface.subnet}) has no other addresses to scan. Choose another interface.`,
+      false,
+      'caution'
+    );
+  }
+
+  if (iface !== null && store.lastScanAt === null && store.hosts.length === 0) {
+    const hint = input.balloons === 'hidden' ? BALLOON_HINT : '';
+    return row(
+      `Click Scan to search ${plural(iface.host_count, 'address', 'addresses')} on ${iface.name} (${iface.subnet}). This computer is ${iface.ip}.${hint}`,
+      false
+    );
+  }
+
+  return idleRow(input, now);
 }
