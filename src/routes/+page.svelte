@@ -10,18 +10,41 @@
     getSystem7WindowStyle
   } from '@lkmc/system7-ui';
 
+  import HostIconGrid from '$lib/components/HostIconGrid.svelte';
   import HostInspector from '$lib/components/HostInspector.svelte';
   import HostTable from '$lib/components/HostTable.svelte';
   import ScanToolbar from '$lib/components/ScanToolbar.svelte';
 
   import { TauriService } from '$lib/tauri';
   import { WindowManager } from '$lib/windowManager';
+  import { hostMatchesQuery } from '$lib/util/hostSearch';
   import { notifications } from '$lib/util/notifications';
-  import { scanStore } from '$lib/util/scanStore';
+  import { describeScanProgress, isIndeterminatePhase } from '$lib/util/scanProgress';
+  import { scanProgress, scanStore } from '$lib/util/scanStore';
   import { windowFocused } from '$lib/util/windowState';
-  import type { SystemColors } from '$lib/types';
+  import type { HostViewMode, SystemColors } from '$lib/types';
+
+  const VIEW_MODE_STORAGE_KEY = 'lantenna.viewMode';
 
   let isWindowShaded = false;
+  let viewMode: HostViewMode = loadViewMode();
+
+  function loadViewMode(): HostViewMode {
+    try {
+      return localStorage.getItem(VIEW_MODE_STORAGE_KEY) === 'icons' ? 'icons' : 'list';
+    } catch {
+      return 'list';
+    }
+  }
+
+  function setViewMode(mode: HostViewMode) {
+    viewMode = mode;
+    try {
+      localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
+    } catch {
+      // Only a convenience; the view still switches.
+    }
+  }
   let systemColors: SystemColors | null = null;
 
   $: ({
@@ -35,30 +58,23 @@
     hiddenIps,
     showHiddenEntries,
     staleFavoriteIps,
-    progress,
-    hostScanProgress,
+    pendingIps,
     scanning,
+    stopping,
     loading,
     error,
     query,
     selectedHostIp
   } = $scanStore);
 
+  $: ({ progress, hostScanProgress } = $scanProgress);
+
   $: hiddenSet = new Set(hiddenIps);
 
-  $: queryMatchedHosts = hosts.filter((host) => {
-    if (!query.trim()) {
-      return true;
-    }
+  $: queryMatchedHosts = hosts.filter((host) => hostMatchesQuery(host, customNames[host.ip] || '', query));
 
-    const needle = query.toLowerCase();
-    const customName = (customNames[host.ip] || '').toLowerCase();
-    return (
-      host.ip.includes(needle) ||
-      (host.name || '').toLowerCase().includes(needle) ||
-      customName.includes(needle)
-    );
-  });
+  $: tableEmptyText =
+    query.trim() && hosts.length > 0 ? `No hosts match “${query.trim()}”.` : 'No hosts yet. Start a scan.';
 
   $: hiddenCount = hosts.filter((host) => hiddenSet.has(host.ip)).length;
 
@@ -72,10 +88,10 @@
 
   $: hostScanTarget = hostScanProgress?.current_ip || 'selected host';
   $: fullScanActive = scanning || Boolean(progress?.running);
-  $: footerStatus = fullScanActive
-    ? progress
-      ? `${progress.scanned}/${progress.total} scanned, ${progress.found} hosts`
-      : 'Scanning...'
+  $: footerStatus = stopping
+    ? 'Stopping scan...'
+    : fullScanActive
+    ? describeScanProgress(progress)
     : hostScanProgress?.running
       ? hostScanProgress.total > 0
         ? `Deep scan ${hostScanTarget}: ${hostScanProgress.scanned}/${hostScanProgress.total} ports, ${hostScanProgress.found} open`
@@ -86,10 +102,9 @@
   $: showFooterProgress = Boolean(activeFooterProgress?.running);
   $: footerProgressMax = activeFooterProgress && activeFooterProgress.total > 0 ? activeFooterProgress.total : 1;
   $: footerProgressValue = activeFooterProgress ? Math.min(activeFooterProgress.scanned, footerProgressMax) : 0;
+  $: footerProgressIndeterminate = fullScanActive && isIndeterminatePhase(progress);
   $: footerProgressAriaLabel = fullScanActive
-    ? progress
-      ? `Scan progress: ${progress.scanned} of ${progress.total} scanned`
-      : 'Scan progress'
+    ? `Scan progress: ${describeScanProgress(progress)}`
     : hostScanProgress?.running
       ? hostScanProgress.total > 0
         ? `Deep scan progress for ${hostScanTarget}: ${hostScanProgress.scanned} of ${hostScanProgress.total} ports`
@@ -189,7 +204,10 @@
         selectedInterface={selectedInterface}
         approach={scanApproach}
         {scanning}
+        {stopping}
         {query}
+        {viewMode}
+        onViewModeChange={setViewMode}
         onInterfaceChange={(name) => scanStore.setInterface(name)}
         onApproachChange={(approach) => scanStore.setScanApproach(approach)}
         onStart={() => scanStore.startScan()}
@@ -202,20 +220,37 @@
       {/if}
 
       <section class="results-layout">
-        <HostTable
-          hosts={filteredHosts}
-          loading={loading || scanning}
-          {selectedHostIp}
-          {customNames}
-          {favoriteIps}
-          {hiddenIps}
-          {staleFavoriteIps}
-          {newHostIps}
-          onSelectHost={(ip) => scanStore.setSelectedHost(ip)}
-          onToggleFavorite={(ip) => scanStore.toggleFavorite(ip)}
-          onToggleHidden={(ip) => scanStore.toggleHidden(ip)}
-          onClearCustomName={(ip) => scanStore.setCustomName(ip, '')}
-        />
+        {#if viewMode === 'icons'}
+          <HostIconGrid
+            hosts={filteredHosts}
+            loading={loading || scanning}
+            {selectedHostIp}
+            {customNames}
+            {favoriteIps}
+            {hiddenIps}
+            {staleFavoriteIps}
+            {newHostIps}
+            emptyText={tableEmptyText}
+            onSelectHost={(ip) => scanStore.setSelectedHost(ip)}
+          />
+        {:else}
+          <HostTable
+            hosts={filteredHosts}
+            loading={loading || scanning}
+            {selectedHostIp}
+            {customNames}
+            {favoriteIps}
+            {hiddenIps}
+            {staleFavoriteIps}
+            {pendingIps}
+            {newHostIps}
+            emptyText={tableEmptyText}
+            onSelectHost={(ip) => scanStore.setSelectedHost(ip)}
+            onToggleFavorite={(ip) => scanStore.toggleFavorite(ip)}
+            onToggleHidden={(ip) => scanStore.toggleHidden(ip)}
+            onClearCustomName={(ip) => scanStore.setCustomName(ip, '')}
+          />
+        {/if}
         <HostInspector
           host={selectedHost}
           {customNames}
@@ -232,6 +267,7 @@
           <ProgressBar
             value={footerProgressValue}
             max={footerProgressMax}
+            indeterminate={footerProgressIndeterminate}
             height={16}
             title={footerProgressAriaLabel}
             ariaLabel={footerProgressAriaLabel}

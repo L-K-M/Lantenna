@@ -8,8 +8,7 @@ const WOL_PORT: u16 = 9;
 /// broadcast address. The target device must have WoL enabled in its
 /// firmware/OS for this to have any effect.
 pub async fn send_magic_packet(mac: &str) -> Result<()> {
-    let octets =
-        parse_mac_octets(mac).with_context(|| format!("Invalid MAC address '{}'", mac))?;
+    let octets = parse_mac_octets(mac).with_context(|| format!("Invalid MAC address '{}'", mac))?;
     let packet = build_magic_packet(octets);
 
     let socket = UdpSocket::bind("0.0.0.0:0")

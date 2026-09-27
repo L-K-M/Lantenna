@@ -1,6 +1,8 @@
 export type PortProfile = 'quick' | 'standard' | 'deep';
 export type DiscoveryMode = 'tcp' | 'hybrid';
 export type ScanApproach = 'fast' | 'balanced' | 'thorough';
+export type ScanPhase = 'discovery' | 'ping' | 'ports' | 'fingerprint';
+export type HostViewMode = 'list' | 'icons';
 
 export interface NetworkInterface {
   name: string;
@@ -8,6 +10,7 @@ export interface NetworkInterface {
   cidr: number;
   subnet: string;
   host_count: number;
+  is_default_route: boolean;
 }
 
 export interface PortInfo {
@@ -51,6 +54,7 @@ export interface ScanOptions {
 }
 
 export interface ScanProgress {
+  phase: ScanPhase;
   scanned: number;
   total: number;
   found: number;

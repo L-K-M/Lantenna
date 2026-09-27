@@ -1,18 +1,12 @@
 <script lang="ts">
     import type {Host} from '$lib/types';
-    import cameraIcon from '$lib/assets/host-icons/camera.svg';
-    import iotIcon from '$lib/assets/host-icons/iot.svg';
-    import kvmIcon from '$lib/assets/host-icons/kvm.svg';
-    import mediaIcon from '$lib/assets/host-icons/media.svg';
-    import mobileIcon from '$lib/assets/host-icons/mobile.svg';
-    import pcGenericIcon from '$lib/assets/host-icons/pc-generic.svg';
-    import pcLinuxIcon from '$lib/assets/host-icons/pc-linux.svg';
-    import pcMacIcon from '$lib/assets/host-icons/pc-mac.svg';
-    import pcWindowsIcon from '$lib/assets/host-icons/pc-windows.svg';
-    import printerIcon from '$lib/assets/host-icons/printer.svg';
-    import routerIcon from '$lib/assets/host-icons/router.svg';
-    import serverIcon from '$lib/assets/host-icons/server.svg';
     import { DataTable } from '@lkmc/system7-ui';
+    import { getHostIcon, type IconInfo } from '$lib/util/hostIcons';
+    import { onMount, tick } from 'svelte';
+    import { TauriService } from '$lib/tauri';
+    import { formatRelativeTime, normalizeDisplayText, shortVendorName } from '$lib/util/format';
+    import { notifications } from '$lib/util/notifications';
+    import { primaryPortTarget } from '$lib/util/portTargets';
 
     export let hosts: Host[] = [];
     export let loading = false;
@@ -22,26 +16,23 @@
     export let hiddenIps: string[] = [];
     export let staleFavoriteIps: string[] = [];
     export let newHostIps: string[] = [];
+    export let pendingIps: string[] = [];
     export let onSelectHost: ((ip: string) => void) | undefined = undefined;
     export let onToggleFavorite: ((ip: string) => void) | undefined = undefined;
     export let onToggleHidden: ((ip: string) => void) | undefined = undefined;
     export let onClearCustomName: ((ip: string) => void) | undefined = undefined;
+    export let emptyText = 'No hosts yet. Start a scan.';
 
     type SortField = 'ip' | 'favorite' | 'name' | 'fingerprint' | 'ports' | 'lastSeen';
     type SortDirection = 'asc' | 'desc';
 
     const columns = [
-        { key: 'ip', label: 'IP', width: '200px', className: 'col-ip' },
-        { key: 'name', label: 'Name', width: '25%', className: 'col-name' },
-        { key: 'fingerprint', label: 'Fingerprint', width: '32%', className: 'col-fingerprint' },
+        { key: 'ip', label: 'IP', width: '190px', className: 'col-ip' },
+        { key: 'name', label: 'Name', width: '24%', className: 'col-name' },
+        { key: 'fingerprint', label: 'Fingerprint', width: '28%', className: 'col-fingerprint' },
         { key: 'ports', label: 'Open Ports', className: 'col-ports' },
-        { key: 'lastSeen', label: 'Last Seen', width: '100px', className: 'col-seen' }
+        { key: 'lastSeen', label: 'Last Seen', width: '84px', className: 'col-seen' }
     ];
-
-    interface IconInfo {
-        src: string;
-        label: string;
-    }
 
     interface ContextMenuState {
         open: boolean;
@@ -49,6 +40,16 @@
         y: number;
         ip: string;
     }
+
+    // Drives the relative "Last Seen" labels.
+    let now = Date.now();
+
+    onMount(() => {
+        const timer = setInterval(() => {
+            now = Date.now();
+        }, 60_000);
+        return () => clearInterval(timer);
+    });
 
     let sortField: SortField = 'favorite';
     let sortDirection: SortDirection = 'asc';
@@ -59,6 +60,39 @@
     $: hiddenSet = new Set(hiddenIps);
     $: staleFavoriteSet = new Set(staleFavoriteIps);
     $: newHostSet = new Set(newHostIps);
+    $: pendingSet = new Set(pendingIps);
+
+    interface RowView {
+        customName: string;
+        icon: IconInfo;
+        name: string;
+        fingerprint: string;
+        ports: string;
+    }
+
+    // Derived text and icons per host object. Host objects are replaced, not
+    // mutated, when a scan updates them, so identity is a safe cache key;
+    // the custom name is the only other input. "Last seen" is relative to
+    // the ticking `now`, so it is rendered per row rather than cached here.
+    const rowViews = new WeakMap<Host, RowView>();
+
+    function rowView(host: Host): RowView {
+        const customName = customNames[host.ip]?.trim() || '';
+        const cached = rowViews.get(host);
+        if (cached && cached.customName === customName) {
+            return cached;
+        }
+
+        const view: RowView = {
+            customName,
+            icon: getHostIcon(host, customName),
+            name: displayName(host),
+            fingerprint: formatFingerprint(host),
+            ports: formatPorts(host)
+        };
+        rowViews.set(host, view);
+        return view;
+    }
 
     let contextMenu: ContextMenuState = {
         open: false,
@@ -68,14 +102,32 @@
     };
     let contextMenuElement: HTMLDivElement | null = null;
 
-    $: sortedHosts = [...hosts].sort((a, b) => {
-        const result = compareHosts(a, b, sortField, favoriteSet);
-        if (result !== 0) {
-            return sortDirection === 'asc' ? result : -result;
-        }
+    $: sortedHosts = sortHosts(hosts, sortField, sortDirection, favoriteSet, customNames);
 
-        return ipToNumber(a.ip) - ipToNumber(b.ip);
-    });
+    // Unnamed hosts always sort after named ones by name, in either direction.
+    function sortHosts(
+        list: Host[],
+        field: SortField,
+        direction: SortDirection,
+        favorites: Set<string>,
+        names: Record<string, string>
+    ): Host[] {
+        return [...list].sort((a, b) => {
+            if (field === 'name') {
+                const unnamed = Number(isUnnamed(a, names)) - Number(isUnnamed(b, names));
+                if (unnamed !== 0) {
+                    return unnamed;
+                }
+            }
+
+            const result = compareHosts(a, b, field, favorites);
+            if (result !== 0) {
+                return direction === 'asc' ? result : -result;
+            }
+
+            return ipToNumber(a.ip) - ipToNumber(b.ip);
+        });
+    }
 
     function setSort(field: SortField) {
         if (sortField === field) {
@@ -115,9 +167,9 @@
             case 'favorite':
                 return Number(favorites.has(b.ip)) - Number(favorites.has(a.ip));
             case 'name':
-                return collator.compare(displayName(a), displayName(b));
+                return collator.compare(rowView(a).name, rowView(b).name);
             case 'fingerprint':
-                return collator.compare(formatFingerprint(a), formatFingerprint(b));
+                return collator.compare(rowView(a).fingerprint, rowView(b).fingerprint);
             case 'ports':
                 return a.open_ports.length - b.open_ports.length;
             case 'lastSeen':
@@ -127,42 +179,31 @@
         }
     }
 
+    const MAX_LISTED_PORTS = 6;
+
+    /** Port numbers only, so more fit; the tooltip has the service names. */
     function formatPorts(host: Host): string {
         if (host.open_ports.length === 0) {
             return '-';
         }
 
-        const labels = host.open_ports.slice(0, 5).map((port) => {
-            if (port.service) {
-                return `${port.port} (${port.service})`;
-            }
-            return String(port.port);
-        });
-
-        if (host.open_ports.length > 5) {
-            labels.push(`+${host.open_ports.length - 5}`);
+        const numbers = host.open_ports.slice(0, MAX_LISTED_PORTS).map((port) => String(port.port));
+        if (host.open_ports.length > MAX_LISTED_PORTS) {
+            numbers.push(`+${host.open_ports.length - MAX_LISTED_PORTS}`);
         }
 
-        return labels.join(', ');
+        return numbers.join(', ');
     }
 
-    function formatTime(iso: string): string {
-        if (!iso) {
-            return '-';
-        }
+    function describePorts(host: Host): string {
+        return host.open_ports
+            .map((port) => (port.service ? `${port.port} (${port.service})` : String(port.port)))
+            .join(', ');
+    }
 
+    function formatTimestamp(iso: string): string {
         const date = new Date(iso);
-        if (Number.isNaN(date.getTime())) {
-            return '-';
-        }
-
-        const now = new Date();
-        const sameDay =
-            date.getFullYear() === now.getFullYear() &&
-            date.getMonth() === now.getMonth() &&
-            date.getDate() === now.getDate();
-
-        return sameDay ? date.toLocaleTimeString() : date.toLocaleDateString();
+        return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
     }
 
     function formatFingerprint(host: Host): string {
@@ -171,22 +212,12 @@
             return 'Not fingerprinted yet';
         }
 
-        const vendor = normalizeFingerprintText(fp.vendor || fp.manufacturer || 'Unknown vendor');
-        const kind = normalizeFingerprintText(fp.device_type || fp.os_guess || fp.model_guess || 'Unknown type');
+        const rawVendor = fp.vendor || fp.manufacturer;
+        const vendor = rawVendor ? shortVendorName(normalizeDisplayText(rawVendor)) : 'Unknown vendor';
+        const kind = normalizeDisplayText(fp.device_type || fp.os_guess || fp.model_guess || 'Unknown type');
         const confidence = Number.isFinite(fp.confidence) ? `${fp.confidence}%` : 'n/a';
 
         return `${vendor} • ${kind} (${confidence})`;
-    }
-
-    function normalizeFingerprintText(value: string): string {
-        return value
-            .normalize('NFKC')
-            .replace(/[\u0000-\u001F\u007F]/g, '')
-            .replace(/[\u200B-\u200D\uFEFF]/g, '')
-            .replace(/\s+([,.;:!?])/g, '$1')
-            .replace(/([,.;:!?])(\S)/g, '$1 $2')
-            .replace(/\s+/g, ' ')
-            .trim();
     }
 
     function toggleFavorite(event: MouseEvent, ip: string) {
@@ -222,6 +253,23 @@
     function selectHost(ip: string) {
         closeContextMenu();
         onSelectHost?.(ip);
+    }
+
+    async function openHost(host: Host) {
+        const target = primaryPortTarget(host);
+        if (!target) {
+            notifications.add(`${host.ip} has no open web, file sharing, remote login or screen sharing port.`, 'info');
+            return;
+        }
+
+        try {
+            await TauriService.openExternalUrl(target.url);
+        } catch (error) {
+            const message =
+                (typeof error === 'string' ? error : error instanceof Error ? error.message : '').trim() ||
+                `Failed to open ${target.url}`;
+            notifications.add(message, 'error');
+        }
     }
 
     function openContextMenu(event: MouseEvent, ip: string) {
@@ -287,6 +335,15 @@
             return;
         }
 
+        if (event.key === 'Enter') {
+            const selected = sortedHosts.find((host) => host.ip === selectedHostIp);
+            if (selected) {
+                event.preventDefault();
+                void openHost(selected);
+            }
+            return;
+        }
+
         if (event.key === 'ArrowDown') {
             event.preventDefault();
             moveSelection(1);
@@ -349,6 +406,12 @@
 
         closeContextMenu();
         onSelectHost?.(next.ip);
+        void scrollSelectedRowIntoView();
+    }
+
+    async function scrollSelectedRowIntoView() {
+        await tick();
+        document.querySelector('.table-body-container tr.selected')?.scrollIntoView({ block: 'nearest' });
     }
 
     function moveSelection(offset: number) {
@@ -365,153 +428,15 @@
         selectByIndex(currentIndex + offset);
     }
 
+    function isUnnamed(host: Host, names: Record<string, string>): boolean {
+        return !(names[host.ip]?.trim() || host.name);
+    }
+
     function displayName(host: Host): string {
         const customName = customNames[host.ip]?.trim() || '';
         return customName || host.name || 'Unknown';
     }
 
-    function includesAny(haystack: string, needles: string[]): boolean {
-        return needles.some((needle) => haystack.includes(needle));
-    }
-
-    function normalizeHintText(value: string): string {
-        return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-    }
-
-    function isWindowsLike(os: string): boolean {
-        return includesAny(os, ['windows', 'microsoft', 'win32', 'win64']);
-    }
-
-    function isMacLike(os: string): boolean {
-        return includesAny(os, ['mac', 'darwin', 'os x', 'ios']);
-    }
-
-    function isLinuxLike(os: string): boolean {
-        return includesAny(os, ['linux', 'ubuntu', 'debian', 'fedora', 'centos', 'arch', 'red hat', 'unix', 'bsd']);
-    }
-
-    function getHostIcon(host: Host): IconInfo {
-        const customName = customNames[host.ip] || '';
-        const fp = host.fingerprint;
-        const nameHints = normalizeHintText(`${customName} ${host.name || ''}`);
-        const deviceType = normalizeHintText(fp?.device_type || '');
-        const modelHints = normalizeHintText(`${fp?.model_guess || ''} ${fp?.vendor || ''} ${fp?.manufacturer || ''}`);
-        const os = normalizeHintText(fp?.os_guess || '');
-        const allHints = `${nameHints} ${deviceType} ${modelHints} ${os}`;
-
-        const hasRtspLikePort = host.open_ports.some(
-            (port) =>
-                port.port === 554 ||
-                port.port === 8554 ||
-                (port.service || '').toLowerCase().includes('rtsp') ||
-                (port.service || '').toLowerCase().includes('onvif')
-        );
-
-        const hasKvmLikePort = host.open_ports.some(
-            (port) =>
-                [5900, 5901, 5902, 623].includes(port.port) ||
-                (port.service || '').toLowerCase().includes('vnc') ||
-                (port.service || '').toLowerCase().includes('ipmi')
-        );
-
-        if (
-            /\bcam\b/.test(nameHints) ||
-            includesAny(allHints, [
-                'camera',
-                'webcam',
-                'ipcam',
-                'cctv',
-                'hikvision',
-                'reolink',
-                'dahua',
-                'axis',
-                'onvif'
-            ]) ||
-            hasRtspLikePort
-        ) {
-            return {src: cameraIcon, label: 'Camera'};
-        }
-
-        if (
-            includesAny(allHints, ['kvm', 'pikvm', 'ipkvm', 'ipmi', 'idrac', 'ilo', 'bmc']) ||
-            hasKvmLikePort
-        ) {
-            return {src: kvmIcon, label: 'KVM device'};
-        }
-
-        if (
-            includesAny(allHints, [
-                'rt ax',
-                'rt ac',
-                'rt be',
-                'router',
-                'gateway',
-                'access point',
-                'wifi',
-                'wi fi',
-                'wlan',
-                'mesh',
-                'fritzbox',
-                'unifi',
-                'openwrt',
-                'dd wrt',
-                'modem',
-                'firewall',
-                'switch'
-            ])
-        ) {
-            return {src: routerIcon, label: 'Network device'};
-        }
-
-        if (includesAny(allHints, ['phone', 'mobile', 'tablet', 'iphone', 'ipad', 'pixel', 'galaxy'])) {
-            return {src: mobileIcon, label: 'Mobile device'};
-        }
-
-        if (includesAny(allHints, ['printer', 'laserjet', 'deskjet', 'officejet', 'epson', 'brother'])) {
-            return {src: printerIcon, label: 'Printer'};
-        }
-
-        if (includesAny(allHints, ['tv', 'appletv', 'apple tv', 'chromecast', 'roku', 'fire tv', 'media'])) {
-            return {src: mediaIcon, label: 'TV / media device'};
-        }
-
-        if (includesAny(nameHints, ['macbook', 'imac', 'mac mini', 'mac studio']) || /\bmac\b/.test(nameHints)) {
-            return {src: pcMacIcon, label: 'Apple host'};
-        }
-
-        if (
-            (includesAny(deviceType, ['workstation', 'server']) || includesAny(allHints, ['workstation', 'server'])) &&
-            isWindowsLike(os)
-        ) {
-            return {src: pcWindowsIcon, label: 'Windows workstation/server'};
-        }
-
-        if (includesAny(allHints, ['nas', 'synology', 'qnap', 'truenas', 'freenas', 'storage'])) {
-            return {src: serverIcon, label: 'Server / storage'};
-        }
-
-        if (includesAny(allHints, ['iot', 'smart', 'esphome', 'tasmota', 'shelly', 'zigbee', 'zwave'])) {
-            return {src: iotIcon, label: 'IoT device'};
-        }
-
-        if (isWindowsLike(os)) {
-            return {src: pcWindowsIcon, label: 'Windows host'};
-        }
-
-        if (isMacLike(os)) {
-            return {src: pcMacIcon, label: 'Apple host'};
-        }
-
-        if (isLinuxLike(os)) {
-            return {src: pcLinuxIcon, label: 'Linux host'};
-        }
-
-        if (includesAny(os, ['android'])) {
-            return {src: mobileIcon, label: 'Android host'};
-        }
-
-        return {src: pcGenericIcon, label: 'Unknown host'};
-    }
 </script>
 
 <svelte:window
@@ -530,7 +455,7 @@
         loading={loading && hosts.length === 0}
         empty={!loading && hosts.length === 0}
         loadingText="Scanning..."
-        emptyText="No hosts yet. Start a scan."
+        {emptyText}
         emptyColspan={5}
         bodyClass="table-body-container"
 >
@@ -604,8 +529,8 @@
         </tr>
     </svelte:fragment>
 
-    {#each sortedHosts as host}
-        {@const hostIcon = getHostIcon(host)}
+    {#each sortedHosts as host (host.ip)}
+        {@const view = rowView(host)}
 
         <!-- svelte-ignore a11y-click-events-have-key-events -->
         <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -614,7 +539,9 @@
                 class:hidden-entry={hiddenSet.has(host.ip)}
                 class:stale={staleFavoriteSet.has(host.ip)}
                 class:new-entry={newHostSet.has(host.ip)}
+                class:pending={pendingSet.has(host.ip)}
                 onclick={() => selectHost(host.ip)}
+                ondblclick={() => openHost(host)}
                 oncontextmenu={(event) => openContextMenu(event, host.ip)}
         >
             <td class="col-ip">
@@ -631,7 +558,7 @@
                             <path d="M8 1.5l2 4 4.5.6-3.3 3.1.8 4.8L8 12l-4 2 0.8-4.8L1.5 6.1l4.5-.6L8 1.5z"/>
                         </svg>
                     </button>
-                    <img class="device-icon" src={hostIcon.src} alt="" aria-hidden="true" title={hostIcon.label}/>
+                    <img class="device-icon" src={view.icon.src} alt="" aria-hidden="true" title={view.icon.label}/>
                     <span class="ip-text">{host.ip}</span>
                     {#if newHostSet.has(host.ip)}
                         <span class="new-badge">NEW</span>
@@ -639,11 +566,11 @@
                 </div>
             </td>
             <td class="col-name">
-                <span class="host-name">{displayName(host)}</span>
+                <span class="host-name">{view.name}</span>
             </td>
-            <td class="col-fingerprint">{formatFingerprint(host)}</td>
-            <td class="col-ports">{formatPorts(host)}</td>
-            <td class="col-seen">{formatTime(host.last_seen)}</td>
+            <td class="col-fingerprint">{view.fingerprint}</td>
+            <td class="col-ports" title={describePorts(host)}>{view.ports}</td>
+            <td class="col-seen" title={formatTimestamp(host.last_seen)}>{formatRelativeTime(host.last_seen, now)}</td>
         </tr>
     {/each}
 </DataTable>
@@ -756,17 +683,15 @@
     }
 
     .col-ip {
-        width: 185px;
-        min-width: 200px;
-        max-width: 200px;
+        width: 190px;
     }
 
     .col-name {
-        width: 25%;
+        width: 24%;
     }
 
     .col-fingerprint {
-        width: 32%;
+        width: 28%;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -777,9 +702,7 @@
     }
 
     .col-seen {
-        width: 100px;
-        min-width: 100px;
-        max-width: 100px;
+        width: 84px;
     }
 
     .ip-cell {
@@ -830,18 +753,18 @@
         color: #777;
     }
 
-    tr.new-entry:not(:hover):not(.selected) td {
+    /* Listed by the previous scan, not yet confirmed by the running one. */
+    tr.pending:not(.selected) td {
+        color: #999;
+    }
+
+    tr.new-entry:not(.selected) td {
         background: #fff7bf;
     }
 
-    tr.hidden-entry:not(:hover):not(.selected) td {
+    tr.hidden-entry:not(.selected) td {
         color: #666;
         background: #f4f4f4;
-    }
-
-    tr:hover td {
-        background: var(--system7-color-accent, #000);
-        color: var(--system7-color-accent-text, #fff);
     }
 
     tr.selected td {
@@ -849,28 +772,14 @@
         color: var(--system7-color-highlight-text, #fff);
     }
 
-    tr:hover .favorite-toggle svg {
-        stroke: var(--system7-color-accent-text, #fff);
-    }
-
     tr.selected .favorite-toggle svg {
         stroke: var(--system7-color-highlight-text, #fff);
-    }
-
-    tr:hover .new-badge {
-        background: var(--system7-color-accent-text, #fff);
-        color: var(--system7-color-accent, #000);
-        border-color: var(--system7-color-accent-text, #fff);
     }
 
     tr.selected .new-badge {
         background: var(--system7-color-highlight-text, #fff);
         color: var(--system7-color-highlight, #000);
         border-color: var(--system7-color-highlight-text, #fff);
-    }
-
-    tr:hover .favorite-toggle.active svg {
-        fill: var(--system7-color-accent-text, #fff);
     }
 
     tr.selected .favorite-toggle.active svg {

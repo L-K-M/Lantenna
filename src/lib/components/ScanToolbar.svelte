@@ -1,18 +1,21 @@
 <script lang="ts">
   import { BalloonHelp, Button, Dropdown, TextInput } from '@lkmc/system7-ui';
-  import type { NetworkInterface, ScanApproach } from '$lib/types';
+  import type { HostViewMode, NetworkInterface, ScanApproach } from '$lib/types';
 
   export let interfaces: NetworkInterface[] = [];
   export let selectedInterface: string | null = null;
   export let approach: ScanApproach = 'balanced';
   export let scanning = false;
+  export let stopping = false;
   export let query = '';
+  export let viewMode: HostViewMode = 'list';
 
   export let onInterfaceChange: ((name: string) => void) | undefined = undefined;
   export let onApproachChange: ((approach: ScanApproach) => void) | undefined = undefined;
   export let onStart: (() => void) | undefined = undefined;
   export let onStop: (() => void) | undefined = undefined;
   export let onQueryChange: ((value: string) => void) | undefined = undefined;
+  export let onViewModeChange: ((mode: HostViewMode) => void) | undefined = undefined;
 
   const approachOptions: { value: ScanApproach; label: string }[] = [
     { value: 'fast', label: 'Fast' },
@@ -29,7 +32,7 @@
     '**Interface**\n- Choose the adapter connected to the network you want to scan.\n- If there are multiple entries with the same name, pick the one with the matching subnet.\n- Scans are limited to the selected interface subnet.';
 
   const approachHelpText =
-    '**Fast**\n- Focused common TCP ports + a few high-signal fingerprint ports\n- TCP-only discovery\n- Fastest, lower coverage\n\n**Balanced** (recommended)\n- Expanded service-port set + extra device-signature ports\n- Hybrid discovery (TCP + ICMP fallback)\n- Best default for most networks\n\n**Thorough**\n- TCP ports `1-2048` + additional high-signal ports above `2048`\n- Hybrid discovery (TCP + ICMP fallback)\n- Slowest, highest coverage\n\n*Note: very large subnets are capped to 4096 hosts per scan.*';
+    '**Fast**\n- Focused common TCP ports + a few high-signal fingerprint ports\n- TCP-only discovery\n- Fastest, lower coverage\n\n**Balanced** (recommended)\n- Expanded service-port set + extra device-signature ports\n- Hybrid discovery (TCP + ICMP fallback)\n- Best default for most networks\n\n**Thorough**\n- TCP ports `1-2048` + every Balanced port above `2048`\n- Hybrid discovery (TCP + ICMP fallback)\n- Slowest, highest coverage\n\n*Note: very large subnets are capped to 4096 hosts per scan.*';
 
   function interfaceLabel(item: NetworkInterface): string {
     return `${item.name} (${item.subnet})`;
@@ -73,7 +76,7 @@
     </BalloonHelp>
 
     {#if scanning}
-      <Button onclick={onStop}>Stop Scan</Button>
+      <Button onclick={onStop} disabled={stopping}>{stopping ? 'Stopping...' : 'Stop Scan'}</Button>
     {:else}
       <Button onclick={onStart} disabled={!selectedInterface}>Start Scan</Button>
     {/if}
@@ -81,6 +84,37 @@
   </div>
 
   <div class="toolbar-group right">
+    <div class="view-toggle" role="group" aria-label="View">
+      <button
+        type="button"
+        class:active={viewMode === 'list'}
+        aria-pressed={viewMode === 'list'}
+        title="View as List"
+        aria-label="View as list"
+        onclick={() => onViewModeChange?.('list')}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <rect x="2" y="3" width="12" height="2" />
+          <rect x="2" y="7" width="12" height="2" />
+          <rect x="2" y="11" width="12" height="2" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        class:active={viewMode === 'icons'}
+        aria-pressed={viewMode === 'icons'}
+        title="View as Icons"
+        aria-label="View as icons"
+        onclick={() => onViewModeChange?.('icons')}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <rect x="2" y="2" width="5" height="5" />
+          <rect x="9" y="2" width="5" height="5" />
+          <rect x="2" y="9" width="5" height="5" />
+          <rect x="9" y="9" width="5" height="5" />
+        </svg>
+      </button>
+    </div>
     <div class="search-wrap">
       <span class="search-icon" aria-hidden="true">
         <svg viewBox="0 0 16 16" role="img" focusable="false">
@@ -91,8 +125,8 @@
       <TextInput
         value={query}
         clearable
-        placeholder="Filter by IP or host name"
-        ariaLabel="Filter by IP or host name"
+        placeholder="Filter by name, IP, vendor, port..."
+        ariaLabel="Filter hosts by name, IP, vendor, type, MAC, port or service"
         oninput={(value) => onQueryChange?.(value)}
         onclear={() => onQueryChange?.('')}
       />
@@ -152,6 +186,45 @@
   .search-wrap {
     min-width: 280px;
     position: relative;
+  }
+
+  .view-toggle {
+    display: inline-flex;
+    border: 1px solid var(--system7-color-ink, #000);
+  }
+
+  .view-toggle button {
+    width: 24px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    background: var(--system7-color-paper, #fff);
+    color: var(--system7-color-ink, #000);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+
+  .view-toggle button + button {
+    border-left: 1px solid var(--system7-color-ink, #000);
+  }
+
+  .view-toggle button.active {
+    background: var(--system7-color-ink, #000);
+    color: var(--system7-color-paper, #fff);
+  }
+
+  .view-toggle button:focus-visible {
+    outline: 1px dotted var(--system7-color-ink, #000);
+    outline-offset: 2px;
+  }
+
+  .view-toggle svg {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
+    shape-rendering: crispEdges;
   }
 
   .search-wrap :global(.sys7-text-input-wrap) {

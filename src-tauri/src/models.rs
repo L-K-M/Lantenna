@@ -7,6 +7,9 @@ pub struct NetworkInterface {
     pub cidr: u8,
     pub subnet: String,
     pub host_count: u32,
+    /// Whether this interface carries the IPv4 default route.
+    #[serde(default)]
+    pub is_default_route: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +46,42 @@ pub struct DeviceFingerprint {
     pub last_updated: String,
 }
 
+/// What Fingerbank said about a MAC address. Cached per MAC so an online
+/// lookup isn't repeated on every scan.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FingerbankResult {
+    pub vendor: Option<String>,
+    pub model: Option<String>,
+    pub device_type: Option<String>,
+    pub os_guess: Option<String>,
+    pub confidence: Option<u8>,
+    /// RFC 3339 UTC timestamp (`Utc::now().to_rfc3339()`); cache expiry is
+    /// computed from it.
+    pub fetched_at: String,
+}
+
+impl FingerbankResult {
+    /// A remembered "Fingerbank doesn't know this device", so unknown MACs are
+    /// not queried again on every scan.
+    pub fn no_match(fetched_at: String) -> Self {
+        Self {
+            vendor: None,
+            model: None,
+            device_type: None,
+            os_guess: None,
+            confidence: None,
+            fetched_at,
+        }
+    }
+
+    pub fn is_no_match(&self) -> bool {
+        self.vendor.is_none()
+            && self.model.is_none()
+            && self.device_type.is_none()
+            && self.os_guess.is_none()
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PortProfile {
@@ -73,8 +112,25 @@ pub struct ScanOptions {
     pub max_hosts: Option<usize>,
 }
 
+/// Stage of a scan. For a network scan, `scanned`/`total` in [`ScanProgress`]
+/// count addresses during `Discovery`, quiet addresses during `Ping`, live
+/// hosts during `Ports`, and hosts during `Fingerprint`. A single-host Deep
+/// Scan (`scan_host_ports`) reports `Ports` with `scanned`/`total` counting
+/// that host's ports instead.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ScanPhase {
+    #[default]
+    Discovery,
+    Ping,
+    Ports,
+    Fingerprint,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanProgress {
+    #[serde(default)]
+    pub phase: ScanPhase,
     pub scanned: usize,
     pub total: usize,
     pub found: usize,

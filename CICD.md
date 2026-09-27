@@ -26,7 +26,7 @@ The CI workflow has two parallel jobs:
   `npm ci`, runs `npm run check` (`svelte-kit sync` + `svelte-check`), then
   `npm run build` (`vite build`). The frontend is platform-independent, so it
   builds on the cheaper Linux runner.
-- **Rust (fmt, clippy, test)** — runs on **macOS**. Builds the frontend into
+- **Rust (fmt, clippy, test)** — runs on **macOS**, from `src-tauri/`. Builds the frontend into
   `build/` first (because `tauri::generate_context!` embeds it at compile time),
   then runs `cargo fmt --all --check`, `cargo clippy --all-targets -- -D warnings`,
   and `cargo test`. Running this job on macOS is deliberate: the AppKit-backed
@@ -35,7 +35,9 @@ The CI workflow has two parallel jobs:
   `Swatinem/rust-cache` caches the cargo build between runs.
 
 Lantenna's `src-tauri` is a single crate (not a Cargo workspace), so the cargo
-commands run without `--workspace`.
+commands run without `--workspace`. The Rust job sets
+`defaults.run.working-directory: src-tauri` (and `workspaces: src-tauri` on the
+cache), because there is no `Cargo.toml` at the repository root.
 
 Lantenna is built on **Tauri v2**. Because CI and releases run on macOS there are
 no Linux webview packages to install; a Tauri v2 project built on Linux would need
@@ -49,7 +51,8 @@ npm ci
 npm run check
 npm run build
 
-# Rust (run from the repository root, on macOS)
+# Rust (run from src-tauri/, on macOS; the crate is not at the repository root)
+cd src-tauri
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo test

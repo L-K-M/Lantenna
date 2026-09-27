@@ -1,6 +1,6 @@
 use crate::models::{
-    DeviceFingerprint, DiscoveryMode, Host, NetworkInterface, PortInfo, PortProfile, ScanOptions,
-    ScanProgress, ScanResult,
+    DeviceFingerprint, DiscoveryMode, FingerbankResult, Host, NetworkInterface, PortInfo,
+    PortProfile, ScanOptions, ScanPhase, ScanProgress, ScanResult,
 };
 use crate::storage::Storage;
 use anyhow::{Context, Result};
@@ -10,7 +10,7 @@ use if_addrs::{get_if_addrs, IfAddr};
 use ipnet::Ipv4Net;
 use ndb_oui::OuiDb;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Command as StdCommand;
@@ -19,11 +19,21 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, OnceLock,
 };
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use std::time::Instant;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::{sleep, timeout, Duration};
+
+/// Ports probed on every target address to find live hosts. A host is live
+/// when any of them answers, open or refused. On the local subnet each probe
+/// also makes the kernel ARP for the address, so hosts that silently drop the
+/// SYNs still turn up in the ARP table read right after the sweep.
+const DISCOVERY_PORTS: [u16; 5] = [22, 80, 443, 445, 62078];
+
+const HOSTNAME_LOOKUP_TIMEOUT: Duration = Duration::from_millis(250);
+const HOSTNAME_LOOKUP_CONCURRENCY: usize = 16;
 
 fn available_workers() -> usize {
     std::thread::available_parallelism()
@@ -218,6 +228,7 @@ pub fn list_network_interfaces() -> Result<Vec<NetworkInterface>> {
             cidr: prefix,
             subnet: format!("{}/{}", network, prefix),
             host_count,
+            is_default_route: false,
         });
     }
 
@@ -271,7 +282,6 @@ where
 
     let timeout_ms = options.timeout_ms.unwrap_or(350).clamp(50, 5000);
     let timeout_duration = Duration::from_millis(timeout_ms);
-    let ports = Arc::new(ports_for_profile(&options.port_profile));
     let workers = available_workers();
     let host_concurrency = host_concurrency_for_profile(&options.port_profile, workers);
     let port_concurrency = port_concurrency_for_profile(&options.port_profile, workers);
@@ -290,22 +300,33 @@ where
         timeout_ms
     );
 
+    let is_cancelled = || cancel_flag.load(Ordering::Relaxed);
+    let mut throttle = ProgressThrottle::new(PROGRESS_EVENT_INTERVAL);
+    let mut report_progress = |progress: ScanProgress| {
+        if throttle.should_emit(&progress, Instant::now()) {
+            on_progress(progress);
+        }
+    };
+
+    // Live hosts keyed by numeric address, so results come out in address order.
+    let mut hosts: BTreeMap<u32, Host> = BTreeMap::new();
+    // Hosts that answered a discovery probe. The others were found through ARP
+    // or ICMP and get the discovery ports probed again in the port phase.
+    let mut answered = HashSet::new();
+
+    // Phase 1: sweep every address with a few ports to find live hosts. Probing
+    // the full profile here made each empty address cost one timeout per profile
+    // port; now it costs one round of DISCOVERY_PORTS.
     let total = targets.len();
     let mut scanned = 0usize;
-    let mut found = 0usize;
-    let mut hosts = Vec::new();
-    let mut unreachable_targets = Vec::new();
+    let mut quiet_targets = Vec::new();
+    let discovery_ports = Arc::new(DISCOVERY_PORTS.to_vec());
+    let discovery_concurrency = (global_connection_limit / DISCOVERY_PORTS.len()).max(1) * 2;
 
-    on_progress(ScanProgress {
-        scanned,
-        total,
-        found,
-        running: true,
-        current_ip: None,
-    });
+    report_progress(scan_progress(ScanPhase::Discovery, 0, total, 0, true, None));
 
-    let mut stream = stream::iter(targets.into_iter().map(|ip| {
-        let ports = ports.clone();
+    let mut sweep = stream::iter(targets.into_iter().map(|ip| {
+        let discovery_ports = discovery_ports.clone();
         let cancel_flag = cancel_flag.clone();
         let connection_semaphore = connection_semaphore.clone();
         async move {
@@ -313,119 +334,300 @@ where
                 return (ip, None);
             }
 
-            let host = scan_host_internal(
+            let (open_ports, reachable) = scan_open_ports(
                 ip,
-                ports,
+                discovery_ports,
                 timeout_duration,
-                port_concurrency,
+                DISCOVERY_PORTS.len(),
                 connection_semaphore,
                 cancel_flag,
+                |_, _, _| {},
             )
             .await;
-            (ip, host)
+            if !reachable {
+                return (ip, None);
+            }
+
+            let name = resolve_hostname_with_timeout(ip, HOSTNAME_LOOKUP_TIMEOUT).await;
+            (ip, Some(discovered_host(ip, name, open_ports)))
         }
     }))
-    .buffer_unordered(host_concurrency);
+    .buffer_unordered(discovery_concurrency);
 
-    while let Some((current_ip, maybe_host)) = stream.next().await {
+    while let Some((ip, maybe_host)) = sweep.next().await {
         scanned += 1;
 
-        if let Some(host) = maybe_host {
-            found += 1;
-            on_host(host.clone());
-            hosts.push(host);
-        } else {
-            unreachable_targets.push(current_ip);
+        match maybe_host {
+            Some(host) => {
+                answered.insert(ip);
+                on_host(host.clone());
+                hosts.insert(ipv4_to_u32(ip), host);
+            }
+            None => quiet_targets.push(ip),
         }
 
-        let cancelled = cancel_flag.load(Ordering::Relaxed);
-        let current_ip_text = current_ip.to_string();
-
-        on_progress(ScanProgress {
+        let cancelled = is_cancelled();
+        report_progress(scan_progress(
+            ScanPhase::Discovery,
             scanned,
             total,
-            found,
-            running: !cancelled,
-            current_ip: Some(current_ip_text),
-        });
+            hosts.len(),
+            !cancelled,
+            Some(ip),
+        ));
 
         if cancelled {
             break;
         }
     }
+    drop(sweep);
 
-    let cancelled = cancel_flag.load(Ordering::Relaxed);
-    if !cancelled && !unreachable_targets.is_empty() {
-        let mut discovered_ips = hosts
-            .iter()
-            .filter_map(|host| Ipv4Addr::from_str(&host.ip).ok())
-            .collect::<HashSet<Ipv4Addr>>();
-
-        let arp_table = read_arp_table().await;
-        let arp_ips = arp_table
+    // Every probe above made the kernel ARP for its address, so on the local
+    // subnet the ARP table now lists live hosts that ignored all the SYNs.
+    // Read it right away: entries for hosts that never answered age out fast.
+    if !is_cancelled() && !quiet_targets.is_empty() {
+        let arp_ips = read_arp_table()
+            .await
             .keys()
             .filter_map(|ip| Ipv4Addr::from_str(ip).ok())
             .collect::<HashSet<Ipv4Addr>>();
 
-        let discovered_via_arp = unreachable_targets
-            .iter()
-            .copied()
-            .filter(|ip| arp_ips.contains(ip) && !discovered_ips.contains(ip))
-            .collect::<Vec<Ipv4Addr>>();
+        let (seen_in_arp, still_quiet): (Vec<Ipv4Addr>, Vec<Ipv4Addr>) = quiet_targets
+            .into_iter()
+            .partition(|ip| arp_ips.contains(ip));
+        quiet_targets = still_quiet;
 
-        for ip in &discovered_via_arp {
-            discovered_ips.insert(*ip);
+        for host in hosts_with_names(seen_in_arp).await {
+            on_host(host.clone());
+            hosts.insert(ipv4_to_u32(parse_ipv4_or_zero(&host.ip)), host);
         }
+    }
 
-        for ip in discovered_via_arp {
-            if cancel_flag.load(Ordering::Relaxed) {
-                break;
+    if options.discovery_mode == DiscoveryMode::Hybrid
+        && !is_cancelled()
+        && !quiet_targets.is_empty()
+    {
+        let quiet_total = quiet_targets.len();
+        let found_before_ping = hosts.len();
+        let icmp_timeout = Duration::from_millis(timeout_ms.clamp(200, 1200));
+
+        report_progress(scan_progress(
+            ScanPhase::Ping,
+            0,
+            quiet_total,
+            found_before_ping,
+            true,
+            None,
+        ));
+
+        let replies = discover_hosts_via_icmp(
+            quiet_targets,
+            icmp_timeout,
+            cancel_flag.clone(),
+            |checked, replied| {
+                report_progress(scan_progress(
+                    ScanPhase::Ping,
+                    checked,
+                    quiet_total,
+                    found_before_ping + replied,
+                    !is_cancelled(),
+                    None,
+                ));
+            },
+        )
+        .await;
+
+        for host in hosts_with_names(replies).await {
+            on_host(host.clone());
+            hosts.insert(ipv4_to_u32(parse_ipv4_or_zero(&host.ip)), host);
+        }
+    }
+
+    // Phase 2: run the chosen profile against live hosts only.
+    let live_total = hosts.len();
+    if !is_cancelled() && live_total > 0 {
+        let profile_ports = ports_for_profile(&options.port_profile);
+        let unprobed_ports = Arc::new(
+            profile_ports
+                .iter()
+                .copied()
+                .filter(|port| !DISCOVERY_PORTS.contains(port))
+                .collect::<Vec<u16>>(),
+        );
+        let all_profile_ports = Arc::new(profile_ports);
+        let live_ips = hosts
+            .keys()
+            .map(|raw_ip| Ipv4Addr::from(*raw_ip))
+            .collect::<Vec<Ipv4Addr>>();
+        let mut probed = 0usize;
+
+        report_progress(scan_progress(
+            ScanPhase::Ports,
+            0,
+            live_total,
+            live_total,
+            true,
+            None,
+        ));
+
+        let mut probes = stream::iter(live_ips.into_iter().map(|ip| {
+            // Hosts found via ARP or ping did not answer the discovery ports
+            // either; probe those again too, as a retry for devices that were
+            // slow to wake from power saving during the sweep.
+            let ports = if answered.contains(&ip) {
+                unprobed_ports.clone()
+            } else {
+                all_profile_ports.clone()
+            };
+            let cancel_flag = cancel_flag.clone();
+            let connection_semaphore = connection_semaphore.clone();
+            async move {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    return (ip, Vec::new());
+                }
+
+                let (open_ports, _) = scan_open_ports(
+                    ip,
+                    ports,
+                    timeout_duration,
+                    port_concurrency,
+                    connection_semaphore,
+                    cancel_flag,
+                    |_, _, _| {},
+                )
+                .await;
+                (ip, open_ports)
+            }
+        }))
+        .buffer_unordered(host_concurrency);
+
+        while let Some((ip, open_ports)) = probes.next().await {
+            probed += 1;
+
+            if let Some(host) = hosts.get_mut(&ipv4_to_u32(ip)) {
+                if !open_ports.is_empty() {
+                    merge_open_ports(&mut host.open_ports, open_ports);
+                    host.last_seen = Utc::now().to_rfc3339();
+                    on_host(host.clone());
+                }
             }
 
-            let name = resolve_hostname_with_timeout(ip, Duration::from_millis(250)).await;
-            let host = discovered_host(ip, name);
-            on_host(host.clone());
-            hosts.push(host);
-        }
+            let cancelled = is_cancelled();
+            report_progress(scan_progress(
+                ScanPhase::Ports,
+                probed,
+                live_total,
+                live_total,
+                !cancelled,
+                Some(ip),
+            ));
 
-        if options.discovery_mode == DiscoveryMode::Hybrid {
-            let icmp_candidates = unreachable_targets
-                .into_iter()
-                .filter(|ip| !discovered_ips.contains(ip))
-                .collect::<Vec<Ipv4Addr>>();
-
-            let icmp_timeout = Duration::from_millis(timeout_ms.clamp(200, 1200));
-            let discovered_via_icmp =
-                discover_hosts_via_icmp(icmp_candidates, icmp_timeout, cancel_flag.clone()).await;
-
-            for ip in discovered_via_icmp {
-                if cancel_flag.load(Ordering::Relaxed) {
-                    break;
-                }
-
-                if !discovered_ips.insert(ip) {
-                    continue;
-                }
-
-                let name = resolve_hostname_with_timeout(ip, Duration::from_millis(250)).await;
-                let host = discovered_host(ip, name);
-                on_host(host.clone());
-                hosts.push(host);
+            if cancelled {
+                break;
             }
         }
     }
 
-    hosts.sort_by(|a, b| {
-        ipv4_to_u32(parse_ipv4_or_zero(&a.ip)).cmp(&ipv4_to_u32(parse_ipv4_or_zero(&b.ip)))
-    });
+    let cancelled = is_cancelled();
+
+    // Enrichment runs after this returns; tell the UI what it is waiting for.
+    report_progress(scan_progress(
+        ScanPhase::Fingerprint,
+        0,
+        hosts.len(),
+        hosts.len(),
+        !cancelled,
+        None,
+    ));
 
     Ok(ScanResult {
         started_at,
         completed_at: Some(Utc::now().to_rfc3339()),
         cancelled,
-        hosts,
+        hosts: hosts.into_values().collect(),
         options,
     })
+}
+
+fn scan_progress(
+    phase: ScanPhase,
+    scanned: usize,
+    total: usize,
+    found: usize,
+    running: bool,
+    current_ip: Option<Ipv4Addr>,
+) -> ScanProgress {
+    ScanProgress {
+        phase,
+        scanned,
+        total,
+        found,
+        running,
+        current_ip: current_ip.map(|ip| ip.to_string()),
+    }
+}
+
+/// Minimum spacing between progress events within a phase. The UI redraws on
+/// every event, and one event per address made large scans stutter.
+const PROGRESS_EVENT_INTERVAL: Duration = Duration::from_millis(80);
+
+/// Rate-limits progress events. The first and last event of each phase, and
+/// any event of a stopped scan, always go through so the UI never shows a
+/// stale phase or count.
+struct ProgressThrottle {
+    interval: Duration,
+    last_emit: Option<Instant>,
+    last_phase: Option<ScanPhase>,
+}
+
+impl ProgressThrottle {
+    fn new(interval: Duration) -> Self {
+        Self {
+            interval,
+            last_emit: None,
+            last_phase: None,
+        }
+    }
+
+    fn should_emit(&mut self, progress: &ScanProgress, now: Instant) -> bool {
+        let phase_changed = self.last_phase != Some(progress.phase);
+        let boundary =
+            progress.scanned == 0 || progress.scanned >= progress.total || !progress.running;
+        let due = self
+            .last_emit
+            .is_none_or(|last| now.duration_since(last) >= self.interval);
+
+        if !(phase_changed || boundary || due) {
+            return false;
+        }
+
+        self.last_emit = Some(now);
+        self.last_phase = Some(progress.phase);
+        true
+    }
+}
+
+/// Adds newly found open ports to a host's list, keeping it sorted and free of
+/// duplicates.
+fn merge_open_ports(existing: &mut Vec<PortInfo>, found: Vec<PortInfo>) {
+    for port in found {
+        if !existing.iter().any(|known| known.port == port.port) {
+            existing.push(port);
+        }
+    }
+    existing.sort_by_key(|port| port.port);
+}
+
+/// Builds hosts for addresses that never answered TCP but showed up in ARP or
+/// replied to ping, resolving their names concurrently.
+async fn hosts_with_names(ips: Vec<Ipv4Addr>) -> Vec<Host> {
+    stream::iter(ips.into_iter().map(|ip| async move {
+        let name = resolve_hostname_with_timeout(ip, HOSTNAME_LOOKUP_TIMEOUT).await;
+        discovered_host(ip, name, Vec::new())
+    }))
+    .buffer_unordered(HOSTNAME_LOOKUP_CONCURRENCY)
+    .collect()
+    .await
 }
 
 pub async fn scan_single_host_with_progress<F>(
@@ -458,7 +660,7 @@ where
         on_progress,
     )
     .await;
-    let name = resolve_hostname_with_timeout(parsed_ip, Duration::from_millis(250)).await;
+    let name = resolve_hostname_with_timeout(parsed_ip, HOSTNAME_LOOKUP_TIMEOUT).await;
 
     Ok(Host {
         ip,
@@ -470,27 +672,35 @@ where
     })
 }
 
-fn discovered_host(ip: Ipv4Addr, name: Option<String>) -> Host {
+fn discovered_host(ip: Ipv4Addr, name: Option<String>, open_ports: Vec<PortInfo>) -> Host {
     Host {
         ip: ip.to_string(),
         name,
         reachable: true,
-        open_ports: Vec::new(),
+        open_ports,
         last_seen: Utc::now().to_rfc3339(),
         fingerprint: None,
     }
 }
 
-async fn discover_hosts_via_icmp(
+/// Pings `targets` and returns those that replied. `on_progress` receives the
+/// number of addresses checked and the number that replied so far.
+async fn discover_hosts_via_icmp<F>(
     targets: Vec<Ipv4Addr>,
     probe_timeout: Duration,
     cancel_flag: Arc<AtomicBool>,
-) -> Vec<Ipv4Addr> {
+    mut on_progress: F,
+) -> Vec<Ipv4Addr>
+where
+    F: FnMut(usize, usize),
+{
     if targets.is_empty() {
         return Vec::new();
     }
 
-    let concurrency = available_workers().clamp(4, 24);
+    // Each probe is a `ping` child that mostly sits waiting for a reply that
+    // never comes, so concurrency is bounded by process count, not CPU.
+    let concurrency = (available_workers() * 4).clamp(16, 48);
     let mut discovered = Vec::new();
 
     let mut stream = stream::iter(targets.into_iter().map(|ip| {
@@ -509,14 +719,17 @@ async fn discover_hosts_via_icmp(
     }))
     .buffer_unordered(concurrency);
 
+    let mut checked = 0usize;
     while let Some(result) = stream.next().await {
         if cancel_flag.load(Ordering::Relaxed) {
             break;
         }
 
+        checked += 1;
         if let Some(ip) = result {
             discovered.push(ip);
         }
+        on_progress(checked, discovered.len());
     }
 
     discovered.sort_by_key(|ip| ipv4_to_u32(*ip));
@@ -573,44 +786,6 @@ async fn ping_host(ip: Ipv4Addr, timeout_duration: Duration) -> bool {
         }
         Err(_) => false,
     }
-}
-
-async fn scan_host_internal(
-    ip: Ipv4Addr,
-    ports: Arc<Vec<u16>>,
-    timeout_duration: Duration,
-    port_concurrency: usize,
-    connection_semaphore: Arc<Semaphore>,
-    cancel_flag: Arc<AtomicBool>,
-) -> Option<Host> {
-    let (open_ports, reachable) = scan_open_ports(
-        ip,
-        ports,
-        timeout_duration,
-        port_concurrency,
-        connection_semaphore,
-        cancel_flag.clone(),
-        |_, _, _| {},
-    )
-    .await;
-    if !reachable {
-        return None;
-    }
-
-    if cancel_flag.load(Ordering::Relaxed) {
-        return None;
-    }
-
-    let name = resolve_hostname_with_timeout(ip, Duration::from_millis(250)).await;
-
-    Some(Host {
-        ip: ip.to_string(),
-        name,
-        reachable,
-        open_ports,
-        last_seen: Utc::now().to_rfc3339(),
-        fingerprint: None,
-    })
 }
 
 async fn scan_open_ports<F>(
@@ -680,6 +855,23 @@ async fn scan_port(
     timeout_duration: Duration,
     connection_semaphore: Arc<Semaphore>,
 ) -> Option<PortProbeOutcome> {
+    probe_port(
+        ip,
+        port,
+        banner_kind_for_port(port),
+        timeout_duration,
+        connection_semaphore,
+    )
+    .await
+}
+
+async fn probe_port(
+    ip: Ipv4Addr,
+    port: u16,
+    banner_kind: BannerKind,
+    timeout_duration: Duration,
+    connection_semaphore: Arc<Semaphore>,
+) -> Option<PortProbeOutcome> {
     const MAX_CONNECT_ATTEMPTS: usize = 2;
 
     let socket = SocketAddr::new(IpAddr::V4(ip), port);
@@ -688,7 +880,9 @@ async fn scan_port(
     for attempt in 1..=MAX_CONNECT_ATTEMPTS {
         match timeout(timeout_duration, TcpStream::connect(socket)).await {
             Ok(Ok(mut stream)) => {
-                let banner = grab_banner_for_port(ip, port, Duration::from_millis(500)).await;
+                // Read the banner on this connection rather than opening a
+                // second one: that doubled the sockets per open port.
+                let banner = read_banner(&mut stream, ip, banner_kind).await;
                 if let Err(error) = stream.shutdown().await {
                     log::debug!(
                         "graceful TCP shutdown failed for {}:{}: {}",
@@ -785,9 +979,9 @@ pub async fn enrich_hosts_with_cache(hosts: Vec<Host>, storage: Arc<Storage>) ->
     let concurrency = enrichment_concurrency().min(hosts.len().max(1));
 
     let mut indexed_hosts = Vec::with_capacity(hosts.len());
-    let mut new_fingerprints = Vec::new();
+    let mut new_fingerbank_results = Vec::new();
 
-    let mut stream = stream::iter(hosts.into_iter().enumerate().map(|(index, host)| {
+    let mut stream = stream::iter(hosts.into_iter().enumerate().map(|(index, mut host)| {
         let storage = storage.clone();
         let arp_table = arp_table.clone();
         let mdns_services_by_host = mdns_services_by_host.clone();
@@ -799,19 +993,19 @@ pub async fn enrich_hosts_with_cache(hosts: Vec<Host>, storage: Arc<Storage>) ->
                 .and_then(|ip| mdns_services_by_host.get(&ip))
                 .map(|services| services.as_slice())
                 .unwrap_or_default();
-            let (enriched_host, cache_entry) =
-                enrich_host_internal(host, mac, mdns_services, &storage, pending_vendor_cache)
-                    .await;
-            (index, enriched_host, cache_entry)
+            let (fingerprint, fingerbank_result) =
+                build_fingerprint(&host, mac, mdns_services, &storage, pending_vendor_cache).await;
+            host.fingerprint = Some(fingerprint);
+            (index, host, fingerbank_result)
         }
     }))
     .buffer_unordered(concurrency);
 
-    while let Some((index, enriched_host, cache_entry)) = stream.next().await {
+    while let Some((index, enriched_host, fingerbank_result)) = stream.next().await {
         indexed_hosts.push((index, enriched_host));
 
-        if let Some(entry) = cache_entry {
-            new_fingerprints.push(entry);
+        if let Some(entry) = fingerbank_result {
+            new_fingerbank_results.push(entry);
         }
     }
 
@@ -827,14 +1021,14 @@ pub async fn enrich_hosts_with_cache(hosts: Vec<Host>, storage: Arc<Storage>) ->
         log::warn!("Failed to persist OUI vendor cache: {}", error);
     }
 
-    if let Err(error) = storage.cache_fingerprints(new_fingerprints) {
-        log::warn!("Failed to persist fingerprint cache: {}", error);
+    if let Err(error) = storage.cache_fingerbank_results(new_fingerbank_results) {
+        log::warn!("Failed to persist Fingerbank cache: {}", error);
     }
 
     enriched_hosts
 }
 
-pub async fn enrich_host_with_cache(host: Host, storage: Arc<Storage>) -> Host {
+pub async fn enrich_host_with_cache(mut host: Host, storage: Arc<Storage>) -> Host {
     let arp_table = read_arp_table().await;
     let mac = arp_table.get(&host.ip).cloned();
     let mdns_services_by_host = sweep_mdns_services().await;
@@ -845,13 +1039,19 @@ pub async fn enrich_host_with_cache(host: Host, storage: Arc<Storage>) -> Host {
         .unwrap_or_default();
     let pending_vendor_cache: SharedVendorCache = Arc::new(Mutex::new(HashMap::new()));
 
-    let (enriched_host, cache_entry) =
-        enrich_host_internal(host, mac, mdns_services, &storage, pending_vendor_cache.clone())
-            .await;
+    let (fingerprint, fingerbank_result) = build_fingerprint(
+        &host,
+        mac,
+        mdns_services,
+        &storage,
+        pending_vendor_cache.clone(),
+    )
+    .await;
+    host.fingerprint = Some(fingerprint);
 
-    if let Some((key, fingerprint)) = cache_entry {
-        if let Err(error) = storage.cache_fingerprints(vec![(key, fingerprint)]) {
-            log::warn!("Failed to persist fingerprint cache: {}", error);
+    if let Some(entry) = fingerbank_result {
+        if let Err(error) = storage.cache_fingerbank_results(vec![entry]) {
+            log::warn!("Failed to persist Fingerbank cache: {}", error);
         }
     }
 
@@ -861,67 +1061,20 @@ pub async fn enrich_host_with_cache(host: Host, storage: Arc<Storage>) -> Host {
         log::warn!("Failed to persist OUI vendor cache: {}", error);
     }
 
-    enriched_host
+    host
 }
 
-async fn enrich_host_internal(
-    mut host: Host,
-    mac_from_arp: Option<String>,
-    mdns_services: &[DiscoveredService],
-    storage: &Arc<Storage>,
-    pending_vendor_cache: SharedVendorCache,
-) -> (Host, Option<(String, DeviceFingerprint)>) {
-    let mac_address = mac_from_arp.or_else(|| {
-        host.fingerprint
-            .as_ref()
-            .and_then(|item| item.mac_address.clone())
-    });
-
-    let primary_key = fingerprint_cache_key(mac_address.as_deref(), &host.ip);
-    if let Ok(Some(mut cached)) = storage.get_cached_fingerprint(&primary_key) {
-        if cached.mac_address.is_none() {
-            cached.mac_address = mac_address;
-        }
-        host.fingerprint = Some(cached);
-        return (host, None);
-    }
-
-    let fallback_key = if primary_key.starts_with("mac:") {
-        Some(format!("ip:{}", host.ip))
-    } else {
-        None
-    };
-
-    if let Some(ref key) = fallback_key {
-        if let Ok(Some(mut cached)) = storage.get_cached_fingerprint(key) {
-            if cached.mac_address.is_none() {
-                cached.mac_address = mac_address.clone();
-            }
-            host.fingerprint = Some(cached.clone());
-            return (host, Some((primary_key, cached)));
-        }
-    }
-
-    let fingerprint = build_fingerprint(
-        &host,
-        mac_address,
-        mdns_services,
-        storage,
-        pending_vendor_cache,
-    )
-    .await;
-    host.fingerprint = Some(fingerprint.clone());
-
-    (host, Some((primary_key, fingerprint)))
-}
-
+/// Builds a host's fingerprint from what the latest scan saw. Everything is
+/// recomputed each time so types, OS guesses and notes follow the current
+/// ports; only network lookups (OUI vendor, Fingerbank) come from caches.
+/// Returns a new Fingerbank answer to cache, if one was fetched.
 async fn build_fingerprint(
     host: &Host,
     mac_address: Option<String>,
     mdns_services: &[DiscoveredService],
     storage: &Arc<Storage>,
     pending_vendor_cache: SharedVendorCache,
-) -> DeviceFingerprint {
+) -> (DeviceFingerprint, Option<(String, FingerbankResult)>) {
     let mut sources = Vec::new();
     let mut notes = Vec::new();
     let mut discovered_services = Vec::new();
@@ -931,6 +1084,11 @@ async fn build_fingerprint(
     }
 
     let oui = mac_address.as_deref().and_then(oui_from_mac);
+    // Randomized "private" addresses (phones, tablets, VMs, containers) have
+    // no registered vendor, so online lookups would only leak an identifier.
+    let private_mac = mac_address
+        .as_deref()
+        .is_some_and(is_locally_administered_mac);
 
     let mut vendor = None;
     if let Some(ref oui_value) = oui {
@@ -943,11 +1101,9 @@ async fn build_fingerprint(
         }
 
         if vendor.is_none() {
-            if let Ok(cached_vendor) = storage.get_cached_vendor(oui_value) {
-                if let Some(value) = cached_vendor {
-                    vendor = Some(value);
-                    sources.push("oui-cache".to_string());
-                }
+            if let Ok(Some(value)) = storage.get_cached_vendor(oui_value) {
+                vendor = Some(value);
+                sources.push("oui-cache".to_string());
             }
         }
 
@@ -965,17 +1121,20 @@ async fn build_fingerprint(
         }
     }
 
-    if vendor.is_none() {
-        if let Some(ref mac) = mac_address {
-            if let Some(lookup_vendor) = lookup_vendor_via_maclookup(mac).await {
-                if let Some(ref oui_value) = oui {
-                    let mut cache = pending_vendor_cache.lock().await;
-                    cache.insert(oui_value.clone(), lookup_vendor.clone());
-                }
+    if vendor.is_none() && !private_mac {
+        if let Some(ref oui_value) = oui {
+            if let Some(lookup_vendor) = lookup_vendor_via_maclookup(oui_value).await {
+                let mut cache = pending_vendor_cache.lock().await;
+                cache.insert(oui_value.clone(), lookup_vendor.clone());
                 vendor = Some(lookup_vendor);
                 sources.push("maclookup-app".to_string());
             }
         }
+    }
+
+    if private_mac && vendor.is_none() {
+        notes
+            .push("private (randomized) MAC address, so there is no vendor to look up".to_string());
     }
 
     let mut manufacturer = vendor.clone();
@@ -984,15 +1143,49 @@ async fn build_fingerprint(
     let mut os_guess = None;
     let mut confidence = 10u8;
 
-    if let Some(mac) = mac_address.as_deref() {
-        if let Some(fingerbank) = lookup_fingerbank(mac, host.name.as_deref()).await {
-            sources.push("fingerbank".to_string());
+    let mut fingerbank_to_cache = None;
+    if let Some(mac) = mac_address.as_deref().filter(|_| !private_mac) {
+        let cached = match storage.get_cached_fingerbank(mac) {
+            Ok(cached) => cached,
+            Err(error) => {
+                log::warn!("Failed to read Fingerbank cache for {}: {}", mac, error);
+                None
+            }
+        };
+        let from_cache = cached.is_some();
+
+        let fingerbank = match cached {
+            Some(result) => Some(result),
+            None => match lookup_fingerbank(mac, host.name.as_deref()).await {
+                FingerbankLookup::Found(result) => {
+                    fingerbank_to_cache = Some((mac.to_string(), result.clone()));
+                    Some(result)
+                }
+                FingerbankLookup::NoMatch => {
+                    let no_match = FingerbankResult::no_match(Utc::now().to_rfc3339());
+                    fingerbank_to_cache = Some((mac.to_string(), no_match));
+                    None
+                }
+                FingerbankLookup::Unavailable => None,
+            },
+        }
+        .filter(|result| !result.is_no_match());
+
+        if let Some(fingerbank) = fingerbank {
+            sources.push(
+                if from_cache {
+                    "fingerbank-cache"
+                } else {
+                    "fingerbank"
+                }
+                .to_string(),
+            );
 
             if manufacturer.is_none() {
-                manufacturer = fingerbank.manufacturer.clone();
+                manufacturer = fingerbank.vendor.clone();
             }
             if vendor.is_none() {
-                vendor = fingerbank.vendor.clone().or_else(|| manufacturer.clone());
+                vendor = fingerbank.vendor.clone();
             }
 
             model_guess = fingerbank.model.or(model_guess);
@@ -1028,7 +1221,13 @@ async fn build_fingerprint(
                 notes.push(format!("mDNS service: {}", name));
             }
         }
-        infer_device_from_mdns(mdns_services, &mut device_type, &mut model_guess, &mut notes);
+        infer_device_from_mdns(
+            mdns_services,
+            &mut device_type,
+            &mut os_guess,
+            &mut model_guess,
+            &mut notes,
+        );
         confidence = confidence.saturating_add(10);
     }
 
@@ -1085,7 +1284,7 @@ async fn build_fingerprint(
     dedup_strings(&mut notes);
     dedup_strings(&mut discovered_services);
 
-    DeviceFingerprint {
+    let fingerprint = DeviceFingerprint {
         mac_address,
         oui,
         vendor,
@@ -1098,7 +1297,9 @@ async fn build_fingerprint(
         notes,
         discovered_services,
         last_updated: Utc::now().to_rfc3339(),
-    }
+    };
+
+    (fingerprint, fingerbank_to_cache)
 }
 
 fn extract_os_from_banners(ports: &[PortInfo]) -> Option<(Option<String>, Option<String>)> {
@@ -1108,7 +1309,7 @@ fn extract_os_from_banners(ports: &[PortInfo]) -> Option<(Option<String>, Option
                 if let Some((software, os)) = parse_ssh_banner(banner) {
                     return Some((software, os));
                 }
-            } else if port.port == 80 || port.port == 443 || port.port == 8080 {
+            } else if banner_kind_for_port(port.port) == BannerKind::HttpServerHeader {
                 if let Some((software, os)) = parse_http_server_banner(banner) {
                     return Some((software, os));
                 }
@@ -1121,12 +1322,16 @@ fn extract_os_from_banners(ports: &[PortInfo]) -> Option<(Option<String>, Option
 fn infer_device_from_mdns(
     services: &[DiscoveredService],
     device_type: &mut Option<String>,
+    os_guess: &mut Option<String>,
     model_guess: &mut Option<String>,
     notes: &mut Vec<String>,
 ) {
     let service_types: Vec<&str> = services.iter().map(|s| s.service_type.as_str()).collect();
 
-    if service_types.iter().any(|s| s.contains("airplay") || s.contains("raop")) {
+    if service_types
+        .iter()
+        .any(|s| s.contains("airplay") || s.contains("raop"))
+    {
         set_if_none(device_type, "Media device");
         set_if_none(model_guess, "Apple AirPlay device");
         notes.push("AirPlay service detected via mDNS".to_string());
@@ -1138,13 +1343,19 @@ fn infer_device_from_mdns(
         notes.push("Google Cast service detected via mDNS".to_string());
     }
 
-    if service_types.iter().any(|s| s.contains("hap") || s.contains("homekit")) {
+    if service_types
+        .iter()
+        .any(|s| s.contains("hap") || s.contains("homekit"))
+    {
         set_if_none(device_type, "IoT device");
         set_if_none(model_guess, "Apple HomeKit device");
         notes.push("HomeKit service detected via mDNS".to_string());
     }
 
-    if service_types.iter().any(|s| s.contains("ipp") || s.contains("printer")) {
+    if service_types
+        .iter()
+        .any(|s| s.contains("ipp") || s.contains("printer"))
+    {
         set_if_none(device_type, "Printer");
         notes.push("Printer service detected via mDNS".to_string());
     }
@@ -1155,31 +1366,29 @@ fn infer_device_from_mdns(
         notes.push("Spotify Connect service detected via mDNS".to_string());
     }
 
-    if service_types.iter().any(|s| s.contains("smb") || s.contains("afpovertcp")) {
+    if service_types
+        .iter()
+        .any(|s| s.contains("smb") || s.contains("afpovertcp"))
+    {
         set_if_none(device_type, "File server");
         notes.push("File sharing service detected via mDNS".to_string());
     }
 
     if service_types.iter().any(|s| s.contains("companion-link")) {
         set_if_none(device_type, "Apple device");
+        set_if_none(os_guess, "Apple OS family");
         set_if_none(model_guess, "Apple Mac/iOS device");
         notes.push("Apple Companion Link detected via mDNS".to_string());
     }
 
-    if service_types.iter().any(|s| s.contains("daap") || s.contains("dacp")) {
+    if service_types
+        .iter()
+        .any(|s| s.contains("daap") || s.contains("dacp"))
+    {
         set_if_none(device_type, "Media device");
         set_if_none(model_guess, "Apple iTunes/Home Sharing device");
         notes.push("Apple media sharing detected via mDNS".to_string());
     }
-}
-
-struct FingerbankFingerprint {
-    vendor: Option<String>,
-    manufacturer: Option<String>,
-    model: Option<String>,
-    device_type: Option<String>,
-    os_guess: Option<String>,
-    confidence: Option<u8>,
 }
 
 fn dedup_strings(values: &mut Vec<String>) {
@@ -1187,12 +1396,13 @@ fn dedup_strings(values: &mut Vec<String>) {
     values.retain(|item| seen.insert(item.to_ascii_lowercase()));
 }
 
-fn fingerprint_cache_key(mac: Option<&str>, ip: &str) -> String {
-    if let Some(value) = mac {
-        format!("mac:{}", value)
-    } else {
-        format!("ip:{}", ip)
-    }
+/// True for locally administered MACs (bit 0x02 of the first octet): the
+/// randomized "private" addresses of phones and tablets, plus VMs and
+/// containers. They have no registered vendor.
+fn is_locally_administered_mac(mac: &str) -> bool {
+    normalize_mac(mac)
+        .and_then(|normalized| u8::from_str_radix(&normalized[..2], 16).ok())
+        .is_some_and(|first_octet| first_octet & 0x02 != 0)
 }
 
 fn oui_from_mac(mac: &str) -> Option<String> {
@@ -1322,10 +1532,17 @@ fn http_client() -> &'static reqwest::Client {
     })
 }
 
-async fn lookup_vendor_via_maclookup(mac: &str) -> Option<String> {
-    let url = format!("https://api.maclookup.app/v2/macs/{}", mac);
+/// Vendor lookups need only the OUI (the first three octets), so that is all
+/// that leaves the machine. The API accepts `AA:BB:CC`. Vendors on MA-M and
+/// MA-S blocks (28- and 36-bit prefixes) resolve to the block owner, but the
+/// bundled local database, consulted first, covers most of those.
+fn maclookup_url(oui: &str) -> String {
+    format!("https://api.maclookup.app/v2/macs/{}", oui)
+}
+
+async fn lookup_vendor_via_maclookup(oui: &str) -> Option<String> {
     let response = http_client()
-        .get(url)
+        .get(maclookup_url(oui))
         .timeout(std::time::Duration::from_secs(2))
         .send()
         .await
@@ -1357,7 +1574,21 @@ struct FingerbankQueryParams<'a> {
     fqdn: Option<&'a str>,
 }
 
-async fn lookup_fingerbank_with_params(params: FingerbankQueryParams<'_>) -> Option<FingerbankFingerprint> {
+/// Outcome of a Fingerbank query. Only `Found` and `NoMatch` are cached;
+/// `Unavailable` (no API key, network or server error) is retried next scan.
+enum FingerbankLookup {
+    Found(FingerbankResult),
+    NoMatch,
+    Unavailable,
+}
+
+async fn lookup_fingerbank_with_params(params: FingerbankQueryParams<'_>) -> FingerbankLookup {
+    lookup_fingerbank_response(params)
+        .await
+        .unwrap_or(FingerbankLookup::Unavailable)
+}
+
+async fn lookup_fingerbank_response(params: FingerbankQueryParams<'_>) -> Option<FingerbankLookup> {
     let api_key = std::env::var("FINGERBANK_API_KEY").ok()?;
 
     let mut request = http_client()
@@ -1391,6 +1622,10 @@ async fn lookup_fingerbank_with_params(params: FingerbankQueryParams<'_>) -> Opt
         .send()
         .await
         .ok()?;
+
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Some(FingerbankLookup::NoMatch);
+    }
 
     if !response.status().is_success() {
         return None;
@@ -1434,17 +1669,17 @@ async fn lookup_fingerbank_with_params(params: FingerbankQueryParams<'_>) -> Opt
         string_at_path(&value, &["device", "device_type"]),
     ]);
 
-    Some(FingerbankFingerprint {
-        vendor: vendor.clone(),
-        manufacturer: vendor,
+    Some(FingerbankLookup::Found(FingerbankResult {
+        vendor,
         model,
         device_type,
         os_guess,
         confidence,
-    })
+        fetched_at: Utc::now().to_rfc3339(),
+    }))
 }
 
-async fn lookup_fingerbank(mac: &str, hostname: Option<&str>) -> Option<FingerbankFingerprint> {
+async fn lookup_fingerbank(mac: &str, hostname: Option<&str>) -> FingerbankLookup {
     lookup_fingerbank_with_params(FingerbankQueryParams {
         mac,
         hostname,
@@ -1484,6 +1719,9 @@ fn infer_device_profile(
     let hint_text = format!("{} {} {}", host_hints, vendor_hints, manufacturer_hints);
 
     let contains_hint = |needles: &[&str]| contains_any_hint(&hint_text, needles);
+    // Name hints with no port evidence behind them must match whole words:
+    // "pineapple" is not Apple, and "ipadmin" is not an iPad.
+    let contains_word_hint = |needles: &[&str]| contains_any_word_hint(&hint_text, needles);
 
     let has = |port: u16| ports.contains(&port);
     let has_any = |group: &[u16]| group.iter().any(|port| ports.contains(port));
@@ -1553,14 +1791,12 @@ fn infer_device_profile(
         notes.push("Plex signature detected (port 32400)".to_string());
     }
 
-    if has(62078)
-        || (contains_hint(&["iphone", "ipad", "ios", "apple watch"]) && has_any(&[5353, 62078]))
-    {
+    if has(62078) || contains_word_hint(&["iphone", "ipad", "apple watch"]) {
         set_if_none(&mut inferred_type, "Mobile device");
         set_if_none(&mut inferred_os, "Apple iOS/iPadOS family");
         set_if_none(&mut inferred_model, "Apple mobile device");
         confidence_boost = confidence_boost.saturating_add(24);
-        notes.push("Apple mobile sync signature detected (port 62078)".to_string());
+        notes.push("Apple mobile sync port (62078) or device name detected".to_string());
     }
 
     if (has_any(&[5000, 5001]) && contains_hint(&["synology", "diskstation", "dsm", "nas"]))
@@ -1574,11 +1810,26 @@ fn infer_device_profile(
         notes.push("NAS management + file sharing signature detected".to_string());
     }
 
-    if has_any(&[7000, 7001, 3689]) && has(5353) {
+    // Apple before the SMB/SSH rules below: a Mac with file sharing or remote
+    // login enabled used to come out as "Windows-like" or "Linux". Only the
+    // vendor or name implies Apple: AFP and DAAP are also served by netatalk,
+    // older NAS firmware, owntone and iTunes for Windows.
+    if contains_word_hint(&[
+        "apple",
+        "macbook",
+        "macbookpro",
+        "macbookair",
+        "imac",
+        "mac mini",
+        "mac studio",
+    ]) {
         set_if_none(&mut inferred_type, "Apple device");
         set_if_none(&mut inferred_os, "Apple OS family");
         confidence_boost = confidence_boost.saturating_add(16);
-        notes.push("Bonjour/AirPlay-style Apple service profile detected".to_string());
+        notes.push("Apple vendor or device name detected".to_string());
+    } else if has_any(&[548, 3689]) {
+        confidence_boost = confidence_boost.saturating_add(6);
+        notes.push("AFP/DAAP file or media sharing detected".to_string());
     }
 
     if has_any(&[6443, 2375]) {
@@ -1631,21 +1882,20 @@ fn infer_device_profile(
         notes.push("virtualization vendor signature detected".to_string());
     }
 
-    if has_any(&[445, 139, 3389]) {
+    // SMB alone says nothing about the OS: Macs, NAS boxes and Samba servers
+    // all serve it. MS-RPC and RDP are the Windows-specific signals.
+    if has_any(&[135, 3389]) {
         set_if_none(&mut inferred_type, "Workstation/Server");
         set_if_none(&mut inferred_os, "Windows-like");
         confidence_boost = confidence_boost.saturating_add(16);
-        notes.push("SMB/RDP ports suggest a Windows host".to_string());
+        notes.push("MS-RPC/RDP ports suggest a Windows host".to_string());
+    } else if has_any(&[445, 139]) {
+        set_if_none(&mut inferred_type, "Workstation/Server");
+        confidence_boost = confidence_boost.saturating_add(8);
+        notes.push("SMB file sharing detected".to_string());
     }
 
-    if has_any(&[548, 5353, 62078]) {
-        set_if_none(&mut inferred_type, "Apple device");
-        set_if_none(&mut inferred_os, "Apple OS family");
-        confidence_boost = confidence_boost.saturating_add(14);
-        notes.push("AFP/mDNS/mobile sync ports suggest an Apple device".to_string());
-    }
-
-    if has(22) && !has_any(&[445, 139]) {
+    if has(22) && !has_any(&[135, 3389]) {
         set_if_none(&mut inferred_type, "Workstation/Server");
         set_if_none(&mut inferred_os, "Linux/Unix-like");
         confidence_boost = confidence_boost.saturating_add(12);
@@ -1675,11 +1925,7 @@ fn set_if_none(slot: &mut Option<String>, value: &str) {
 }
 
 fn normalize_hint_text(value: &str) -> String {
-    let lowered = value
-        .to_lowercase()
-        .replace('-', " ")
-        .replace('_', " ")
-        .replace('.', " ");
+    let lowered = value.to_lowercase().replace(['-', '_', '.'], " ");
 
     lowered
         .chars()
@@ -1695,6 +1941,38 @@ fn normalize_hint_text(value: &str) -> String {
 
 fn contains_any_hint(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
+}
+
+/// Like `contains_any_hint`, but a needle only matches whole words of the
+/// `normalize_hint_text` output. The needle's last word may carry a digit
+/// suffix ("iphone13", "imac27"), and a multi-word needle also matches its
+/// space-less compound ("applewatch"). "ipadmin01" still isn't an iPad.
+fn contains_any_word_hint(haystack: &str, needles: &[&str]) -> bool {
+    let words: Vec<&str> = haystack.split_whitespace().collect();
+
+    needles.iter().any(|needle| {
+        let parts: Vec<&str> = needle.split_whitespace().collect();
+        if parts.is_empty() {
+            return false;
+        }
+
+        let joined = parts.concat();
+        let matches_part = |index: usize, word: &str| {
+            let part = parts[index];
+            word == part
+                || (index + 1 == parts.len()
+                    && word
+                        .strip_prefix(part)
+                        .is_some_and(|rest| rest.chars().all(|ch| ch.is_ascii_digit())))
+        };
+
+        words.windows(parts.len()).any(|window| {
+            window
+                .iter()
+                .enumerate()
+                .all(|(index, word)| matches_part(index, word))
+        }) || words.contains(&joined.as_str())
+    })
 }
 
 fn first_non_empty(values: Vec<Option<String>>) -> Option<String> {
@@ -1744,46 +2022,67 @@ fn number_at_paths(value: &Value, paths: Vec<Vec<&str>>) -> Option<f64> {
     None
 }
 
-fn append_signature_ports(mut ports: Vec<u16>, extras: &[u16]) -> Vec<u16> {
-    for port in extras {
-        if !ports.contains(port) {
-            ports.push(*port);
-        }
+/// Ports every profile probes because the device heuristics and icons key
+/// off them: web UIs, SSH, SMB, RDP, printers (IPP, JetDirect), cameras
+/// (RTSP), Apple (AFP, AirPlay, iOS sync), Google Cast, Plex, NAS admin,
+/// MQTT and Home Assistant.
+const SIGNATURE_PORTS: [u16; 19] = [
+    22, 80, 443, 445, 548, 554, 631, 1883, 3389, 5000, 5001, 7000, 8009, 8080, 8123, 8443, 9100,
+    32400, 62078,
+];
+
+/// Common services added by Quick on top of the signature ports.
+const QUICK_EXTRA_PORTS: [u16; 10] = [21, 23, 53, 110, 135, 139, 143, 515, 5900, 8000];
+
+/// Services added by Standard (and Deep) on top of Quick. TCP only: UDP-only
+/// services such as DHCP, NTP, SNMP, SSDP and mDNS can't answer a TCP probe.
+const STANDARD_EXTRA_PORTS: [u16; 42] = [
+    25, 88, 111, 119, 389, 465, 587, 636, 873, 993, 995, 1080, 1194, 1433, 1521, 1723, 2049, 2375,
+    3000, 3306, 3689, 5060, 5432, 5672, 6053, 6379, 6443, 7001, 8008, 8081, 8291, 8554, 8728, 8729,
+    8883, 8888, 9000, 9090, 9200, 27017, 37777, 37778,
+];
+
+/// Deep scans every port up to this one, plus the Standard ports above it.
+const DEEP_RANGE_END: u16 = 2048;
+
+/// Port list for a profile. Each profile probes everything the lighter ones
+/// do, so a deeper scan never loses a service a lighter one found.
+fn ports_for_profile(profile: &PortProfile) -> Vec<u16> {
+    let mut ports = SIGNATURE_PORTS.to_vec();
+    ports.extend_from_slice(&QUICK_EXTRA_PORTS);
+
+    if matches!(profile, PortProfile::Standard | PortProfile::Deep) {
+        ports.extend_from_slice(&STANDARD_EXTRA_PORTS);
+    }
+
+    if matches!(profile, PortProfile::Deep) {
+        ports.extend(1..=DEEP_RANGE_END);
     }
 
     ports.sort_unstable();
+    ports.dedup();
     ports
-}
-
-fn ports_for_profile(profile: &PortProfile) -> Vec<u16> {
-    match profile {
-        PortProfile::Quick => append_signature_ports(
-            vec![
-                20, 21, 22, 23, 53, 80, 110, 139, 143, 443, 445, 515, 548, 631, 135, 3389, 5000,
-                5353, 5900, 8000, 8080, 8443,
-            ],
-            &[554, 5001, 62078, 32400],
-        ),
-        PortProfile::Standard => append_signature_ports(
-            vec![
-                20, 21, 22, 23, 25, 53, 67, 68, 69, 80, 88, 110, 111, 119, 123, 135, 137, 138, 139,
-                143, 161, 389, 443, 445, 465, 500, 514, 515, 548, 587, 631, 636, 873, 993, 995,
-                1080, 1194, 1433, 1521, 1723, 1812, 1900, 2049, 2375, 3000, 3306, 3389, 5000, 5060,
-                5353, 5432, 5672, 5900, 6379, 6443, 7001, 8000, 8080, 8081, 8443, 8888, 9000, 9090,
-                9200, 27017,
-            ],
-            &[554, 5001, 62078, 32400, 8291, 8728, 8729, 37777, 37778],
-        ),
-        PortProfile::Deep => append_signature_ports(
-            (1..=2048).collect(),
-            &[5000, 5001, 62078, 32400, 8291, 8728, 8729, 37777, 37778],
-        ),
-    }
 }
 
 fn service_name(port: u16) -> Option<&'static str> {
     match port {
         20 => Some("ftp-data"),
+        88 => Some("kerberos"),
+        119 => Some("nntp"),
+        873 => Some("rsync"),
+        1080 => Some("socks"),
+        1194 => Some("openvpn"),
+        1883 => Some("mqtt"),
+        3689 => Some("daap"),
+        6053 => Some("esphome"),
+        7000 => Some("airplay"),
+        8008 => Some("http-alt"),
+        8009 => Some("cast"),
+        8081 => Some("http-alt"),
+        8123 => Some("home-assistant"),
+        8883 => Some("mqtt-tls"),
+        8888 => Some("http-alt"),
+        9100 => Some("jetdirect"),
         21 => Some("ftp"),
         22 => Some("ssh"),
         23 => Some("telnet"),
@@ -1873,85 +2172,114 @@ pub struct DiscoveredService {
     pub properties: HashMap<String, String>,
 }
 
-async fn grab_ssh_banner(ip: Ipv4Addr, port: u16, timeout_duration: Duration) -> Option<String> {
-    let socket = SocketAddr::new(IpAddr::V4(ip), port);
-    let stream = timeout(timeout_duration, TcpStream::connect(socket))
-        .await
-        .ok()?
-        .ok()?;
-    let (reader, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(reader);
-    let mut line = String::new();
-    let result = timeout(Duration::from_millis(500), reader.read_line(&mut line))
-        .await
-        .ok()?
-        .ok()?;
-    if result > 0 {
-        let banner = line.trim().to_string();
-        if banner.starts_with("SSH-") {
-            let _ = writer.shutdown().await;
-            return Some(banner);
-        }
-    }
-    None
+/// What to read from a port right after it accepts the probe connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BannerKind {
+    /// The server speaks first (SSH, FTP): read its greeting line.
+    ServerGreeting,
+    /// Send a plain-HTTP `HEAD` and read the `Server` header.
+    HttpServerHeader,
+    /// Nothing to read. This includes TLS ports, where a plaintext request
+    /// only burns the read timeout.
+    None,
 }
 
-async fn grab_http_banner(ip: Ipv4Addr, port: u16, timeout_duration: Duration) -> Option<String> {
-    let socket = SocketAddr::new(IpAddr::V4(ip), port);
-    let mut stream = timeout(timeout_duration, TcpStream::connect(socket))
-        .await
-        .ok()?
-        .ok()?;
-    let request = format!(
-        "HEAD / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        ip
-    );
-    let _ = stream.write_all(request.as_bytes()).await;
-    let mut response = vec![0u8; 4096];
-    let n = timeout(Duration::from_millis(1000), stream.read(&mut response))
-        .await
-        .ok()?
-        .ok()?;
-    if let Ok(text) = std::str::from_utf8(&response[..n]) {
-        for line in text.lines() {
-            if let Some(server) = line.strip_prefix("Server: ") {
-                let _ = stream.shutdown().await;
-                return Some(server.trim().to_string());
+/// Plain-HTTP ports whose `Server` header is worth reading. TLS ports (443,
+/// 5001, 8443, ...) are deliberately absent.
+const HTTP_BANNER_PORTS: [u16; 11] = [
+    80, 631, 3000, 5000, 8000, 8008, 8080, 8081, 8123, 8888, 9000,
+];
+
+const GREETING_READ_TIMEOUT: Duration = Duration::from_millis(500);
+const HTTP_READ_TIMEOUT: Duration = Duration::from_millis(1000);
+const MAX_BANNER_READ_BYTES: usize = 8 * 1024;
+const MAX_BANNER_CHARS: usize = 200;
+
+fn banner_kind_for_port(port: u16) -> BannerKind {
+    match port {
+        21 | 22 | 25 | 587 => BannerKind::ServerGreeting,
+        port if HTTP_BANNER_PORTS.contains(&port) => BannerKind::HttpServerHeader,
+        _ => BannerKind::None,
+    }
+}
+
+async fn read_banner(stream: &mut TcpStream, ip: Ipv4Addr, kind: BannerKind) -> Option<String> {
+    match kind {
+        BannerKind::None => None,
+        BannerKind::ServerGreeting => {
+            let data =
+                read_until(stream, GREETING_READ_TIMEOUT, |data| data.contains(&b'\n')).await;
+            let text = String::from_utf8_lossy(&data);
+            let line = text.lines().next()?.trim();
+            // SSH identification string, or an FTP/SMTP-style "220" greeting.
+            if line.starts_with("SSH-") || line.starts_with("220") {
+                sanitize_banner(line)
+            } else {
+                None
             }
         }
-    }
-    None
-}
-
-async fn grab_ftp_banner(ip: Ipv4Addr, port: u16, timeout_duration: Duration) -> Option<String> {
-    let socket = SocketAddr::new(IpAddr::V4(ip), port);
-    let stream = timeout(timeout_duration, TcpStream::connect(socket))
-        .await
-        .ok()?
-        .ok()?;
-    let (reader, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(reader);
-    let mut line = String::new();
-    let result = timeout(Duration::from_millis(500), reader.read_line(&mut line))
-        .await
-        .ok()?
-        .ok()?;
-    if result > 0 && line.starts_with("220 ") {
-        let _ = writer.shutdown().await;
-        return Some(line.trim().to_string());
-    }
-    None
-}
-
-async fn grab_banner_for_port(ip: Ipv4Addr, port: u16, timeout_duration: Duration) -> Option<String> {
-    match port {
-        22 => grab_ssh_banner(ip, port, timeout_duration).await,
-        21 => grab_ftp_banner(ip, port, timeout_duration).await,
-        80 | 443 | 8080 | 8443 | 8000 | 3000 | 5000 | 9000 => {
-            grab_http_banner(ip, port, timeout_duration).await
+        BannerKind::HttpServerHeader => {
+            let request = format!(
+                "HEAD / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                ip
+            );
+            stream.write_all(request.as_bytes()).await.ok()?;
+            let data = read_until(stream, HTTP_READ_TIMEOUT, |data| {
+                data.windows(4).any(|window| window == b"\r\n\r\n")
+            })
+            .await;
+            parse_http_server_header(&String::from_utf8_lossy(&data))
+                .and_then(|server| sanitize_banner(&server))
         }
-        _ => None,
     }
+}
+
+/// Reads from `stream` until `done` says the data is complete, the peer
+/// closes, `MAX_BANNER_READ_BYTES` arrive, or `budget` runs out, and returns
+/// whatever arrived.
+async fn read_until(
+    stream: &mut TcpStream,
+    budget: Duration,
+    done: impl Fn(&[u8]) -> bool,
+) -> Vec<u8> {
+    let deadline = tokio::time::Instant::now() + budget;
+    let mut data = Vec::new();
+    let mut chunk = [0u8; 1024];
+
+    while data.len() < MAX_BANNER_READ_BYTES && !done(&data) {
+        match tokio::time::timeout_at(deadline, stream.read(&mut chunk)).await {
+            Ok(Ok(read)) if read > 0 => data.extend_from_slice(&chunk[..read]),
+            _ => break,
+        }
+    }
+
+    data
+}
+
+/// Extracts the `Server` header from an HTTP response head. Header names are
+/// case-insensitive, and some servers omit the space after the colon.
+fn parse_http_server_header(response: &str) -> Option<String> {
+    response
+        .lines()
+        .skip(1)
+        .take_while(|line| !line.is_empty())
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("server"))
+        .map(|(_, value)| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Banners come from arbitrary devices: drop control characters and cap the
+/// length before they reach the UI and the cache.
+fn sanitize_banner(raw: &str) -> Option<String> {
+    let cleaned = raw
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(MAX_BANNER_CHARS)
+        .collect::<String>();
+    let trimmed = cleaned.trim();
+
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 fn parse_ssh_banner(banner: &str) -> Option<(Option<String>, Option<String>)> {
@@ -2074,7 +2402,8 @@ fn build_mdns_query(services: &[&str]) -> Vec<u8> {
     let transaction_id: u16 = (std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_nanos() & 0xFFFF) as u16;
+        .as_nanos()
+        & 0xFFFF) as u16;
     packet.extend_from_slice(&transaction_id.to_be_bytes());
     packet.extend_from_slice(&0x0000u16.to_be_bytes());
     packet.extend_from_slice(&(services.len() as u16).to_be_bytes());
@@ -2147,46 +2476,68 @@ fn parse_mdns_response(data: &[u8]) -> Option<Vec<DiscoveredService>> {
     Some(services)
 }
 
+/// Longest domain name allowed on the wire (RFC 1035, section 2.3.4).
+const MAX_DNS_NAME_WIRE_LEN: usize = 255;
+
+/// Compression pointers followed before a name is rejected. Real responders
+/// nest at most a few levels; the cap guarantees termination on pointer cycles.
+const MAX_DNS_COMPRESSION_JUMPS: usize = 16;
+
+/// Decodes a (possibly compressed) DNS name starting at `start` and returns it
+/// with the offset just past the name in the original record.
+///
+/// mDNS replies come from any device on the LAN, so the packet is untrusted:
+/// truncated labels, reserved label types, pointer cycles and overlong names
+/// all return `None` instead of looping or producing a partial name.
 fn parse_dns_name(data: &[u8], start: usize) -> Option<(String, usize)> {
     let mut name = String::new();
     let mut offset = start;
-    let mut jumped = false;
-    let mut jump_offset = 0usize;
+    let mut end_of_name = None;
+    let mut jumps = 0usize;
+    let mut wire_len = 0usize;
+
     loop {
-        if offset >= data.len() {
-            break;
-        }
-        let len = data[offset] as usize;
+        let len = *data.get(offset)? as usize;
+
         if len == 0 {
-            offset += 1;
-            break;
+            return Some((name, end_of_name.unwrap_or(offset + 1)));
         }
-        if (len & 0xC0) == 0xC0 {
-            if offset + 1 >= data.len() {
-                break;
+
+        match len & 0xC0 {
+            0xC0 => {
+                let low = *data.get(offset + 1)? as usize;
+                jumps += 1;
+                if jumps > MAX_DNS_COMPRESSION_JUMPS {
+                    return None;
+                }
+
+                end_of_name.get_or_insert(offset + 2);
+                offset = ((len & 0x3F) << 8) | low;
             }
-            let ptr = ((len & 0x3F) as usize) << 8 | (data[offset + 1] as usize);
-            if !jumped {
-                jump_offset = offset + 2;
-                jumped = true;
+            0x00 => {
+                let label = data.get(offset + 1..offset + 1 + len)?;
+                wire_len += len + 1;
+                // +1 for the terminating root label.
+                if wire_len + 1 > MAX_DNS_NAME_WIRE_LEN {
+                    return None;
+                }
+
+                // DNS-SD forbids ASCII control characters in names (RFC 6763,
+                // section 4.1.1); a label carrying them is malformed.
+                if label.iter().any(|byte| byte.is_ascii_control()) {
+                    return None;
+                }
+
+                if !name.is_empty() {
+                    name.push('.');
+                }
+                name.push_str(&String::from_utf8_lossy(label));
+                offset += len + 1;
             }
-            offset = ptr;
-            continue;
+            // 0x40 and 0x80 are reserved/obsolete label types.
+            _ => return None,
         }
-        offset += 1;
-        if offset + len > data.len() {
-            break;
-        }
-        if !name.is_empty() {
-            name.push('.');
-        }
-        if let Ok(label) = std::str::from_utf8(&data[offset..offset + len]) {
-            name.push_str(label);
-        }
-        offset += len;
     }
-    let final_offset = if jumped { jump_offset } else { offset };
-    Some((name, final_offset))
 }
 
 fn extract_service_type(name: &str) -> Option<String> {
@@ -2214,7 +2565,11 @@ pub async fn discover_ssdp_devices() -> Vec<DiscoveredService> {
         "\r\n"
     );
     let multicast_addr: SocketAddr = "239.255.255.250:1900".parse().unwrap();
-    if socket.send_to(m_search.as_bytes(), multicast_addr).await.is_err() {
+    if socket
+        .send_to(m_search.as_bytes(), multicast_addr)
+        .await
+        .is_err()
+    {
         return Vec::new();
     }
     let mut devices = Vec::new();
@@ -2236,8 +2591,6 @@ pub async fn discover_ssdp_devices() -> Vec<DiscoveredService> {
     }
     devices
 }
-
-
 
 #[allow(dead_code)]
 fn parse_ssdp_response(data: &[u8]) -> Option<DiscoveredService> {
@@ -2287,6 +2640,7 @@ mod tests {
             cidr: 24,
             subnet: subnet.to_string(),
             host_count: 254,
+            is_default_route: false,
         }
     }
 
@@ -2338,6 +2692,71 @@ mod tests {
         assert!(targets.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
+    fn progress_at(phase: ScanPhase, scanned: usize, total: usize) -> ScanProgress {
+        scan_progress(phase, scanned, total, 0, true, None)
+    }
+
+    #[test]
+    fn progress_throttle_limits_events_within_a_phase() {
+        let mut throttle = ProgressThrottle::new(Duration::from_secs(3600));
+        let start = Instant::now();
+
+        assert!(throttle.should_emit(&progress_at(ScanPhase::Discovery, 0, 254), start));
+        assert!(!throttle.should_emit(&progress_at(ScanPhase::Discovery, 1, 254), start));
+        assert!(!throttle.should_emit(&progress_at(ScanPhase::Discovery, 200, 254), start));
+        assert!(
+            throttle.should_emit(&progress_at(ScanPhase::Discovery, 254, 254), start),
+            "the last event of a phase always goes through"
+        );
+    }
+
+    #[test]
+    fn progress_throttle_passes_phase_changes_stops_and_due_events() {
+        let mut throttle = ProgressThrottle::new(Duration::from_millis(80));
+        let start = Instant::now();
+
+        assert!(throttle.should_emit(&progress_at(ScanPhase::Discovery, 3, 254), start));
+        assert!(throttle.should_emit(&progress_at(ScanPhase::Ports, 1, 20), start));
+
+        let stopped = scan_progress(ScanPhase::Ports, 2, 20, 0, false, None);
+        assert!(throttle.should_emit(&stopped, start));
+
+        assert!(!throttle.should_emit(&progress_at(ScanPhase::Ports, 3, 20), start));
+        let later = start + Duration::from_millis(81);
+        assert!(throttle.should_emit(&progress_at(ScanPhase::Ports, 4, 20), later));
+    }
+
+    #[test]
+    fn merge_open_ports_keeps_ports_sorted_and_unique() {
+        let open = |port: u16| PortInfo {
+            port,
+            state: "open".to_string(),
+            service: service_name(port).map(ToString::to_string),
+            banner: None,
+        };
+        let mut known = vec![open(22), open(443)];
+
+        merge_open_ports(&mut known, vec![open(8080), open(22), open(80)]);
+
+        let ports = known.iter().map(|port| port.port).collect::<Vec<u16>>();
+        assert_eq!(ports, vec![22, 80, 443, 8080]);
+    }
+
+    #[test]
+    fn discovery_ports_are_probed_by_every_profile() {
+        for profile in [PortProfile::Quick, PortProfile::Standard, PortProfile::Deep] {
+            let ports = ports_for_profile(&profile);
+            for port in DISCOVERY_PORTS {
+                assert!(
+                    ports.contains(&port),
+                    "{:?} should include discovery port {}",
+                    profile,
+                    port
+                );
+            }
+        }
+    }
+
     #[test]
     fn select_interface_prefers_exact_subnet_match() {
         let interfaces = vec![
@@ -2350,6 +2769,181 @@ mod tests {
             select_interface(&interfaces, "en0", Some("10.0.0.0/24")).expect("interface exists");
 
         assert_eq!(selected.ip, "10.0.0.8");
+    }
+
+    /// Serves `port` on loopback, counting accepted connections and running
+    /// `respond` on each one.
+    async fn loopback_server<F, Fut>(respond: F) -> (u16, Arc<std::sync::atomic::AtomicUsize>)
+    where
+        F: Fn(TcpStream) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = ()> + Send,
+    {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback listener");
+        let port = listener.local_addr().expect("local addr").port();
+        let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = accepted.clone();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::SeqCst);
+                respond(stream).await;
+            }
+        });
+        (port, accepted)
+    }
+
+    async fn probe_loopback(port: u16, kind: BannerKind) -> Option<PortProbeOutcome> {
+        probe_port(
+            Ipv4Addr::LOCALHOST,
+            port,
+            kind,
+            Duration::from_millis(500),
+            Arc::new(Semaphore::new(4)),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn probe_reads_ssh_banner_on_the_probe_connection() {
+        let (port, accepted) = loopback_server(|mut stream| async move {
+            let _ = stream
+                .write_all(b"SSH-2.0-OpenSSH_9.6 Ubuntu-3ubuntu13\r\n")
+                .await;
+            sleep(Duration::from_millis(50)).await;
+        })
+        .await;
+
+        let outcome = probe_loopback(port, BannerKind::ServerGreeting).await;
+
+        let Some(PortProbeOutcome::Open(info)) = outcome else {
+            panic!("expected an open port");
+        };
+        assert_eq!(
+            info.banner.as_deref(),
+            Some("SSH-2.0-OpenSSH_9.6 Ubuntu-3ubuntu13")
+        );
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            1,
+            "one connection per probe"
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_reads_http_server_header_case_insensitively() {
+        let (port, accepted) = loopback_server(|mut stream| async move {
+            let mut request = [0u8; 512];
+            let _ = stream.read(&mut request).await;
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nserver: nginx/1.24.0 (Ubuntu)\r\n\r\n")
+                .await;
+        })
+        .await;
+
+        let outcome = probe_loopback(port, BannerKind::HttpServerHeader).await;
+
+        let Some(PortProbeOutcome::Open(info)) = outcome else {
+            panic!("expected an open port");
+        };
+        assert_eq!(info.banner.as_deref(), Some("nginx/1.24.0 (Ubuntu)"));
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            1,
+            "one connection per probe"
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_reports_open_port_when_server_stays_silent() {
+        let (port, _) = loopback_server(|stream| async move {
+            sleep(Duration::from_millis(900)).await;
+            drop(stream);
+        })
+        .await;
+
+        let started = std::time::Instant::now();
+        let outcome = probe_loopback(port, BannerKind::ServerGreeting).await;
+
+        let Some(PortProbeOutcome::Open(info)) = outcome else {
+            panic!("expected an open port");
+        };
+        assert!(info.banner.is_none());
+        assert!(
+            started.elapsed() < Duration::from_millis(800),
+            "banner wait is bounded"
+        );
+    }
+
+    #[test]
+    fn parse_http_server_header_handles_case_and_missing_header() {
+        assert_eq!(
+            parse_http_server_header("HTTP/1.1 200 OK\r\nSERVER: lighttpd/1.4\r\n\r\n"),
+            Some("lighttpd/1.4".to_string())
+        );
+        assert_eq!(
+            parse_http_server_header("HTTP/1.1 200 OK\r\nServer:Apache\r\n\r\n"),
+            Some("Apache".to_string())
+        );
+        assert_eq!(parse_http_server_header("HTTP/1.1 200 OK\r\n\r\n"), None);
+    }
+
+    #[test]
+    fn banner_kind_skips_tls_ports() {
+        assert_eq!(banner_kind_for_port(22), BannerKind::ServerGreeting);
+        assert_eq!(banner_kind_for_port(21), BannerKind::ServerGreeting);
+        assert_eq!(banner_kind_for_port(25), BannerKind::ServerGreeting);
+        assert_eq!(banner_kind_for_port(8123), BannerKind::HttpServerHeader);
+        assert_eq!(banner_kind_for_port(8080), BannerKind::HttpServerHeader);
+        for tls_port in [443, 5001, 8443] {
+            assert_eq!(banner_kind_for_port(tls_port), BannerKind::None);
+        }
+    }
+
+    #[test]
+    fn deeper_profiles_probe_everything_lighter_ones_do() {
+        let quick = ports_for_profile(&PortProfile::Quick);
+        let standard = ports_for_profile(&PortProfile::Standard);
+        let deep = ports_for_profile(&PortProfile::Deep);
+
+        for port in &quick {
+            assert!(
+                standard.contains(port),
+                "Standard is missing Quick port {}",
+                port
+            );
+        }
+        for port in &standard {
+            assert!(
+                deep.contains(port),
+                "Deep is missing Standard port {}",
+                port
+            );
+        }
+    }
+
+    #[test]
+    fn every_profile_probes_signature_ports() {
+        for profile in [PortProfile::Quick, PortProfile::Standard, PortProfile::Deep] {
+            let ports = ports_for_profile(&profile);
+            for port in SIGNATURE_PORTS {
+                assert!(ports.contains(&port), "{:?} is missing {}", profile, port);
+            }
+        }
+    }
+
+    #[test]
+    fn tcp_profiles_skip_udp_only_services() {
+        let standard = ports_for_profile(&PortProfile::Standard);
+        let quick = ports_for_profile(&PortProfile::Quick);
+        for port in [67, 68, 69, 123, 137, 138, 161, 500, 1812, 1900, 5353] {
+            assert!(
+                !standard.contains(&port),
+                "Standard probes UDP-only {}",
+                port
+            );
+            assert!(!quick.contains(&port), "Quick probes UDP-only {}", port);
+        }
     }
 
     #[test]
@@ -2379,6 +2973,157 @@ mod tests {
         assert!(deep_ports.contains(&5000));
         assert!(deep_ports.contains(&32400));
         assert!(deep_ports.contains(&37777));
+    }
+
+    #[tokio::test]
+    async fn enrichment_recomputes_fingerprint_when_ports_change() {
+        // Loopback has no ARP entry, so no MAC and therefore no online vendor
+        // or Fingerbank lookup: the test stays offline.
+        let storage = Arc::new(Storage::in_memory());
+
+        let first = enrich_host_with_cache(
+            host("127.0.0.1", Some("office-box"), &[22]),
+            storage.clone(),
+        )
+        .await;
+        let first_type = first
+            .fingerprint
+            .and_then(|fingerprint| fingerprint.device_type);
+        assert_eq!(first_type.as_deref(), Some("Workstation/Server"));
+
+        let second = enrich_host_with_cache(
+            host("127.0.0.1", Some("office-box"), &[22, 631, 9100]),
+            storage,
+        )
+        .await;
+        let fingerprint = second.fingerprint.expect("fingerprint");
+        assert_eq!(fingerprint.device_type.as_deref(), Some("Printer"));
+        assert!(
+            fingerprint.notes.iter().any(|note| note.contains("9100")),
+            "notes should describe the current ports: {:?}",
+            fingerprint.notes
+        );
+    }
+
+    #[test]
+    fn mac_with_file_sharing_is_not_labelled_windows() {
+        let mac = host(
+            "192.168.1.10",
+            Some("Studio-Mac-mini.local"),
+            &[22, 445, 548],
+        );
+
+        let (device_type, os_guess, _, _, _) =
+            infer_device_profile(&mac, Some("Apple, Inc."), None);
+
+        assert_eq!(device_type.as_deref(), Some("Apple device"));
+        assert_eq!(os_guess.as_deref(), Some("Apple OS family"));
+    }
+
+    #[test]
+    fn nas_with_smb_is_not_labelled_windows() {
+        let nas = host(
+            "192.168.1.30",
+            Some("diskstation"),
+            &[22, 80, 139, 445, 5000, 5001],
+        );
+
+        let (device_type, os_guess, model_guess, _, _) =
+            infer_device_profile(&nas, Some("Synology Incorporated"), None);
+
+        assert_eq!(device_type.as_deref(), Some("NAS/Storage"));
+        assert_eq!(model_guess.as_deref(), Some("Synology NAS (DSM)"));
+        assert_eq!(os_guess.as_deref(), Some("Linux/Unix-like"));
+    }
+
+    #[test]
+    fn apple_name_hints_match_whole_words_only() {
+        let pineapple = host("192.168.1.60", Some("wifi-pineapple"), &[80]);
+        let (device_type, os_guess, _, _, _) = infer_device_profile(&pineapple, None, None);
+        assert_ne!(device_type.as_deref(), Some("Apple device"));
+        assert_ne!(os_guess.as_deref(), Some("Apple OS family"));
+
+        let admin = host("192.168.1.61", Some("ipadmin01"), &[22]);
+        let (device_type, _, _, _, _) = infer_device_profile(&admin, None, None);
+        assert_ne!(device_type.as_deref(), Some("Mobile device"));
+
+        let ipad = host("192.168.1.62", Some("Lukas-iPad"), &[]);
+        let (device_type, _, _, _, _) = infer_device_profile(&ipad, None, None);
+        assert_eq!(device_type.as_deref(), Some("Mobile device"));
+
+        let phone = host("192.168.1.65", Some("iphone13"), &[]);
+        let (device_type, _, _, _, _) = infer_device_profile(&phone, None, None);
+        assert_eq!(device_type.as_deref(), Some("Mobile device"));
+
+        let watch = host("192.168.1.66", Some("applewatch"), &[]);
+        let (device_type, _, _, _, _) = infer_device_profile(&watch, None, None);
+        assert_eq!(device_type.as_deref(), Some("Mobile device"));
+
+        let laptop = host("192.168.1.64", Some("Lukas-MacBookAir.local"), &[22]);
+        let (_, os_guess, _, _, _) = infer_device_profile(&laptop, None, None);
+        assert_eq!(os_guess.as_deref(), Some("Apple OS family"));
+    }
+
+    #[test]
+    fn rpc_and_rdp_still_mean_windows() {
+        let desktop = host(
+            "192.168.1.50",
+            Some("DESKTOP-8H2K9QX"),
+            &[135, 139, 445, 3389],
+        );
+
+        let (device_type, os_guess, _, _, _) = infer_device_profile(&desktop, None, None);
+
+        assert_eq!(device_type.as_deref(), Some("Workstation/Server"));
+        assert_eq!(os_guess.as_deref(), Some("Windows-like"));
+    }
+
+    #[test]
+    fn itunes_on_windows_stays_windows() {
+        let desktop = host("192.168.1.52", Some("gaming-pc"), &[135, 445, 3389, 3689]);
+
+        let (_, os_guess, _, _, _) = infer_device_profile(&desktop, None, None);
+
+        assert_eq!(os_guess.as_deref(), Some("Windows-like"));
+    }
+
+    #[test]
+    fn nas_with_afp_is_not_labelled_apple() {
+        let nas = host(
+            "192.168.1.31",
+            Some("diskstation"),
+            &[22, 139, 445, 548, 5000, 5001],
+        );
+
+        let (device_type, os_guess, _, _, _) =
+            infer_device_profile(&nas, Some("Synology Incorporated"), None);
+
+        assert_eq!(device_type.as_deref(), Some("NAS/Storage"));
+        assert_eq!(os_guess.as_deref(), Some("Linux/Unix-like"));
+    }
+
+    #[test]
+    fn smb_alone_makes_no_os_claim() {
+        let share = host("192.168.1.60", None, &[445]);
+
+        let (_, os_guess, _, _, _) = infer_device_profile(&share, None, None);
+
+        assert_eq!(os_guess, None);
+    }
+
+    #[test]
+    fn locally_administered_macs_are_detected() {
+        assert!(is_locally_administered_mac("5A:12:34:56:78:9A"));
+        assert!(is_locally_administered_mac("02:42:ac:11:00:02"));
+        assert!(!is_locally_administered_mac("A4:83:E7:10:20:30"));
+        assert!(!is_locally_administered_mac("not-a-mac"));
+    }
+
+    #[test]
+    fn maclookup_request_carries_only_the_oui() {
+        let url = maclookup_url("3C:A6:2F");
+
+        assert_eq!(url, "https://api.maclookup.app/v2/macs/3C:A6:2F");
     }
 
     #[test]
@@ -2422,6 +3167,125 @@ mod tests {
 
         assert_eq!(software.as_deref(), Some("OpenSSH_9.6"));
         assert!(os_guess.is_none());
+    }
+
+    /// Runs `parse` on a helper thread so a parser that never terminates fails
+    /// the test instead of hanging the whole suite.
+    fn run_with_deadline<T: Send + 'static>(
+        parse: impl FnOnce() -> T + Send + 'static,
+    ) -> Option<T> {
+        // On timeout the helper thread keeps running (threads can't be killed).
+        // That's fine for pure parsing code, but don't reuse this for code
+        // that holds locks.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(parse());
+        });
+        receiver.recv_timeout(Duration::from_secs(2)).ok()
+    }
+
+    fn mdns_response_header(answer_count: u16) -> Vec<u8> {
+        let mut packet = vec![0x00, 0x00, 0x84, 0x00, 0x00, 0x00];
+        packet.extend_from_slice(&answer_count.to_be_bytes());
+        packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+        packet
+    }
+
+    #[test]
+    fn parse_dns_name_follows_compression_pointers() {
+        let mut packet = mdns_response_header(0);
+        encode_dns_name(&mut packet, "_airplay._tcp.local");
+        let second_name = packet.len();
+        packet.extend_from_slice(&[0x02, b't', b'v', 0xC0, 0x0C]);
+
+        let (name, next_offset) = parse_dns_name(&packet, second_name).expect("valid name");
+
+        assert_eq!(name, "tv._airplay._tcp.local");
+        assert_eq!(next_offset, packet.len());
+    }
+
+    #[test]
+    fn parse_dns_name_rejects_self_referencing_pointer() {
+        let mut packet = mdns_response_header(1);
+        packet.extend_from_slice(&[0xC0, 0x0C]);
+
+        let result = run_with_deadline(move || parse_dns_name(&packet, 12));
+
+        assert_eq!(
+            result,
+            Some(None),
+            "parser must terminate and reject the name"
+        );
+    }
+
+    #[test]
+    fn parse_dns_name_rejects_pointer_cycle_through_labels() {
+        let mut packet = mdns_response_header(1);
+        packet.extend_from_slice(&[0x01, b'a', 0xC0, 0x0C]);
+
+        let result = run_with_deadline(move || parse_dns_name(&packet, 12));
+
+        assert_eq!(
+            result,
+            Some(None),
+            "parser must terminate and reject the name"
+        );
+    }
+
+    #[test]
+    fn parse_dns_name_rejects_truncated_label() {
+        let mut packet = mdns_response_header(1);
+        packet.extend_from_slice(&[0x05, b'a', b'b']);
+
+        assert_eq!(parse_dns_name(&packet, 12), None);
+    }
+
+    #[test]
+    fn parse_dns_name_rejects_control_characters() {
+        let mut packet = mdns_response_header(1);
+        packet.extend_from_slice(&[0x04, b't', 0x01, b'v', 0x1B, 0x00]);
+
+        assert_eq!(parse_dns_name(&packet, 12), None);
+    }
+
+    #[test]
+    fn parse_dns_name_keeps_utf8_instance_names() {
+        let mut packet = mdns_response_header(1);
+        let label = "Küche TV".as_bytes();
+        packet.push(label.len() as u8);
+        packet.extend_from_slice(label);
+        packet.push(0);
+
+        let (name, _) = parse_dns_name(&packet, 12).expect("valid UTF-8 name");
+
+        assert_eq!(name, "Küche TV");
+    }
+
+    #[test]
+    fn parse_dns_name_rejects_overlong_name() {
+        let mut packet = mdns_response_header(1);
+        for _ in 0..5 {
+            packet.push(63);
+            packet.extend_from_slice(&[b'x'; 63]);
+        }
+        packet.push(0);
+
+        assert_eq!(parse_dns_name(&packet, 12), None);
+    }
+
+    #[test]
+    fn parse_mdns_response_survives_pointer_loop() {
+        let mut packet = mdns_response_header(1);
+        packet.extend_from_slice(&[0xC0, 0x0C]);
+        packet.extend_from_slice(&[0; 10]);
+
+        let result = run_with_deadline(move || parse_mdns_response(&packet).is_none());
+
+        assert_eq!(
+            result,
+            Some(true),
+            "a malformed packet must be dropped, not spin"
+        );
     }
 
     #[test]

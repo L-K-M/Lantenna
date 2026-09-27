@@ -1,10 +1,14 @@
+use crate::default_route;
 use crate::models::{
-    Host, NetworkInterface, PortProfile, ScanErrorPayload, ScanOptions, ScanProgress, ScanResult,
-    SystemColors,
+    Host, NetworkInterface, PortProfile, ScanErrorPayload, ScanOptions, ScanPhase, ScanProgress,
+    ScanResult, SystemColors,
 };
 use crate::scanner;
 use crate::storage::Storage;
 use crate::system_colors;
+use futures::FutureExt;
+use std::any::Any;
+use std::panic::AssertUnwindSafe;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -61,9 +65,62 @@ impl ScanManager {
     }
 }
 
+/// Marks the scan manager idle when dropped, so a scan task that ends in any
+/// way, including a panic, never leaves "A scan is already running" stuck.
+struct ScanRunGuard(Arc<ScanManager>);
+
+impl ScanRunGuard {
+    fn new(manager: Arc<ScanManager>) -> Self {
+        Self(manager)
+    }
+}
+
+impl Drop for ScanRunGuard {
+    fn drop(&mut self) {
+        self.0.finish();
+    }
+}
+
+fn panic_message(payload: &(dyn Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("unknown panic")
+}
+
+async fn scan_and_enrich(
+    options: ScanOptions,
+    cancel_token: Arc<AtomicBool>,
+    app: &AppHandle,
+    storage: Arc<Storage>,
+) -> anyhow::Result<ScanResult> {
+    let mut scan_result = scanner::run_scan(
+        options,
+        cancel_token,
+        |progress| {
+            let _ = app.emit_to("main", "scan-progress", progress);
+        },
+        |host| {
+            let _ = app.emit_to("main", "host-found", host);
+        },
+    )
+    .await?;
+
+    scan_result.hosts = scanner::enrich_hosts_with_cache(scan_result.hosts, storage).await;
+    Ok(scan_result)
+}
+
 #[tauri::command]
 pub async fn get_network_interfaces() -> Result<Vec<NetworkInterface>, String> {
-    scanner::list_network_interfaces().map_err(|error| error.to_string())
+    let mut interfaces = scanner::list_network_interfaces().map_err(|error| error.to_string())?;
+    let default_interface =
+        tauri::async_runtime::spawn_blocking(default_route::default_route_interface)
+            .await
+            .ok()
+            .flatten();
+    default_route::mark_default_route(&mut interfaces, default_interface.as_deref());
+    Ok(interfaces)
 }
 
 #[tauri::command]
@@ -80,38 +137,39 @@ pub async fn start_scan(
     let scan_manager = state.scan_manager.clone();
 
     tauri::async_runtime::spawn(async move {
-        let result = scanner::run_scan(
+        let _running = ScanRunGuard::new(scan_manager.clone());
+
+        let outcome = AssertUnwindSafe(scan_and_enrich(
             options,
             scan_manager.cancel_token(),
-            |progress| {
-                let _ = app.emit_to("main", "scan-progress", progress);
-            },
-            |host| {
-                let _ = app.emit_to("main", "host-found", host);
-            },
-        )
+            &app,
+            storage.clone(),
+        ))
+        .catch_unwind()
         .await;
 
-        match result {
-            Ok(scan_result) => {
-                let mut scan_result = scan_result;
-                scan_result.hosts =
-                    scanner::enrich_hosts_with_cache(scan_result.hosts, storage.clone()).await;
-
+        match outcome {
+            Ok(Ok(scan_result)) => {
                 if let Err(error) = storage.save_scan_result(scan_result.clone()) {
                     log::error!("Failed to persist scan result: {}", error);
                 }
                 let _ = app.emit_to("main", "scan-complete", scan_result);
             }
-            Err(error) => {
+            Ok(Err(error)) => {
                 let payload = ScanErrorPayload {
                     message: error.to_string(),
                 };
                 let _ = app.emit_to("main", "scan-error", payload);
             }
+            Err(panic) => {
+                let detail = panic_message(panic.as_ref());
+                log::error!("Scan task panicked: {}", detail);
+                let payload = ScanErrorPayload {
+                    message: format!("The scanner stopped unexpectedly: {}", detail),
+                };
+                let _ = app.emit_to("main", "scan-error", payload);
+            }
         }
-
-        scan_manager.finish();
     });
 
     Ok(())
@@ -172,6 +230,7 @@ pub async fn scan_host_ports(
                 "main",
                 "host-scan-progress",
                 ScanProgress {
+                    phase: ScanPhase::Ports,
                     scanned,
                     total,
                     found,
@@ -189,6 +248,7 @@ pub async fn scan_host_ports(
                 "main",
                 "host-scan-progress",
                 ScanProgress {
+                    phase: ScanPhase::Ports,
                     scanned: 0,
                     total: 1,
                     found: 0,
@@ -206,6 +266,7 @@ pub async fn scan_host_ports(
         "main",
         "host-scan-progress",
         ScanProgress {
+            phase: ScanPhase::Ports,
             scanned: 1,
             total: 1,
             found: host.open_ports.len(),
@@ -248,4 +309,29 @@ pub async fn wake_host(mac: String) -> Result<(), String> {
     crate::wol::send_magic_packet(&mac)
         .await
         .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    #[test]
+    fn scan_run_guard_releases_manager_when_scan_panics() {
+        let manager = Arc::new(ScanManager::new());
+        assert!(manager.start());
+
+        let guarded = manager.clone();
+        let outcome = catch_unwind(AssertUnwindSafe(move || {
+            let _running = ScanRunGuard::new(guarded);
+            panic!("simulated scanner crash");
+        }));
+
+        assert!(outcome.is_err());
+        assert!(!manager.is_running());
+        assert!(
+            manager.start(),
+            "a new scan must be able to start after a crash"
+        );
+    }
 }
