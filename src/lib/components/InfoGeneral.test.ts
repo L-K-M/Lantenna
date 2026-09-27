@@ -3,6 +3,7 @@
 // a selection change, and reverts on Escape (2.7).
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import { formatLongDate } from '$lib/util/format';
 import { fingerprint, host, hostRow } from './hostRow.fixture';
 import InfoGeneral from './InfoGeneral.svelte';
@@ -164,6 +165,21 @@ describe('the name field', () => {
     expect(notPrevented).toBe(false);
     expect(field.value).toBe('Office Printer');
     expect(store.setCustomName).not.toHaveBeenCalled();
+  });
+
+  it('keeps the draft when an open balloon took the Escape', async () => {
+    render(InfoGeneral, { props: { row: printer } });
+    const field = await typeName('Office Pri');
+
+    // Osmium's balloon closes on Escape and only calls preventDefault.
+    const taken = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    taken.preventDefault();
+    field.dispatchEvent(taken);
+    await tick();
+    expect(field.value).toBe('Office Pri');
+
+    await fireEvent.keyDown(field, { key: 'Escape' });
+    expect(field.value).toBe('BRN30055C123456');
   });
 
   it('keeps a name committed with Return when Escape follows', async () => {

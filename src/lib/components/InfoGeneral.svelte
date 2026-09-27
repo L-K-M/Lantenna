@@ -87,6 +87,8 @@
     // rename or Clear Custom Name) changed the name since. Going back to
     // the older value would let the next commit undo that change.
     if (e.key === 'Escape') {
+      // An open help balloon took this Escape to close itself.
+      if (e.defaultPrevented) return;
       e.preventDefault();
       draft = shown;
     }
