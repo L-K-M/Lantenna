@@ -23,11 +23,16 @@
   /** "today" becomes "yesterday" at midnight without any store change. */
   const CLOCK_TICK_MS = 60_000;
 
-  let now = $state(new Date());
+  /** Bumped by the clock tick only to force a recompute; the header
+   * reads the clock itself, so a store change never dates a scan by a
+   * time up to a tick old (a scan just past midnight would read "on
+   * <date>" instead of "today"). */
+  let tick = $state(0);
   let text: HTMLSpanElement;
 
-  const header = $derived(
-    headerState(
+  const header = $derived.by(() => {
+    void tick;
+    return headerState(
       {
         store: $scanStore,
         progress: $scanProgress,
@@ -36,9 +41,9 @@
         selectedInterface: findInterfaceByKey($scanStore.interfaces, $scanStore.selectedInterface),
         balloons: $ui.balloons
       },
-      now
-    )
-  );
+      new Date()
+    );
+  });
   const bar = $derived(header.progress);
 
   // centerText places the text on a whole pixel (and re-centers when the
@@ -50,10 +55,10 @@
   });
 
   onMount(() => {
-    const tick = setInterval(() => {
-      now = new Date();
+    const timer = setInterval(() => {
+      tick += 1;
     }, CLOCK_TICK_MS);
-    return () => clearInterval(tick);
+    return () => clearInterval(timer);
   });
 </script>
 

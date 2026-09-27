@@ -86,6 +86,7 @@ afterEach(() => {
 });
 
 const checks = () => native.invoke.mock.calls.filter(([c]) => c === 'check_self_update').length;
+const opens = () => native.invoke.mock.calls.filter(([c]) => c === 'open_release_url').length;
 
 const UPDATE_ALERT = {
   message: 'Lantenna 1.1.0 is available.',
@@ -135,23 +136,14 @@ it('offers nothing without an update, and keeps the daily throttle', async () =>
   expect(checks()).toBe(1);
 });
 
-it('waits for an active, expanded, idle window with no alert up', async () => {
-  const m = await load();
-  m.ui.setActive(false);
-  m.ui.setShaded(true);
-  dispose = m.scheduleUpdateCheck();
-  await m.scanStore.init();
-  // A scan resumed from progress (as after a reload mid-scan).
+/** A scan resumed from progress (as after a reload mid-scan). */
+function startScan() {
   native.listeners.get('scan-progress')!({
     payload: { phase: 'ports', scanned: 1, total: 4, found: 4, running: true, current_ip: null }
   });
-  const alert = m.osmium.showAlert({ kind: 'note', message: 'Something else.' });
-  await settle();
+}
 
-  m.ui.setActive(true);
-  await settle();
-  m.ui.setShaded(false);
-  await settle();
+function finishScan() {
   native.listeners.get('scan-complete')!({
     payload: {
       started_at: '',
@@ -161,6 +153,72 @@ it('waits for an active, expanded, idle window with no alert up', async () => {
       options: { interface_name: 'en0', subnet: null, port_profile: 'standard', discovery_mode: 'hybrid', timeout_ms: 450, max_hosts: null }
     }
   });
+}
+
+type Loaded = Awaited<ReturnType<typeof load>>;
+
+/** Each quiet-moment condition on its own: `block` sets it before the
+ * update is found (store settled), the returned function clears it. */
+const BLOCKERS: [string, (m: Loaded) => () => void][] = [
+  [
+    'an inactive window',
+    (m) => {
+      m.ui.setActive(false);
+      return () => m.ui.setActive(true);
+    }
+  ],
+  [
+    'a collapsed window',
+    (m) => {
+      m.ui.setShaded(true);
+      return () => m.ui.setShaded(false);
+    }
+  ],
+  [
+    'a scan',
+    () => {
+      startScan();
+      return finishScan;
+    }
+  ],
+  [
+    'an alert',
+    (m) => {
+      const alert = m.osmium.showAlert({ kind: 'note', message: 'Something else.' });
+      return () => alert.close();
+    }
+  ]
+];
+
+it.each(BLOCKERS)('holds the update back for %s alone', async (_, block) => {
+  const m = await load();
+  dispose = m.scheduleUpdateCheck();
+  await m.scanStore.init();
+  const release = block(m);
+  await settle();
+  expect(checks()).toBe(1);
+  expect(native.noteAlert).not.toHaveBeenCalled();
+
+  release();
+  await settle();
+  expect(native.noteAlert).toHaveBeenCalledExactlyOnceWith(UPDATE_ALERT);
+});
+
+it('waits for an active, expanded, idle window with no alert up', async () => {
+  const m = await load();
+  m.ui.setActive(false);
+  m.ui.setShaded(true);
+  dispose = m.scheduleUpdateCheck();
+  await m.scanStore.init();
+  startScan();
+  const alert = m.osmium.showAlert({ kind: 'note', message: 'Something else.' });
+  await settle();
+
+  m.ui.setActive(true);
+  await settle();
+  m.ui.setShaded(false);
+  await settle();
+  finishScan();
   await settle();
   expect(native.noteAlert).not.toHaveBeenCalled();
 
@@ -282,4 +340,42 @@ it('offers an update the manual check already showed only once', async () => {
 
   expect(checks()).toBe(2);
   expect(native.noteAlert).toHaveBeenCalledOnce();
+});
+
+it('checks now once while a check is out, and opens the page once', async () => {
+  answer = 'ok';
+  const m = await load();
+
+  await Promise.all([m.checkForUpdatesNow(), m.checkForUpdatesNow()]);
+
+  expect(checks()).toBe(1);
+  expect(native.noteAlert).toHaveBeenCalledOnce();
+  expect(opens()).toBe(1);
+});
+
+it('lets a manual check that finds the update join the launch offer', async () => {
+  let respond!: (r: AlertResult) => void;
+  native.noteAlert.mockImplementation(
+    () =>
+      new Promise<AlertResult>((r) => {
+        respond = r;
+      })
+  );
+  const m = await load();
+  dispose = m.scheduleUpdateCheck();
+  await m.scanStore.init();
+  await settle();
+  expect(native.noteAlert).toHaveBeenCalledOnce();
+
+  // Check for Updates… chosen before the offer came up; its answer
+  // arrives while the offer waits.
+  const manual = m.checkForUpdatesNow();
+  await settle();
+  respond('ok');
+  await manual;
+  await settle();
+
+  expect(checks()).toBe(2);
+  expect(native.noteAlert).toHaveBeenCalledOnce();
+  expect(opens()).toBe(1);
 });

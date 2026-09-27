@@ -262,6 +262,15 @@ it('dims Interface and Depth (with their labels) while scanning; Show stays live
   expect(describedText(s.iface)).toContain('Not available while a scan is running.');
 });
 
+it('dims Show with its label when the command model does', () => {
+  fake.describe.mockImplementation((ref: CommandRef) => ({ title: ref.id, enabled: ref.id !== 'view.scope' }));
+  const s = mount();
+
+  expect(s.show.disabled).toBe(true);
+  expect(s.label('lan-show').classList.contains('osm-disabled')).toBe(true);
+  expect(s.label('lan-interface').classList.contains('osm-disabled')).toBe(false);
+});
+
 it('titles the button Scan, Stop and Stopping…, enabled per the command model', async () => {
   const s = mount();
   expect(s.scan.textContent).toBe('Scan');
@@ -477,9 +486,15 @@ it('moves to an empty list with Return, and leaves composing and Command keys al
 
   const composing = new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true });
   s.find.dispatchEvent(composing);
+  // WebKit (WKWebView) ends a composition with a keydown whose
+  // isComposing is false; only keyCode 229 gives it away.
+  const committing = new KeyboardEvent('keydown', { key: 'Enter', keyCode: 229, bubbles: true, cancelable: true });
+  expect(committing.keyCode).toBe(229);
+  s.find.dispatchEvent(committing);
   const command = new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true, cancelable: true });
   s.find.dispatchEvent(command);
   expect(composing.defaultPrevented).toBe(false);
+  expect(committing.defaultPrevented).toBe(false);
   expect(command.defaultPrevented).toBe(false);
   expect(view.calls).toEqual(['focus']);
 });

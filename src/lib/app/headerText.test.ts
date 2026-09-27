@@ -186,6 +186,14 @@ describe('row by row (first match wins)', () => {
       NOW
     );
     expect(both.text).toBe('Probing ports: 4 of 11 hosts.');
+
+    // A failed last scan's line (rows 10 and 11) comes after.
+    const afterFailure = headerState(
+      input({ store: { error: 'Boom' }, lastError: { kind: 'scan', message: 'Boom' }, progress: { hostScanProgress: deep } }),
+      NOW
+    );
+    expect(afterFailure).toMatchObject({ text: 'Deep scan of 192.168.1.31: 412 of 2,048 ports, 4 open.', icon: null });
+    expect(afterFailure.progress).not.toBeNull();
   });
 
   it('10: the scanner failed to start', () => {

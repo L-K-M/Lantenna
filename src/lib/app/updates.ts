@@ -45,8 +45,26 @@ async function appVersion(): Promise<string | null> {
   }
 }
 
+/** The offer waiting for its answer. The launch check and Check for
+ * Updates… can both find the update while it waits; feedback shows the
+ * identical alert once and hands both the same answer, so a second
+ * offer joins this one rather than acting on that answer again (one
+ * View on GitHub opens the page once). */
+let pendingOffer: Promise<void> | null = null;
+
+/** The Check for Updates… in progress; choosing it again joins it. */
+let manualCheck: Promise<void> | null = null;
+
+/** Offer `info`, or join the offer already waiting. */
+function offerUpdate(info: UpdateInfo, current: string | null): Promise<void> {
+  pendingOffer ??= askAboutUpdate(info, current).finally(() => {
+    pendingOffer = null;
+  });
+  return pendingOffer;
+}
+
 /** The update note alert (5.4), then what its button asks for. */
-async function offerUpdate(info: UpdateInfo, current: string | null): Promise<void> {
+async function askAboutUpdate(info: UpdateInfo, current: string | null): Promise<void> {
   offered = true;
   const whatsNew = 'The release page on GitHub describes what’s new.';
   const result = await noteAlert({
@@ -130,7 +148,14 @@ export function scheduleUpdateCheck(): () => void {
 }
 
 /** Check for Updates… (manual). Resolves when its alert is answered. */
-export async function checkForUpdatesNow(): Promise<void> {
+export function checkForUpdatesNow(): Promise<void> {
+  manualCheck ??= checkNow().finally(() => {
+    manualCheck = null;
+  });
+  return manualCheck;
+}
+
+async function checkNow(): Promise<void> {
   let info: UpdateInfo | null;
   try {
     info = await checkForUpdateNow();

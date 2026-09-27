@@ -227,3 +227,17 @@ it('moves "today" to "yesterday" at midnight without a store change', async () =
     expect(h.text.textContent).toBe(`24 hosts, 2 new, 3 hidden. Last scan yesterday at ${formatClock(lastScan)}.`)
   );
 });
+
+it('dates a scan by the clock at the store change, not the last tick', async () => {
+  vi.useFakeTimers({ now: new Date(2026, 8, 27, 23, 59, 50), toFake: ['Date', 'setInterval', 'clearInterval'] });
+  const h = mount();
+
+  // Past midnight, before the next tick.
+  const lastScan = new Date(2026, 8, 28, 0, 0, 30);
+  vi.setSystemTime(new Date(2026, 8, 28, 0, 0, 40));
+  setStore({ lastScanAt: lastScan.toISOString() });
+
+  await vi.waitFor(() =>
+    expect(h.text.textContent).toBe(`24 hosts, 2 new, 3 hidden. Last scan today at ${formatClock(lastScan)}.`)
+  );
+});
