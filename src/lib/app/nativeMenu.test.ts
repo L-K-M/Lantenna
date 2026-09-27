@@ -86,11 +86,14 @@ const tauri = vi.hoisted(() => {
     }
     async remove(item: Base) {
       log.push(`remove ${this.text}: ${item.text}`);
+      // As muda does.
+      if (!this.items.includes(item)) throw new Error('NotAChildOfThisMenu');
       this.items = this.items.filter((i) => i !== item);
     }
-    async append(items: Base[]) {
-      log.push(`append ${this.text}: ${items.map((i) => i.text).join(', ')}`);
-      this.items.push(...items);
+    async append(items: Base | Base[]) {
+      const list = Array.isArray(items) ? items : [items];
+      log.push(`append ${this.text}: ${list.map((i) => i.text).join(', ')}`);
+      this.items.push(...list);
     }
     async setText(text: string) {
       this.text = text;
@@ -132,6 +135,7 @@ vi.mock('./commands', async (importOriginal) => {
 });
 
 const commands = await import('./commands');
+const { openViewMenu } = await import('./contextMenus');
 const { installNativeMenu } = await import('./nativeMenu');
 const { EN0, EN7, context, host, row, selecting } = await import('./commands.fixture');
 
@@ -327,7 +331,9 @@ it('rebuilds a submenu when its structure changes, and only that one', async () 
 
   expect(tauri.log).toEqual([
     'remove Favorites: Add to Favorites',
-    'append Favorites: Add to Favorites, -, printer.local (192.168.1.31)'
+    'append Favorites: Add to Favorites',
+    'append Favorites: -',
+    'append Favorites: printer.local (192.168.1.31)'
   ]);
   expect(oldItems.every((i) => i.closed)).toBe(true);
   expect(dump(submenu('Favorites'))).toEqual(['[Add to Favorites]', '-', 'printer.local (192.168.1.31)']);
@@ -432,4 +438,65 @@ it('syncs without animation frames, as while the window is minimized', async () 
   } finally {
     raf.mockRestore();
   }
+});
+
+it('draws “No interfaces found” as a plain dimmed item, with no check mark', async () => {
+  ctxStore.set(macContext({ store: { interfaces: [], selectedInterface: null } }));
+  await install();
+
+  const none = item('Scan', 'No interfaces found');
+  expect(none).not.toBeInstanceOf(tauri.CheckMenuItem);
+  expect(none.enabled).toBe(false);
+});
+
+it('closes an open contextual menu before running a command', async () => {
+  await install();
+  openViewMenu({ x: 40, y: 60 });
+  expect(document.querySelector('.osm-contextmenu')).not.toBeNull();
+
+  item('Edit', 'Find').action!();
+  expect(document.querySelector('.osm-contextmenu')).toBeNull();
+  expect(commands.run).toHaveBeenCalledWith({ id: 'edit.find' });
+});
+
+it('finishes a rebuild that failed part way on the next pass, releasing what it made', async () => {
+  const favorites = (ips: string[]) =>
+    macContext({
+      store: { favoriteIps: ips, hosts: ips.map((ip) => host(ip, { name: `h${ip.slice(-1)}.local` })) }
+    });
+  ctxStore.set(favorites(['10.0.0.1', '10.0.0.2']));
+  await install();
+  const menu = submenu('Favorites');
+  const before = [...menu.items];
+
+  // The second removal fails: three old items stay, the new ones go.
+  const create = vi.spyOn(tauri.MenuItem, 'new');
+  const remove = vi.spyOn(menu, 'remove');
+  remove.mockImplementationOnce(tauri.Submenu.prototype.remove).mockRejectedValueOnce('menu remove failed');
+  ctxStore.set(favorites(['10.0.0.1']));
+  await settle();
+  expect(warn).toHaveBeenCalledWith('Lantenna couldn’t rebuild the menu bar:', 'menu remove failed');
+  const made = await Promise.all(create.mock.results.map((r) => r.value as Promise<Item>));
+  create.mockRestore();
+  expect(made.length).toBeGreaterThan(0);
+  expect(made.every((i) => i.closed)).toBe(true);
+
+  // Any next pass completes it, even back to the old structure's twin.
+  ctxStore.set(favorites(['10.0.0.1', '10.0.0.2']));
+  await settle();
+  expect(dump(menu)).toEqual(['[Add to Favorites]', '-', 'h1.local (10.0.0.1)', 'h2.local (10.0.0.2)']);
+  expect(before.every((i) => i.closed)).toBe(true);
+  expect(menu.items.some((i) => i.closed)).toBe(false);
+  expect(warn).toHaveBeenCalledOnce();
+});
+
+it('releases every menu handle when disposed', async () => {
+  await install();
+  const tree = appMenu();
+  const handles = [tree, ...tree.items, ...tree.items.flatMap((s) => s.items)];
+
+  dispose();
+  dispose = () => {};
+  await settle();
+  expect(handles.filter((h) => !h.closed)).toEqual([]);
 });

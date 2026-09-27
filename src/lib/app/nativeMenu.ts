@@ -17,7 +17,15 @@
 // longer matches the state (Stop Scan chosen just as the scan ended)
 // does nothing, rather than what its new title says. Every call is
 // async IPC; a failure is logged and retried on the next pass, never
-// shown.
+// shown. A native command first closes an open Osmium contextual menu,
+// as choosing from the menu bar ends any menu tracking: Osmium's menu
+// lets Command keys through to this menu, and would otherwise keep the
+// keyboard from the field or view the command moves to.
+//
+// Handles live in Tauri's resource table until closed. The disposer
+// closes them all once no pass is running; the app keeps its own
+// reference to the menu it shows, so the menu bar stays until another
+// menu replaces it (its items do nothing then).
 //
 // Called by +page.svelte on macOS only, after mount (never at import:
 // the mock backend may be installed after this module loads).
@@ -44,8 +52,10 @@ import {
   type PredefinedItem,
   type SpecEntry
 } from './commands';
+import { closeContextMenu } from './contextMenus';
 
 type NativeItem = MenuItem | CheckMenuItem | PredefinedMenuItem;
+type Handle = { close(): Promise<void> };
 
 /** The longest a change waits for its pass when no frame comes. */
 const FALLBACK_MS = 250;
@@ -59,6 +69,12 @@ const CHECK_IDS: ReadonlySet<CommandId> = new Set([
   'view.scope',
   'view.showHidden'
 ]);
+
+/** Built as a CheckMenuItem. The Scan menu's "No interfaces found"
+ * (scan.interface without an interface) is a message, not an option. */
+function isCheckItem(entry: CommandRef): boolean {
+  return CHECK_IDS.has(entry.id) && !(entry.id === 'scan.interface' && entry.arg === undefined);
+}
 
 /** Titles are given so they don't depend on muda's defaults. */
 const PREDEFINED: Readonly<Record<PredefinedItem, PredefinedMenuItemOptions>> = {
@@ -114,6 +130,10 @@ function warn(what: string) {
   return (error: unknown) => console.warn(`Lantenna couldn’t ${what}:`, error);
 }
 
+function release(handles: readonly Handle[]): Promise<unknown> {
+  return Promise.all(handles.map((h) => h.close().catch(warn('release a menu handle'))));
+}
+
 /** Build the menu bar, keep it in sync; returns the disposer. */
 export function installNativeMenu(): () => void {
   let disposed = false;
@@ -123,9 +143,12 @@ export function installNativeMenu(): () => void {
   let busy = false;
   let again = false;
   let submenus: Map<string, SubmenuRecord> | null = null;
+  let appMenu: Menu | null = null;
 
   function onAction(record: ItemRecord): void {
     if (disposed || record.ref === null) return;
+
+    closeContextMenu();
 
     // Act on what the item said when it was chosen, or not at all.
     if (describe(record.ref, get(commandContext)).title === record.applied.title) run(record.ref);
@@ -154,7 +177,7 @@ export function installNativeMenu(): () => void {
     };
 
     let handle: NativeItem;
-    if (CHECK_IDS.has(entry.id)) {
+    if (isCheckItem(entry)) {
       applied.checked = info.checked ?? false;
       handle = await CheckMenuItem.new({ text: info.title, enabled: info.enabled, checked: applied.checked, action });
     } else {
@@ -171,8 +194,16 @@ export function installNativeMenu(): () => void {
     return record;
   }
 
-  function createItems(spec: MenuSpec, ctx: CommandContext): Promise<ItemRecord[]> {
-    return Promise.all(spec.entries.map((entry) => createItem(entry, ctx)));
+  /** All of a spec's items, or none: if one fails, the rest are
+   * released before the failure is reported. */
+  async function createItems(spec: MenuSpec, ctx: CommandContext): Promise<ItemRecord[]> {
+    const results = await Promise.allSettled(spec.entries.map((entry) => createItem(entry, ctx)));
+    const items = results.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
+    const failure = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (failure === undefined) return items;
+
+    void release(items.map((i) => i.handle));
+    throw failure.reason;
   }
 
   async function build(ctx: CommandContext): Promise<Map<string, SubmenuRecord>> {
@@ -185,9 +216,12 @@ export function installNativeMenu(): () => void {
     }
 
     const menu = await Menu.new({ items: [...records.values()].map((r) => r.submenu) });
+    appMenu = menu;
     if (disposed) return records;
 
-    await menu.setAsAppMenu();
+    // Tauri hands back the menu this one replaces, as a new handle.
+    const replaced = await menu.setAsAppMenu();
+    if (replaced) void release([replaced]);
     // macOS adds its Help search field to this menu.
     await records.get('help')?.submenu.setAsHelpMenuForNSApp().catch(warn('set the Help menu'));
     return records;
@@ -224,16 +258,33 @@ export function installNativeMenu(): () => void {
     return calls;
   }
 
+  /** Replace a submenu's items one call at a time, keeping
+   * `record.items` equal to what the submenu holds, so the next pass
+   * resumes a rebuild that failed part way. */
   async function rebuild(record: SubmenuRecord, spec: MenuSpec, ctx: CommandContext): Promise<void> {
     const items = await createItems(spec, ctx);
-    const old = record.items;
+    // No spec's structure (JSON) is empty: until the last append, every
+    // pass rebuilds.
+    record.structure = '';
 
-    for (const item of old) await record.submenu.remove(item.handle);
-    await record.submenu.append(items.map((i) => i.handle));
-    record.items = items;
+    try {
+      while (record.items.length > 0) {
+        const old = record.items[0]!;
+        await record.submenu.remove(old.handle);
+        record.items.shift();
+        void release([old.handle]);
+      }
+
+      for (const item of items) {
+        await record.submenu.append(item.handle);
+        record.items.push(item);
+      }
+    } catch (error) {
+      void release(items.filter((i) => !record.items.includes(i)).map((i) => i.handle));
+      throw error;
+    }
+
     record.structure = structureOf(spec.entries);
-
-    await Promise.all(old.map((item) => item.handle.close().catch(warn('release a menu item'))));
   }
 
   async function sync(records: Map<string, SubmenuRecord>, ctx: CommandContext): Promise<void> {
@@ -281,7 +332,18 @@ export function installNativeMenu(): () => void {
       warn('build the menu bar')(error);
     } finally {
       busy = false;
+      if (disposed) releaseAll();
     }
+  }
+
+  /** Close every handle; only while no pass is running. */
+  function releaseAll(): void {
+    const records = [...(submenus?.values() ?? [])];
+    const handles: Handle[] = records.flatMap((r) => [...r.items.map((i) => i.handle), r.submenu]);
+    if (appMenu) handles.push(appMenu);
+    submenus = null;
+    appMenu = null;
+    void release(handles);
   }
 
   function cancel(): void {
@@ -307,5 +369,7 @@ export function installNativeMenu(): () => void {
     disposed = true;
     cancel();
     unsubscribe();
+    // A running pass releases them when it ends.
+    if (!busy) releaseAll();
   };
 }

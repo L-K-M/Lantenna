@@ -15,7 +15,7 @@ vi.mock('./hostModel', async () => {
   return { hostModel: fake.model };
 });
 
-const { installContextMenuGuard, openHostMenu, openViewMenu } = await import('./contextMenus');
+const { closeContextMenu, installContextMenuGuard, openHostMenu, openViewMenu } = await import('./contextMenus');
 const { EMPTY_MODEL, host, row } = await import('./commands.fixture');
 const { scanStore } = await import('$lib/util/scanStore');
 const { ui } = await import('./ui');
@@ -80,6 +80,25 @@ it('selects the host, then shows its menu', () => {
   ]);
   // Contextual menus draw no keys.
   expect(el.querySelector('.osm-menu-key')).toBeNull();
+});
+
+it('names the menu of a nameless host by its IP address, not “Unknown”', () => {
+  const nameless = row(host('192.168.1.77'));
+  fake.model.set({ ...EMPTY_MODEL, rows: [nameless], universe: 1, selected: nameless });
+  openHostMenu('192.168.1.77', { x: 40, y: 60 });
+
+  expect(menu()!.getAttribute('aria-label')).toBe('192.168.1.77');
+});
+
+it('closes the open menu on request, without choosing', () => {
+  const run = vi.spyOn(scanStore, 'startScan');
+  openViewMenu({ x: 300, y: 200 });
+  expect(menu()).not.toBeNull();
+
+  closeContextMenu();
+  expect(menu()).toBeNull();
+  expect(run).not.toHaveBeenCalled();
+  closeContextMenu(); // nothing open: nothing happens
 });
 
 it('shows the empty-space menu and runs the chosen item', async () => {

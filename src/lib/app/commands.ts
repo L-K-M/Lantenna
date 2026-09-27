@@ -192,8 +192,9 @@ function favoriteName(store: ScanStoreState, ip: string): string | null {
   return host ? knownName(host, custom) : custom;
 }
 
-/** The selection's name in "Add “<name>” to Favorites". */
-function rowName(row: HostRow): string {
+/** A host's name for people: in "Add “<name>” to Favorites" and as its
+ * contextual menu's accessible name. */
+export function rowName(row: HostRow): string {
   return knownName(row.host, row.customName) ?? row.ip;
 }
 
@@ -254,7 +255,8 @@ function describeIgnoringModal(ref: CommandRef, ctx: CommandContext, place: Comm
     case 'scan.interface': {
       const item = store.interfaces.find((i) => interfaceKey(i) === ref.arg);
       // The Scan menu's only item when there are none, as in the pop-up.
-      if (!item) return dimmed(ref.arg === undefined ? 'No interfaces found' : ref.arg, { checked: false });
+      // A message, not an option, so it has no check mark.
+      if (!item) return ref.arg === undefined ? dimmed('No interfaces found') : dimmed(ref.arg, { checked: false });
 
       const current = findInterfaceByKey(store.interfaces, store.selectedInterface);
       return {

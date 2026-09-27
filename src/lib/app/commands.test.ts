@@ -109,11 +109,8 @@ group('describe', () => {
       { id: 'scan.interface' },
       'separator'
     ]);
-    expect(describe(ref('scan.interface'), none)).toEqual({
-      title: 'No interfaces found',
-      enabled: false,
-      checked: false
-    });
+    // No check mark: screen readers would announce a checkbox option.
+    expect(describe(ref('scan.interface'), none)).toEqual({ title: 'No interfaces found', enabled: false });
   });
 
   it('dims every host command without a selection', () => {
