@@ -149,6 +149,33 @@ it('reads the last scan first, then follows the store', async () => {
   );
 });
 
+it('leaves out the first-run hint where the whole sentence doesn’t fit', async () => {
+  // 840 px wide, a long Linux interface name: 788 px of text in 771.
+  const widths = vi
+    .spyOn(HTMLElement.prototype, 'offsetWidth', 'get')
+    .mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('lan-header-measure') ? 788 : 0;
+    });
+  const boxes = vi
+    .spyOn(HTMLElement.prototype, 'clientWidth', 'get')
+    .mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('lan-header-text') ? 771 : 0;
+    });
+  try {
+    setStore({ loading: false, lastScanAt: null, hosts: [] });
+    const h = mount();
+    await settle();
+    expect(h.text.textContent).toBe(
+      'Click Scan to search 253 addresses on en0 (192.168.1.0/24). This computer is 192.168.1.23.'
+    );
+    // Screen readers still hear it.
+    expect(h.live.textContent).toMatch(/ For help, choose Show Balloons from the Help menu\.$/);
+  } finally {
+    widths.mockRestore();
+    boxes.mockRestore();
+  }
+});
+
 it('shows the scan’s progress bar with its ARIA values', async () => {
   const h = mount();
   setStore({ scanning: true });

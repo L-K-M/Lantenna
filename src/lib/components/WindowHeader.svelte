@@ -30,7 +30,9 @@
    * time up to a tick old (a scan just past midnight would read "on
    * <date>" instead of "today"). */
   let tick = $state(0);
+  let headerEl: HTMLDivElement;
   let text: HTMLSpanElement;
+  let measure: HTMLSpanElement;
   let arrowsSlot: HTMLSpanElement;
   let arrows: OsmiumChasingArrows | null = $state(null);
 
@@ -48,16 +50,32 @@
       new Date()
     );
   });
+  /** Whether the whole sentence fits; else its optional end is left
+   * out (the first-run hint at the minimum width). */
+  let fits = $state(true);
+  const shown = $derived(
+    header.optional && !fits ? header.text.slice(0, header.text.length - header.optional.length) : header.text
+  );
   const bar = $derived(header.progress);
   const indeterminate = $derived(bar !== null && 'indeterminate' in bar);
   /** The determinate bar's numbers, for its ARIA values and fill. */
   const counts = $derived(bar !== null && 'max' in bar ? bar : null);
 
+  /** The whole sentence, measured unclipped, against the text's box. */
+  function checkFit(): void {
+    fits = measure.offsetWidth <= text.clientWidth;
+  }
+
+  $effect(() => {
+    void header.text;
+    untrack(checkFit);
+  });
+
   // centerText places the text on a whole pixel (and re-centers when the
   // span resizes, as the bar comes and goes); it needs a call after
   // every text change.
   $effect(() => {
-    void header.text;
+    void shown;
     untrack(() => centerText(text));
   });
 
@@ -75,7 +93,11 @@
     const timer = setInterval(() => {
       tick += 1;
     }, CLOCK_TICK_MS);
+    // The window's width decides what fits.
+    const resize = new ResizeObserver(checkFit);
+    resize.observe(headerEl);
     return () => {
+      resize.disconnect();
       clearInterval(timer);
       arrows?.destroy();
       arrows = null;
@@ -83,9 +105,10 @@
   });
 </script>
 
-<div class="lan-header osm-placard" use:areaBalloon={HEADER_BALLOON}>
+<div class="lan-header osm-placard" bind:this={headerEl} use:areaBalloon={HEADER_BALLOON}>
   <span class="osm-arrows lan-arrows" bind:this={arrowsSlot}></span>
-  <span class="lan-header-text" class:lan-with-bar={bar !== null} bind:this={text}>{header.text}</span>
+  <span class="lan-header-text" class:lan-with-bar={bar !== null} bind:this={text}>{shown}</span>
+  <span class="lan-header-measure" aria-hidden="true" bind:this={measure}>{header.text}</span>
   {#if bar}
     <!-- Without a value the bar is indeterminate, for ARIA as for Osmium. -->
     <div
@@ -125,6 +148,16 @@
 
   .lan-header-text.lan-with-bar {
     right: 137px;
+  }
+
+  /* The whole sentence on one line, unseen, for checkFit. */
+  .lan-header-measure {
+    position: absolute;
+    left: 0;
+    top: 0;
+    visibility: hidden;
+    white-space: nowrap;
+    pointer-events: none;
   }
 
   /* 120 x 14 at x Wc-129..Wc-10, y 3..16. */

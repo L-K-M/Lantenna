@@ -261,9 +261,12 @@ describe('row by row (first match wins)', () => {
     expect(hinted.text).toBe(
       'Click Scan to search 253 addresses on en0 (192.168.1.0/24). This computer is 192.168.1.23. For help, choose Show Balloons from the Help menu.'
     );
-    expect(headerState(input({ store: never, balloons: 'shown' }), NOW).text).toBe(
-      'Click Scan to search 253 addresses on en0 (192.168.1.0/24). This computer is 192.168.1.23.'
-    );
+    // The hint may be left out where the sentence doesn't fit.
+    expect(hinted.optional).toBe(' For help, choose Show Balloons from the Help menu.');
+    expect(hinted.announce).toBe(hinted.text);
+    const plain = headerState(input({ store: never, balloons: 'shown' }), NOW);
+    expect(plain.text).toBe('Click Scan to search 253 addresses on en0 (192.168.1.0/24). This computer is 192.168.1.23.');
+    expect(plain.optional).toBeUndefined();
     // Above 4,096 addresses the scan samples, and the hint says so.
     expect(headerState(input({ store: never, selectedInterface: EN7, balloons: 'shown' }), NOW).text).toBe(
       'Click Scan to search 4,096 sampled addresses on en7 (10.0.0.0/16). This computer is 10.0.4.2.'

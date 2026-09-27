@@ -44,6 +44,10 @@ export interface HeaderState {
   /** A small alert icon before the text (Osmium N3, not yet available):
    * stop for the error lines, caution for the interface problems. */
   icon: 'stop' | 'caution' | null;
+  /** The end of `text` the header leaves out when the whole sentence
+   * doesn't fit (row 14's Balloon Help hint, at the minimum width with a
+   * long interface name); `announce` keeps it. */
+  optional?: string;
 }
 
 /** The addresses a scan of `iface` probes: each of its subnet's host
@@ -193,10 +197,11 @@ export function headerState(input: HeaderInput, now: Date): HeaderState {
     const addresses = targets.sampled
       ? `${formatCount(targets.count)} sampled addresses`
       : plural(targets.count, 'address', 'addresses');
-    return row(
+    const state = row(
       `Click Scan to search ${addresses} on ${iface.name} (${iface.subnet}). This computer is ${iface.ip}.${hint}`,
       false
     );
+    return hint ? { ...state, optional: hint } : state;
   }
 
   return idleRow(input, now);
