@@ -33,7 +33,7 @@ it('classifies the list, the icon grid, text fields and the rest', () => {
   expect(classifyFocus(document.body)).toBe('other');
 });
 
-it('follows focus moving between places and leaving for nowhere', () => {
+it('follows focus moving between places and leaving for nowhere', async () => {
   const el = build();
   const seen: FocusKind[] = [];
   const stop = keyboardFocus.subscribe((kind) => seen.push(kind));
@@ -41,8 +41,37 @@ it('follows focus moving between places and leaving for nowhere', () => {
   el.grid.focus();
   el.find.focus();
   el.find.blur();
+  await Promise.resolve();
   stop();
 
   expect(seen).toEqual(['other', 'list', 'text', 'other']);
   expect(get(keyboardFocus)).toBe('other');
+});
+
+it('reads focus leaving for nowhere after the event, not during it', async () => {
+  const el = build();
+  const seen: FocusKind[] = [];
+  const stop = keyboardFocus.subscribe((kind) => seen.push(kind));
+  el.tile.focus();
+
+  // As a browser does when the focused tile is removed or moved (during
+  // Svelte's update): nothing is written while the event is dispatched.
+  el.tile.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: null }));
+  el.tile.remove();
+  expect(seen).toEqual(['other', 'icons']);
+
+  await Promise.resolve();
+  expect(seen).toEqual(['other', 'icons', 'other']);
+  stop();
+});
+
+it('keeps the kind when the window loses focus but the element keeps it', async () => {
+  const el = build();
+  const stop = keyboardFocus.subscribe(() => {});
+  el.find.focus();
+
+  el.find.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: null }));
+  await Promise.resolve();
+  expect(get(keyboardFocus)).toBe('text');
+  stop();
 });

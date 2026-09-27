@@ -37,6 +37,15 @@ export function classifyFocus(el: Element | null): FocusKind {
  * the document while anything subscribes. Focus leaving for nowhere (a
  * click on the gray) reads "other". The window losing OS focus keeps the
  * last kind, because the element keeps the DOM focus.
+ *
+ * Focus leaving for nowhere is read a microtask later. Browsers fire
+ * that focusout synchronously when the focused element is removed or
+ * moved, which Svelte does while it updates the page (switching views,
+ * reordering tiles); a store write then reaches components' $state
+ * through $commandContext in the middle of Svelte's update, which it
+ * refuses (state_unsafe_mutation) and which aborts the update. Moves to
+ * another element (focusin) stay synchronous: menus hand the keyboard
+ * back and run a command at once, and the command reads this store.
  */
 export const keyboardFocus: Readable<FocusKind> = readable<FocusKind>('other', (set) => {
   set(classifyFocus(document.activeElement));
@@ -46,7 +55,8 @@ export const keyboardFocus: Readable<FocusKind> = readable<FocusKind>('other', (
   };
   const onFocusOut = (e: FocusEvent) => {
     // A focusin follows when focus moves to another element.
-    if (e.relatedTarget === null) set('other');
+    if (e.relatedTarget !== null) return;
+    queueMicrotask(() => set(classifyFocus(document.activeElement)));
   };
 
   document.addEventListener('focusin', onFocusIn);

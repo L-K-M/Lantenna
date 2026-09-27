@@ -4,6 +4,7 @@
 import { fireEvent, render, waitFor } from '@testing-library/svelte';
 import { LogicalPosition, LogicalSize, type Monitor } from '@tauri-apps/api/window';
 import { getAppearance, setAppearance } from 'osmium-ui';
+import { flushSync } from 'svelte';
 import { get } from 'svelte/store';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ui } from '$lib/app/ui';
@@ -261,4 +262,42 @@ it('re-reads the system accent whenever the window becomes active', async () => 
   await waitFor(() => expect(getAppearance().accent).toEqual({ release: '8.5', name: 'Emerald' }));
   expect(getAppearance().highlight).toEqual({ release: '8.5', name: 'Green' });
   expect(mountedWindow(container).classList.contains('osm-inactive')).toBe(false);
+});
+
+/** Chromium fires focusout (relatedTarget null) when the focused element
+ * leaves the page, as when Svelte removes a view; happy-dom fires none.
+ * Returns the undo. */
+function loseFocusOnRemoval(): () => void {
+  const remove = Element.prototype.remove;
+  Element.prototype.remove = function (this: Element) {
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && this.contains(focused)) {
+      focused.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: null }));
+    }
+    remove.call(this);
+  };
+  return () => {
+    Element.prototype.remove = remove;
+  };
+}
+
+it('switches from icons back to the list while the icon grid has the keyboard', async () => {
+  ui.setViewMode('icons');
+  const { container } = render(Page);
+  const undo = loseFocusOnRemoval();
+  try {
+    const grid = await waitFor(() => container.querySelector<HTMLElement>('.lan-icons [role=listbox]')!);
+    grid.focus();
+
+    // The icon view's DOM goes while Svelte updates the page: the focus
+    // it takes along must not write the command context's stores then
+    // (state_unsafe_mutation, which left the icon view on screen).
+    ui.setViewMode('list');
+    expect(() => flushSync()).not.toThrow();
+    expect(container.querySelector('.lan-view .lan-list')).not.toBeNull();
+    expect(container.querySelector('.lan-view .lan-icons')).toBeNull();
+  } finally {
+    undo();
+    ui.setViewMode('list');
+  }
 });
