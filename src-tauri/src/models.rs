@@ -7,6 +7,9 @@ pub struct NetworkInterface {
     pub cidr: u8,
     pub subnet: String,
     pub host_count: u32,
+    /// Whether this interface carries the IPv4 default route.
+    #[serde(default)]
+    pub is_default_route: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

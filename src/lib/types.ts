@@ -9,6 +9,7 @@ export interface NetworkInterface {
   cidr: number;
   subnet: string;
   host_count: number;
+  is_default_route: boolean;
 }
 
 export interface PortInfo {

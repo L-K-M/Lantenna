@@ -1,3 +1,4 @@
+use crate::default_route;
 use crate::models::{
     Host, NetworkInterface, PortProfile, ScanErrorPayload, ScanOptions, ScanPhase, ScanProgress,
     ScanResult, SystemColors,
@@ -112,7 +113,14 @@ async fn scan_and_enrich(
 
 #[tauri::command]
 pub async fn get_network_interfaces() -> Result<Vec<NetworkInterface>, String> {
-    scanner::list_network_interfaces().map_err(|error| error.to_string())
+    let mut interfaces = scanner::list_network_interfaces().map_err(|error| error.to_string())?;
+    let default_interface =
+        tauri::async_runtime::spawn_blocking(default_route::default_route_interface)
+            .await
+            .ok()
+            .flatten();
+    default_route::mark_default_route(&mut interfaces, default_interface.as_deref());
+    Ok(interfaces)
 }
 
 #[tauri::command]

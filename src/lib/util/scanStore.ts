@@ -292,16 +292,62 @@ function isLinkLocalAddress(ip: string): boolean {
   return a === 169 && b === 254;
 }
 
+/**
+ * Name prefixes of interfaces that are rarely the LAN you mean to scan: VM and
+ * Internet Sharing bridges (including Parallels' vnic adapters), VPN tunnels,
+ * Apple Wireless Direct Link, container and tap/tun devices.
+ */
+const VIRTUAL_INTERFACE_PREFIXES = [
+  'bridge',
+  'utun',
+  'vmnet',
+  'vboxnet',
+  'awdl',
+  'llw',
+  'docker',
+  'veth',
+  'tap',
+  'tun',
+  'wg',
+  'tailscale',
+  'ppp',
+  'ipsec',
+  'zt',
+  'feth',
+  'vnic'
+];
+
+function isVirtualInterface(item: NetworkInterface): boolean {
+  return VIRTUAL_INTERFACE_PREFIXES.some((prefix) => item.name.startsWith(prefix));
+}
+
 function pickDefaultInterface(interfaces: NetworkInterface[]): NetworkInterface | null {
-  const preferred = interfaces.filter(
-    (item) => isPrivateAddress(item.ip) && !isLinkLocalAddress(item.ip) && item.host_count > 0
+  const scannable = interfaces.filter((item) => item.host_count > 0 && !isLinkLocalAddress(item.ip));
+
+  // The interface that carries the default route is the network in use, unless
+  // it is a full-tunnel VPN, or has a public address: never start out aimed at
+  // someone else's address space.
+  const defaultRoute = scannable.find(
+    (item) => item.is_default_route && !isVirtualInterface(item) && isPrivateAddress(item.ip)
   );
+  if (defaultRoute) {
+    return defaultRoute;
+  }
+
+  const preferred = scannable.filter((item) => isPrivateAddress(item.ip));
 
   if (preferred.length > 0) {
     return [...preferred].sort((a, b) => {
+      const aVirtual = Number(isVirtualInterface(a));
+      const bVirtual = Number(isVirtualInterface(b));
       const aDistance = Math.abs(a.host_count - 254);
       const bDistance = Math.abs(b.host_count - 254);
-      return aDistance - bDistance || a.name.localeCompare(b.name) || a.ip.localeCompare(b.ip);
+      return (
+        aVirtual - bVirtual ||
+        aDistance - bDistance ||
+        a.name.localeCompare(b.name) ||
+        a.ip.localeCompare(b.ip)
+      );
     })[0];
   }
 

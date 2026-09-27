@@ -1,4 +1,5 @@
 mod commands;
+mod default_route;
 mod models;
 mod scanner;
 mod storage;
