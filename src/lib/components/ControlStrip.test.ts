@@ -211,7 +211,7 @@ it('lays out the strip with its labels and Osmium controls', () => {
   expect(s.find.classList.contains('osm-edit')).toBe(true);
   expect(s.find.classList.contains('osm-compact')).toBe(true);
   expect(s.find.placeholder).toBe('');
-  expect(s.find.getAttribute('aria-label')).toBe('Filter hosts by name, IP, vendor, type, MAC, port or service');
+  expect(s.find.getAttribute('aria-label')).toBe('Find hosts by name, IP, vendor, type, MAC, port or service');
 
   expect(s.container.querySelector('[title]')).toBeNull();
 });

@@ -273,11 +273,13 @@
   </label>
 
   <label class="lan-find-label" for={FIND_FIELD_ID}>Find:</label>
+  <!-- The accessible name starts with the visible label (WCAG 2.5.3, so
+       "click Find" reaches it by voice) and keeps the old detail. -->
   <input
     type="text"
     class="osm-edit osm-compact lan-find"
     id={FIND_FIELD_ID}
-    aria-label="Filter hosts by name, IP, vendor, type, MAC, port or service"
+    aria-label="Find hosts by name, IP, vendor, type, MAC, port or service"
     autocomplete="off"
     autocapitalize="off"
     spellcheck="false"
