@@ -19,6 +19,7 @@ vi.mock('./feedback', async () => {
     stopAlert: vi.fn(async () => 'ok'),
     noteAlert: vi.fn(async () => 'ok'),
     setHostNote: vi.fn(),
+    clearHostNote: vi.fn(),
     hostNote: readable(null)
   };
 });
@@ -172,8 +173,8 @@ describe('waking', () => {
       "explained(Invalid MAC address 'zz') Check that this computer is connected to the network, then try again."
     );
     // The failure clears the host's older note instead of adding one.
-    expect(feedback.setHostNote).toHaveBeenCalledTimes(1);
-    expect(feedback.setHostNote).toHaveBeenCalledWith('192.168.1.31', '');
+    expect(feedback.setHostNote).not.toHaveBeenCalled();
+    expect(feedback.clearHostNote).toHaveBeenCalledExactlyOnceWith('192.168.1.31');
     expect(get(actions.wakingIp)).toBeNull();
   });
 
@@ -336,7 +337,7 @@ describe('showing the host', () => {
     actions.beginRename();
 
     expect(get(ui)).toMatchObject({ infoPaneShown: true, infoTab: 'general' });
-    expect(focusName).toHaveBeenCalledWith(true);
+    expect(focusName).toHaveBeenCalledOnce();
   });
 
   it('the Favorites jump lists, selects, reveals and focuses the host', () => {

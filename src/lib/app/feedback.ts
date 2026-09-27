@@ -166,11 +166,16 @@ function showSelectedNote(selectedIp: string | null): void {
   shownNote.set(next);
 }
 
-/** Set `ip`'s status line (5.3 texts). An empty text removes it: a
- * failure is an alert, so "Sending a wake-up packet…" must not stay. */
+/** Set `ip`'s status line to a result (5.3 texts). */
 export function setHostNote(ip: string, text: string): void {
-  if (text === '') notes.delete(ip);
-  else notes.set(ip, text);
+  notes.set(ip, text);
+  showSelectedNote(get(scanStore).selectedHostIp);
+}
+
+/** Remove `ip`'s status line: a failure is an alert, and the line must
+ * not keep a result from before the attempt. */
+export function clearHostNote(ip: string): void {
+  notes.delete(ip);
   showSelectedNote(get(scanStore).selectedHostIp);
 }
 
@@ -223,7 +228,7 @@ function onScanEvent(e: ScanEvent): void {
     case 'deep-scan-failed':
       // Failures are alerts, never status lines: drop the host's older
       // note, which no longer describes it.
-      setHostNote(e.ip, '');
+      clearHostNote(e.ip);
       void stopAlert(`Lantenna couldn’t deep scan ${e.ip}.`, explainError(e.message));
       return;
     case 'scan-complete':

@@ -36,7 +36,8 @@ export interface HostViewApi {
 export const activeView: Writable<HostViewApi | null> = writable(null);
 
 export interface InfoPaneApi {
-  focusName(select: boolean): void;
+  /** Host > Rename…: give the name field the keyboard, its text selected. */
+  focusName(): void;
 }
 
 /** Published by HostInfoPane (unit C). */

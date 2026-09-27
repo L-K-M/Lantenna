@@ -98,12 +98,13 @@
     if (draftRow && draft !== shown) commit(draftRow);
   }
 
-  /** Host > Rename… (through HostInfoPane's InfoPaneApi). */
-  export function focusName(select: boolean): void {
+  /** Host > Rename… (through HostInfoPane's InfoPaneApi): the field
+   * takes the keyboard with its text selected. */
+  export function focusName(): void {
     if (!field) return;
 
     field.focus();
-    if (select) field.select();
+    field.select();
   }
 
   /** Centered on a whole pixel, as Osmium centers a list's placeholder. */

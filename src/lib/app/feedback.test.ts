@@ -359,13 +359,13 @@ it('shows the selected host’s note and drops it when another host is selected'
   expect(get(f.hostNote)).toBeNull();
 });
 
-it('removes a note set to empty text', async () => {
+it('removes a cleared note', async () => {
   const f = await load();
   dispose = f.installFeedback();
   f.scanStore.setSelectedHost('192.168.1.40');
 
   f.setHostNote('192.168.1.40', 'Sending a wake-up packet…');
-  f.setHostNote('192.168.1.40', '');
+  f.clearHostNote('192.168.1.40');
 
   expect(get(f.hostNote)).toBeNull();
 });

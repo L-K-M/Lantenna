@@ -313,7 +313,7 @@ describe('Rename…', () => {
     // What actions.beginRename does.
     ui.setInfoPane(true);
     ui.setInfoTab('general');
-    get(infoPaneApi)?.focusName(true);
+    get(infoPaneApi)?.focusName();
 
     const field = screen.getByRole('textbox', { name: 'Name' }) as HTMLInputElement;
     expect(pane().hidden).toBe(false);

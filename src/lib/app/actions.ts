@@ -25,7 +25,7 @@ import { hostMatchesQuery } from '$lib/util/hostSearch';
 import { primaryPortTarget } from '$lib/util/portTargets';
 import { scanStore } from '$lib/util/scanStore';
 import { explainError } from './errorText';
-import { noteAlert, setHostNote, stopAlert } from './feedback';
+import { clearHostNote, noteAlert, setHostNote, stopAlert } from './feedback';
 import { hostModel, type HostRow } from './hostModel';
 import { customNameFor, knownName } from './hostNames';
 import { ui, type InfoTab } from './ui';
@@ -110,7 +110,7 @@ export async function wakeHost(ip: string): Promise<void> {
     // Failures are alerts, never status lines (5.3): drop the host's
     // older note, as a failed deep scan does, so the line doesn't show
     // a result from before this attempt.
-    setHostNote(ip, '');
+    clearHostNote(ip);
     const raw = errorMessage(error, 'Failed to send Wake-on-LAN packet');
     void stopAlert('Lantenna couldn’t send the wake-up packet.', `${explainError(raw)} ${WAKE_ADVICE}`);
   } finally {
@@ -248,7 +248,7 @@ export function showInfo(tab: InfoTab = 'general'): void {
 /** Host > Rename…: show the pane, General tab, focus and select the name. */
 export function beginRename(): void {
   showInfo('general');
-  get(infoPaneApi)?.focusName(true);
+  get(infoPaneApi)?.focusName();
 }
 
 /**

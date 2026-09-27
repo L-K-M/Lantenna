@@ -257,7 +257,7 @@ describe('the name field', () => {
 
   it('takes the keyboard for Rename…, its text selected', async () => {
     const { component } = render(InfoGeneral, { props: { row: printer } });
-    component.focusName(true);
+    component.focusName();
 
     const field = nameField();
     expect(document.activeElement).toBe(field);

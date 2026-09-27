@@ -79,7 +79,7 @@
   let tabsHost: HTMLDivElement;
   let openButton: HTMLButtonElement;
   let tabs: OsmiumTabs | null = null;
-  let general: { focusName(select: boolean): void } | undefined = $state();
+  let general: { focusName(): void } | undefined = $state();
 
   const selected = $derived($hostModel.selected);
   const status = $derived(
@@ -110,9 +110,9 @@
   /** Host > Rename…: actions.beginRename has shown the pane and asked
    * for General; apply that to the page first, so the field can take
    * the keyboard. */
-  function focusName(select: boolean): void {
+  function focusName(): void {
     flushSync();
-    general?.focusName(select);
+    general?.focusName();
   }
 
   onMount(() => {
