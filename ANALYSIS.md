@@ -16,45 +16,6 @@ Last updated 2026-09-26 against `main` at `7076c3c` (v1.0.1).
 - Line numbers drift. Search for the named function instead.
 - When you finish an item, delete it here in the same PR. When you find
   something new, add it with the same shape.
-- Check the "In flight" section first: those items already have open PRs.
-
----
-
-## In flight (open PRs, not yet merged)
-
-Nine PRs from the September review are open. Don't redo this work. Once a PR
-merges, delete its row. If one is closed without merging, move its items back
-into the backlog below.
-
-| PR | What it fixes | Stacked on |
-|---|---|---|
-| #16 | The Rust CI job ran `cargo` in the repo root, which has no `Cargo.toml`, so every PR was red. Also `cargo fmt` and 4 clippy lints. | — |
-| #17 | `parse_dns_name` looped forever on a self-referencing mDNS compression pointer (a LAN-wide DoS that wedged every later scan). The scan task now always releases the "running" lock, and a panic becomes `scan-error`. Labels with control characters are rejected. | #16 |
-| #18 | Two-phase scanning: sweep 5 discovery ports, read ARP right away, ping, then probe the profile on live hosts only. Phased and throttled progress. Measured on a simulated /24: Fast 34 s → 8 s, Balanced 208 s → 26 s (and it finds hosts the old ARP read missed), Thorough ~2.5 h → 204 s. | #16 |
-| #19 | Deep ⊇ Standard ⊇ Quick port profiles, heuristic ports actually probed, UDP-only ports removed. Banners are read on the probe connection (it used to open a second one), TLS ports are skipped, the `Server` header is case-insensitive, and SMTP/IPP/Home Assistant banners are read. | #16 |
-| #20 | Fingerprints are rebuilt every scan (they used to be frozen for 90 days). Only lookups are cached, including Fingerbank misses. Macs and NAS boxes are no longer "Windows-like". Only the OUI goes to maclookup.app, randomized MACs are never looked up, and the UI shows "Private address". | #16 |
-| #21 | Progress moves to its own store, table rows are keyed and memoized (main-thread time 27.5 s → 5.4 s on a 4,094-address scan). A "Stopping..." state fixes the cancel race. The table no longer empties on rescan. `errorMessage()` keeps Tauri's string errors. | #16 |
-| #22 | The first launch picks the default-route interface (it used to pick `bridge100`). Virtual and public interfaces rank last. | #16 |
-| #23 | Filter by vendor, type, MAC, port and service; the right empty-state text; selection scrolls into view; vendor names shortened; the "CO. , LTD." mangling fixed; readable ports column; relative Last Seen; no hover flash; unnamed hosts sort last; double-click or Return opens the host; port-target logic moved to a util. | #16 |
-| #24 | A Chooser-style icon view (32 px icons, System 7 selection, 2D arrow keys). Icon rules moved to `$lib/util/hostIcons.ts`. | #23 |
-
-**Merge notes:**
-
-- Merge #16 first.
-- #17–#20 and #22 all touch `src-tauri/src/scanner.rs`, but in different
-  functions. Expect small textual conflicts only in imports and the test
-  module.
-- #21, #23 and #24 all touch `HostTable.svelte` and `+page.svelte`. When #21
-  (per-row memoization) meets #23 (relative "Last Seen", refreshed every
-  minute), keep Last Seen **out** of #21's `rowView` cache, or put `now` in the
-  cache key. Otherwise the relative time freezes.
-- Also when resolving #21 against #23, keep `customNames` referenced directly
-  in the `$: sortedHosts` statement (#21 passes it to `sortHosts`). #23's
-  `isUnnamed()` reads `customNames` inside a function, which Svelte's `$:`
-  doesn't track, so without it a rename won't re-sort the list. The bug is on
-  main too.
-- `CHANGELOG.md` was left untouched to avoid nine-way conflicts. Add entries
-  for the merged PRs in one follow-up commit.
 
 ---
 
@@ -518,3 +479,15 @@ with a 64×64 PNG.
 - The README repeats the LLM disclosure, has no feature list or usage notes,
   and doesn't mention the optional `FINGERBANK_API_KEY`.
 - `media-sources/screenshot.png` still shows the old "Ports: Quick" toolbar.
+
+**CODE-10: Upgrade Tauri to 2.11 on both sides (M).** The Tauri CLI refuses to
+build when the `tauri` crate and `@tauri-apps/api` differ in major.minor, so
+bump them together: `cargo update -p tauri --precise 2.11.x` (it pulls a large
+set of transitive updates, including brotli and cssparser) and
+`@tauri-apps/api@2.11`. Verify with a macOS `npm run tauri build`, not just CI,
+which never runs the bundler. Dependabot's api-only bump (#9) was closed for
+this reason.
+
+**CODE-11: TypeScript 7 (S, blocked).** `@sveltejs/kit` 2.53 declares
+`typescript ^5.3.3` as a peer, so `npm ci` fails on 7.x (Dependabot #15 was
+closed). Retry once SvelteKit and svelte-check accept TypeScript 7.
