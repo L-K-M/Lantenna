@@ -315,14 +315,6 @@ export class WindowManager {
     return () => window.removeEventListener('resize', onResize);
   }
 
-  async close(): Promise<void> {
-    await this.appWindow.close();
-  }
-
-  async setSize(width: number, height: number): Promise<void> {
-    await this.appWindow.setSize(new LogicalSize(width, height));
-  }
-
   private enqueue(what: string, task: () => Promise<void>): void {
     this.queue = this.queue.then(task).catch(reportFailure(what));
   }

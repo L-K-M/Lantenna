@@ -64,7 +64,9 @@ describe('values', () => {
 
   it('fills in what is unknown', () => {
     render(InfoGeneral, {
-      props: { row: hostRow(host({ name: null, reachable: false, last_seen: '', fingerprint: null })) }
+      props: {
+        row: hostRow(host({ name: null, reachable: false, last_seen: '', fingerprint: null }), { vendorFull: 'Unknown' })
+      }
     });
 
     expect(value('MAC Address')).toBe('Unknown');
@@ -74,13 +76,12 @@ describe('values', () => {
     expect(value('Last Seen')).toBe('--');
   });
 
-  it('names a private MAC and a manufacturer', async () => {
-    const { rerender } = render(InfoGeneral, {
-      props: { row: hostRow(host({ fingerprint: fingerprint({ vendor: null, mac_address: '3a:11:22:33:44:55' }) })) }
-    });
+  it('shows the model’s full vendor name (hostModel.test.ts has its rule)', async () => {
+    const privateMac = host({ fingerprint: fingerprint({ vendor: null, mac_address: '3a:11:22:33:44:55' }) });
+    const { rerender } = render(InfoGeneral, { props: { row: hostRow(privateMac, { vendorFull: 'Private address' }) } });
     expect(value('Vendor')).toBe('Private address');
 
-    await rerender({ row: hostRow(host({ fingerprint: fingerprint({ vendor: null, manufacturer: 'Synology' }) })) });
+    await rerender({ row: hostRow(host(), { vendorFull: 'Synology' }) });
     expect(value('Vendor')).toBe('Synology');
   });
 

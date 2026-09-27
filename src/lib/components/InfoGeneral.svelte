@@ -18,7 +18,6 @@
   import { commitName, nameFieldValue } from '$lib/app/nameCommit';
   import { balloon, checkboxBalloon, highlight } from '$lib/osm/actions';
   import { formatLongDate } from '$lib/util/format';
-  import { isPrivateMac } from '$lib/util/mac';
   import { scanStore } from '$lib/util/scanStore';
 
   let { row }: { row: HostRow | null } = $props();
@@ -111,11 +110,6 @@
     centerText(node);
   }
 
-  function vendorOf(r: HostRow): string {
-    const fp = r.host.fingerprint;
-    return fp?.vendor || fp?.manufacturer || (isPrivateMac(fp?.mac_address) ? 'Private address' : 'Unknown');
-  }
-
   function reachableOf(r: HostRow): string {
     if (r.stale) return 'No (not found in the last scan)';
     return r.host.reachable ? 'Yes' : 'No';
@@ -147,7 +141,7 @@
     <div class="osm-fields osm-small lan-fields">
       <span class="osm-label">IP Address:</span><span class="lan-value">{row.ip}</span>
       <span class="osm-label">MAC Address:</span><span class="lan-value">{row.host.fingerprint?.mac_address || 'Unknown'}</span>
-      <span class="osm-label">Vendor:</span><span class="lan-value">{vendorOf(row)}</span>
+      <span class="osm-label">Vendor:</span><span class="lan-value">{row.vendorFull}</span>
       <span class="osm-label">Detected Name:</span><span class="lan-value">{row.host.name || 'None'}</span>
       <span class="osm-label">Reachable:</span><span class="lan-value">{reachableOf(row)}</span>
       <span class="osm-label">Last Seen:</span><span class="lan-value">{formatLongDate(row.host.last_seen)}</span>
