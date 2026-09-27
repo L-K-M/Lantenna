@@ -1842,6 +1842,7 @@ dependencies = [
  "dns-lookup",
  "env_logger",
  "futures",
+ "gtk",
  "if-addrs",
  "ipnet",
  "log",

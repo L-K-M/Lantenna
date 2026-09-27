@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Linux builds: Ubuntu/Linux `.deb` and `.AppImage` bundles next to the macOS
+  `.dmg`. On Linux the neighbour table is read with `ip neigh` (falling back to
+  `arp`), and the title bar tracks GTK's own active state while dragging.
+- Warnings are logged by default (`RUST_LOG` still overrides), so an
+  unreadable neighbour table is visible.
 - Scans run in two phases: live hosts are found first, then only those are
   port-scanned. Fast, Balanced and Thorough scans finish much sooner.
 - Deep ⊇ Standard ⊇ Quick port profiles. Banners are read on the probe

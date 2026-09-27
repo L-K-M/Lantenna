@@ -450,14 +450,15 @@ enum and a service table serialized to the frontend.
 `scanStore.ts`, `HostTable.svelte` and `HostIconGrid.svelte`. Move it to a
 util.
 
-**CODE-5: Frontend tests and formatting (M).** There's no vitest, eslint or
-prettier, and the Svelte files mix 2- and 4-space indentation. Do this in two
-steps:
+**CODE-5: Frontend tests and formatting (M).** vitest and an `npm test` CI
+step exist (the window-activity and title-bar drag tests), but there's no
+eslint or prettier, and the Svelte files mix 2- and 4-space indentation. Do
+this in two steps:
 
-1. Add vitest for the pure utils (`format.ts`, `hostSearch.ts`,
-   `portTargets.ts`, `hostIcons.ts`, `scanProgress.ts`, `mac.ts`, `errors.ts`),
-   plus an `npm test` CI step. The September review checked these with ad-hoc
-   assertions; turn those into tests.
+1. Add vitest tests for the pure utils (`format.ts`, `hostSearch.ts`,
+   `portTargets.ts`, `hostIcons.ts`, `scanProgress.ts`, `mac.ts`, `errors.ts`).
+   The September review checked these with ad-hoc assertions; turn those into
+   tests.
 2. Add prettier, in its own mechanical PR.
 
 **CODE-6: A mock-IPC dev mode and UI smoke tests (M).** Ship the Tauri IPC

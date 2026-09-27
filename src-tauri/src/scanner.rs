@@ -1465,22 +1465,62 @@ fn extract_mac_from_arp_line(line: &str) -> Option<String> {
     })
 }
 
+// The commands that can print a neighbour table, in the order they are tried.
+//
+// Linux leads with `ip neigh`: `arp` lives in `net-tools`, which Ubuntu has not
+// installed by default for several releases, so a `.deb` install would
+// otherwise find no MAC addresses at all — losing vendor lookup, device-type
+// inference and Wake on LAN. `ip` ships in `iproute2`, which carries Debian's
+// `Priority: important`, so every standard install has it; `arp` stays as the
+// fallback for systems that ship it instead.
+#[cfg(target_os = "windows")]
+const NEIGHBOUR_COMMANDS: &[(&str, &str)] = &[("arp", "-a")];
+
+#[cfg(target_os = "linux")]
+const NEIGHBOUR_COMMANDS: &[(&str, &str)] = &[("ip", "neigh"), ("arp", "-an")];
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+const NEIGHBOUR_COMMANDS: &[(&str, &str)] = &[("arp", "-an")];
+
 async fn read_arp_table() -> HashMap<String, String> {
     tokio::task::spawn_blocking(move || {
         let mut table = HashMap::new();
 
-        #[cfg(target_os = "windows")]
-        let output = StdCommand::new("arp").arg("-a").output();
+        // Take the first command that exists and succeeds, keeping every
+        // failure's cause: the warning below is the only one anybody sees, so
+        // it has to carry them itself.
+        let mut failures = Vec::new();
+        let output = NEIGHBOUR_COMMANDS.iter().find_map(|(program, argument)| {
+            match StdCommand::new(program).arg(argument).output() {
+                Ok(output) if output.status.success() => Some(output),
+                Ok(output) => {
+                    failures.push(format!(
+                        "`{program} {argument}` exited with {}: {}",
+                        output.status,
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    ));
+                    None
+                }
+                // A missing binary surfaces here rather than as a status.
+                Err(error) => {
+                    failures.push(format!("`{program} {argument}` did not run: {error}"));
+                    None
+                }
+            }
+        });
 
-        #[cfg(not(target_os = "windows"))]
-        let output = StdCommand::new("arp").arg("-an").output();
-
-        let Ok(output) = output else {
+        let Some(output) = output else {
+            // Losing the neighbour table costs every MAC, and with it vendor
+            // lookup, device-type inference and Wake on LAN.
+            log::warn!(
+                "no neighbour table command succeeded: {}",
+                failures.join("; ")
+            );
             return table;
         };
 
-        if !output.status.success() {
-            return table;
+        if !failures.is_empty() {
+            log::debug!("neighbour table read after {}", failures.join("; "));
         }
 
         let content = String::from_utf8_lossy(&output.stdout);
@@ -1946,7 +1986,8 @@ fn contains_any_hint(haystack: &str, needles: &[&str]) -> bool {
 /// Like `contains_any_hint`, but a needle only matches whole words of the
 /// `normalize_hint_text` output. The needle's last word may carry a digit
 /// suffix ("iphone13", "imac27"), and a multi-word needle also matches its
-/// space-less compound ("applewatch"). "ipadmin01" still isn't an iPad.
+/// space-less compound, with the same suffix ("applewatch", "applewatch5").
+/// "ipadmin01" still isn't an iPad.
 fn contains_any_word_hint(haystack: &str, needles: &[&str]) -> bool {
     let words: Vec<&str> = haystack.split_whitespace().collect();
 
@@ -1971,7 +2012,10 @@ fn contains_any_word_hint(haystack: &str, needles: &[&str]) -> bool {
                 .iter()
                 .enumerate()
                 .all(|(index, word)| matches_part(index, word))
-        }) || words.contains(&joined.as_str())
+        }) || words.iter().any(|word| {
+            word.strip_prefix(joined.as_str())
+                .is_some_and(|rest| rest.chars().all(|ch| ch.is_ascii_digit()))
+        })
     })
 }
 
@@ -2953,6 +2997,36 @@ mod tests {
     }
 
     #[test]
+    fn extract_parses_ip_neigh_lines() {
+        // `ip neigh` on Linux, where `arp` is usually absent.
+        let line = "192.0.2.1 dev eth0 lladdr 02:fc:00:00:00:05 REACHABLE";
+        assert_eq!(
+            extract_ipv4_from_arp_line(line),
+            Some(Ipv4Addr::new(192, 0, 2, 1))
+        );
+        assert_eq!(
+            extract_mac_from_arp_line(line).as_deref(),
+            Some("02:FC:00:00:00:05")
+        );
+    }
+
+    #[test]
+    fn extract_mac_ignores_ip_neigh_lines_without_lladdr() {
+        // A neighbour that never answered has no lladdr to extract.
+        let line = "192.0.2.55 dev eth0 FAILED";
+        assert_eq!(extract_mac_from_arp_line(line), None);
+    }
+
+    #[test]
+    fn extract_ignores_ipv6_neigh_lines() {
+        // `ip neigh` lists IPv6 neighbours too — link-local ones are on every
+        // Linux box — and the hosts table is keyed by IPv4. Rejecting the
+        // address is what keeps the line out; its lladdr looks like any other.
+        let line = "fe80::1 dev eth0 lladdr 02:fc:00:00:00:05 STALE";
+        assert_eq!(extract_ipv4_from_arp_line(line), None);
+    }
+
+    #[test]
     fn extract_mac_ignores_incomplete_arp_lines() {
         let line = "? (192.168.1.10) at (incomplete) on en0 ifscope [ethernet]";
         assert_eq!(extract_mac_from_arp_line(line), None);
@@ -3055,9 +3129,15 @@ mod tests {
         let (device_type, _, _, _, _) = infer_device_profile(&phone, None, None);
         assert_eq!(device_type.as_deref(), Some("Mobile device"));
 
-        let watch = host("192.168.1.66", Some("applewatch"), &[]);
+        for name in ["applewatch", "applewatch5"] {
+            let watch = host("192.168.1.66", Some(name), &[]);
+            let (device_type, _, _, _, _) = infer_device_profile(&watch, None, None);
+            assert_eq!(device_type.as_deref(), Some("Mobile device"), "{name}");
+        }
+
+        let watch = host("192.168.1.67", Some("applewatchmini"), &[]);
         let (device_type, _, _, _, _) = infer_device_profile(&watch, None, None);
-        assert_eq!(device_type.as_deref(), Some("Mobile device"));
+        assert_ne!(device_type.as_deref(), Some("Mobile device"));
 
         let laptop = host("192.168.1.64", Some("Lukas-MacBookAir.local"), &[22]);
         let (_, os_guess, _, _, _) = infer_device_profile(&laptop, None, None);
