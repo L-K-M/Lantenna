@@ -38,6 +38,14 @@ vi.mock('@tauri-apps/api/window', async (importOriginal) => ({
 }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: native.invoke }));
 
+/** The host platform, Linux unless a test says otherwise. */
+const host = vi.hoisted(() => ({ isMac: false }));
+vi.mock('$lib/app/platform', () => ({
+  get platform() { return host.isMac ? 'mac' : 'linux'; },
+  get isMac() { return host.isMac; },
+  get cmdName() { return host.isMac ? 'Command' : 'Control'; }
+}));
+
 /** The page fills the window, so the viewport is the window's logical
  * inner size. happy-dom fires `resize` when it changes. */
 function setViewport(width: number, height: number) {
@@ -45,7 +53,8 @@ function setViewport(width: number, height: number) {
     .happyDOM.setViewport({ width, height });
 }
 
-/** A 1440 x 900 screen with a 25 px menu bar, in physical pixels. */
+/** A 1440 x 900 screen with a 25 px top panel, in physical pixels, as
+ * Tauri reports it on Linux. */
 function monitor(scale: number): Monitor {
   return {
     name: 'Built-in',
@@ -57,6 +66,28 @@ function monitor(scale: number): Monitor {
       size: { width: 1440 * scale, height: 875 * scale }
     }
   } as Monitor;
+}
+
+/** A 1440 x 900 screen with a 25 px menu bar and a 70 px Dock at the
+ * bottom, as Tauri 2.10 reports it on macOS: the visible frame's size at
+ * the screen's top edge (tauri-runtime-wry src/monitor/macos.rs). */
+function macMonitor(): Monitor {
+  return {
+    name: 'Built-in',
+    scaleFactor: 1,
+    size: { width: 1440, height: 900 },
+    position: { x: 0, y: 0 },
+    workArea: {
+      position: { x: 0, y: 0 },
+      size: { width: 1440, height: 805 }
+    }
+  } as Monitor;
+}
+
+/** What WebKit tells the page about the window's screen. */
+function setWebKitScreen(availTop: number | undefined, availHeight: number) {
+  Object.defineProperty(window.screen, 'availTop', { value: availTop, configurable: true });
+  Object.defineProperty(window.screen, 'availHeight', { value: availHeight, configurable: true });
 }
 
 /** Makes setSize resize the viewport, as the real window does. */
@@ -84,6 +115,8 @@ beforeEach(() => {
   native.outerPosition.mockResolvedValue({ x: 100, y: 80 });
   native.currentMonitor.mockResolvedValue(monitor(1));
   setViewport(1200, 760);
+  // A release ends the press recovery an earlier test's drag started.
+  window.dispatchEvent(new PointerEvent('pointerup', { pointerType: 'mouse' }));
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -288,6 +321,26 @@ describe('collapse box (winShade)', () => {
     expect(native.setMinSize).toHaveBeenLastCalledWith(new LogicalSize(840, 560));
   });
 
+  it('folds again from the height an unfold under way lands at', async () => {
+    const manager = new WindowManager();
+    // The window changes size a moment after the call, as on macOS.
+    native.setSize.mockImplementation(async (size: LogicalSize) => {
+      setTimeout(() => setViewport(size.width, size.height), 20);
+    });
+    manager.apply({ op: 'winShade', on: true });
+    await vi.waitFor(() => expect(window.innerHeight).toBe(23));
+
+    manager.apply({ op: 'winShade', on: false });
+    manager.apply({ op: 'winShade', on: true }); // before the unfold lands
+    manager.apply({ op: 'winShade', on: false });
+
+    await vi.waitFor(() => expect(native.setMinSize).toHaveBeenCalledTimes(4));
+    expect(native.setSize.mock.calls.map(([size]) => [size.width, size.height])).toEqual([
+      [1200, 23], [1200, 760], [1200, 23], [1200, 760]
+    ]);
+    await vi.waitFor(() => expect(window.innerHeight).toBe(760));
+  });
+
   it('keeps a width the window got while folded', async () => {
     const manager = new WindowManager();
     followSetSize();
@@ -443,6 +496,41 @@ describe('zoom box (winZoom)', () => {
     expect(native.outerPosition).not.toHaveBeenCalled();
   });
 
+  describe('on macOS', () => {
+    const webKitScreen = window.screen as Screen & { availTop?: number };
+    const original = { availTop: webKitScreen.availTop, availHeight: webKitScreen.availHeight };
+
+    beforeEach(() => {
+      host.isMac = true;
+      native.currentMonitor.mockResolvedValue(macMonitor());
+    });
+
+    afterEach(() => {
+      host.isMac = false;
+      setWebKitScreen(original.availTop, original.availHeight);
+    });
+
+    it('keeps the title bar below the menu bar and the frame above the Dock', async () => {
+      setWebKitScreen(25, 805);
+      activeView.set(listView(2000));
+
+      new WindowManager().apply({ op: 'winZoom' });
+
+      await vi.waitFor(() => expect(native.setSize).toHaveBeenCalledWith(new LogicalSize(1119, 805)));
+      expect(native.setPosition).toHaveBeenCalledWith(new LogicalPosition(100, 25));
+    });
+
+    it('leaves out all the height the screen lost when WebKit describes another frame', async () => {
+      setWebKitScreen(0, 900); // the whole screen, as with fingerprinting protection
+      activeView.set(listView(2000));
+
+      new WindowManager().apply({ op: 'winZoom' });
+
+      await vi.waitFor(() => expect(native.setSize).toHaveBeenCalledWith(new LogicalSize(1119, 710)));
+      expect(native.setPosition).toHaveBeenCalledWith(new LogicalPosition(100, 95));
+    });
+  });
+
   it('reports a zoom that can’t read the window’s place', async () => {
     const report = vi.spyOn(console, 'error').mockImplementation(() => {});
     const error = new Error('no monitor');
@@ -564,5 +652,90 @@ describe('grow box (winGrow)', () => {
     manager.apply({ op: 'winGrow' });
 
     expect(native.startResizeDragging).not.toHaveBeenCalled();
+  });
+});
+
+describe('the press after an OS move or resize (WebKitGTK)', () => {
+  /** WebKitGTK missed the release that ended the OS move or resize, so
+   * it reports the next press as a pointermove with button 0. */
+  const lostPress = () => new PointerEvent('pointermove', {
+    bubbles: true, pointerType: 'mouse', pointerId: 1, button: 0, buttons: 1, clientX: 30, clientY: 40
+  });
+
+  /** A box that acts on pointerdown and prevents its default, as
+   * Osmium's controls do. */
+  function box(onPress: () => void = () => {}) {
+    const el = document.createElement('div');
+    document.body.append(el);
+    const presses: PointerEvent[] = [];
+    el.addEventListener('pointerdown', (e) => {
+      presses.push(e);
+      e.preventDefault();
+      onPress();
+    });
+    return { el, presses };
+  }
+
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it('passes the press lost to a window drag on as a pointerdown', () => {
+    const { el, presses } = box();
+    const moves = vi.fn();
+    const mouseDowns = vi.fn();
+    el.addEventListener('pointermove', moves);
+    el.addEventListener('mousedown', mouseDowns);
+
+    new WindowManager().apply({ op: 'dragWindow' });
+    el.dispatchEvent(lostPress());
+    const mouseDown = new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, buttons: 1 });
+    el.dispatchEvent(mouseDown);
+
+    expect(presses.map(({ pointerId, pointerType, button, buttons, clientX, clientY }) =>
+      ({ pointerId, pointerType, button, buttons, clientX, clientY }))).toEqual([
+      { pointerId: 1, pointerType: 'mouse', button: 0, buttons: 1, clientX: 30, clientY: 40 }
+    ]);
+    expect(moves).not.toHaveBeenCalled();
+    // As after a prevented pointerdown: no mousedown, no focus change.
+    expect(mouseDowns).not.toHaveBeenCalled();
+    expect(mouseDown.defaultPrevented).toBe(true);
+
+    // Only one press goes missing.
+    el.dispatchEvent(lostPress());
+    expect(presses).toHaveLength(1);
+  });
+
+  it('waits past plain moves, after a grow-box resize too', () => {
+    const { el, presses } = box();
+    new WindowManager().apply({ op: 'winGrow' });
+
+    el.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse', pointerId: 1, button: -1 }));
+    expect(presses).toHaveLength(0);
+
+    el.dispatchEvent(lostPress());
+    expect(presses).toHaveLength(1);
+  });
+
+  it('recovers the press of each drag in a row', () => {
+    const manager = new WindowManager();
+    const { el, presses } = box(() => manager.apply({ op: 'dragWindow' }));
+    manager.apply({ op: 'dragWindow' });
+
+    el.dispatchEvent(lostPress());
+    el.dispatchEvent(lostPress());
+
+    expect(presses).toHaveLength(2);
+    expect(native.startDragging).toHaveBeenCalledTimes(3);
+  });
+
+  it('does nothing once a press arrives as a pointerdown', () => {
+    const { el, presses } = box();
+    new WindowManager().apply({ op: 'dragWindow' });
+
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse', pointerId: 1, button: 0, buttons: 1 }));
+    el.dispatchEvent(lostPress()); // now a real second button
+
+    expect(presses).toHaveLength(1);
   });
 });

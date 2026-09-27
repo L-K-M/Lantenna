@@ -12,12 +12,15 @@
 //   winGrow       Linux: the OS resize drag; macOS, where tao can't
 //                 start one: a setSize loop fed by trackGrow
 //
-// State: this class owns the native side's bookkeeping, the size a
+// After an OS move or resize, WebKitGTK misses the release; the press
+// that follows is passed on as a pointerdown (recoverNextPress).
+//
+// State: this class owns the native side's bookkeeping, the height a
 // folded window unfolds to and zoom's user frame. It follows the ops it
 // is given, so the page's startup winShade { on: false } puts a folded
 // window back. Size changes run one at a time in op order, because
 // Tauri answers each call when it has queued the change, not when the
-// window has it.
+// window has it; a queued task reads the window's size when it runs.
 
 import {
   currentMonitor,
@@ -32,6 +35,7 @@ import type { UnlistenFn } from '@tauri-apps/api/event';
 import type { WindowOp } from 'osmium-ui';
 import { get } from 'svelte/store';
 import { MIN_H, MIN_W, SHADED_H } from '$lib/app/layout';
+import { isMac } from '$lib/app/platform';
 import { ui } from '$lib/app/ui';
 import { activeView } from '$lib/app/views';
 import { idealSize, zoomTarget, type Frame, type Size } from '$lib/app/zoom';
@@ -47,6 +51,13 @@ const SHADED_MAX_H = 60;
 /** How long an unfold waits for the window to grow before it restores
  * the minimum size anyway. */
 const UNFOLD_WAIT_MS = 1000;
+
+/** PointerEvent.button for the main (left) button. */
+const MAIN_BUTTON = 0;
+
+/** What WebKit tells the page about the window's screen; availTop is
+ * non-standard. */
+type WebKitScreen = Screen & { availTop?: number };
 
 /** A press on the grow box, as trackGrow saw it before Osmium posted
  * winGrow. */
@@ -84,18 +95,79 @@ function unfolded(ms: number): Promise<void> {
   });
 }
 
-/** The monitor's work area in logical pixels. */
-function logicalWorkArea(monitor: Monitor): Frame {
+/** The pointerdown for a press WebKit reported as `move` (see
+ * WindowManager.recoverNextPress). */
+function pressLike(move: PointerEvent): PointerEventInit {
+  return {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    view: window,
+    pointerId: move.pointerId,
+    pointerType: move.pointerType,
+    isPrimary: move.isPrimary,
+    width: move.width,
+    height: move.height,
+    pressure: move.pressure,
+    button: move.button,
+    buttons: move.buttons,
+    screenX: move.screenX,
+    screenY: move.screenY,
+    clientX: move.clientX,
+    clientY: move.clientY,
+    ctrlKey: move.ctrlKey,
+    shiftKey: move.shiftKey,
+    altKey: move.altKey,
+    metaKey: move.metaKey
+  };
+}
+
+/** Holds back the mousedown that WebKit dispatches right after, and in
+ * the same task as, the pointer event of the same press. */
+function holdBackMouseDown(): void {
+  const hold = (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  };
+  window.addEventListener('mousedown', hold, { capture: true, once: true });
+  setTimeout(() => window.removeEventListener('mousedown', hold, { capture: true }));
+}
+
+/**
+ * The monitor's work area in logical pixels.
+ *
+ * macOS: Tauri 2.10 reports the visible frame's size (the screen without
+ * the menu bar and Dock) at the screen's top edge; tauri-runtime-wry's
+ * src/monitor/macos.rs corrects only x. That rect starts under the menu
+ * bar, so it moves down by WebKit's screen.availTop: the visible frame's
+ * top measured from the top of the window's screen (WebKit's
+ * PlatformScreenMac.mm). That is used only while WebKit describes the
+ * same visible frame (the same height). Otherwise the top moves down by
+ * all the height the menu bar and Dock take and the bottom stays, which
+ * is inside the real work area wherever the Dock is.
+ */
+function logicalWorkArea(monitor: Monitor, webKitScreen: WebKitScreen): Frame {
   const { position, size } = monitor.workArea;
   const scale = monitor.scaleFactor;
+  const area = { x: position.x / scale, y: position.y / scale, w: size.width / scale, h: size.height / scale };
+  if (!isMac) return area;
 
-  return { x: position.x / scale, y: position.y / scale, w: size.width / scale, h: size.height / scale };
+  const lost = monitor.size.height / scale - area.h;
+  const menuBarH = webKitScreen.availTop;
+  const sameFrame = Math.abs(webKitScreen.availHeight - area.h) <= 1;
+  if (menuBarH !== undefined && sameFrame && menuBarH >= 0 && menuBarH <= lost) {
+    return { ...area, y: area.y + menuBarH };
+  }
+
+  return { ...area, y: area.y + lost, h: area.h - lost };
 }
 
 export class WindowManager {
   private currentWindow: Window | null = null;
-  /** The size a folded window unfolds to; null while it isn't folded. */
-  private folded: Size | null = null;
+  /** Whether the window is folded, or will be once the queue gets there. */
+  private folded = false;
+  /** The height a folded window unfolds to, read when the fold ran. */
+  private unfoldedH = MIN_H;
   /** Zoom's user frame and the standard size it last went to. */
   private userFrame: Frame | null = null;
   private lastStandard: Size | null = null;
@@ -105,6 +177,8 @@ export class WindowManager {
   private growPress: GrowPress | null = null;
   /** Ends the macOS grow loop in progress, if one is. */
   private endGrow: (() => void) | null = null;
+  /** Stops waiting for a press lost to a native move or resize. */
+  private stopPressRecovery: (() => void) | null = null;
 
   /**
    * The Tauri window, looked up on first use rather than at construction,
@@ -168,6 +242,7 @@ export class WindowManager {
     switch (op.op) {
       case 'dragWindow':
         this.appWindow.startDragging().catch(reportFailure('drag the window'));
+        this.recoverNextPress();
         return;
       case 'winClose':
         this.appWindow.close().catch(reportFailure('close the window'));
@@ -228,7 +303,7 @@ export class WindowManager {
     const onResize = () => {
       const h = window.innerHeight;
       if (this.folded && lastH <= SHADED_MAX_H && h > SHADED_MAX_H) {
-        this.folded = null;
+        this.folded = false;
         this.enqueue('restore the minimum window size', () =>
           this.appWindow.setMinSize(new LogicalSize(MIN_W, MIN_H))
         );
@@ -252,41 +327,49 @@ export class WindowManager {
     this.queue = this.queue.then(task).catch(reportFailure(what));
   }
 
-  /** Fold to the title bar, top edge pinned. The minimum size goes
-   * first, or the window couldn't get this short. */
+  /**
+   * Fold to the title bar, top edge pinned. The minimum size goes first,
+   * or the window couldn't get this short. The height to unfold to is
+   * read when the fold runs: an unfold queued before it may not have
+   * reached the window when the op arrives.
+   */
   private fold(): void {
     if (this.folded) return;
 
-    const saved = viewportSize();
-    this.folded = saved;
+    this.folded = true;
     this.enqueue('collapse the window', async () => {
+      const { w, h } = viewportSize();
+      this.unfoldedH = h;
       await this.appWindow.setMinSize(null);
-      await this.appWindow.setSize(new LogicalSize(saved.w, SHADED_H));
+      await this.appWindow.setSize(new LogicalSize(w, SHADED_H));
     });
   }
 
   /**
    * Unfold to the saved height, at the window's current width. The
-   * minimum size comes back only once the window has grown: macOS
-   * applies a size change later than a minimum-size change, and a
-   * minimum above the folded height would grow the window with its
-   * bottom edge pinned, moving the title bar up.
+   * minimum size comes back only once the window has grown. macOS
+   * applies a size change later than the call (tao dispatches it to the
+   * main queue) but a minimum-size change at once, and a minimum that
+   * came first would grow the window in two visible steps, to the
+   * minimum height and then to the saved one.
    */
   private unfold(): void {
-    let h = this.folded?.h;
+    const wasFolded = this.folded;
+    this.folded = false;
 
-    // Not folded: nothing to do (hostWindow's startup post, usually).
-    // Unless the window is folded anyway, as after a page reload, which
-    // loses this bookkeeping but not the native fold: then unfold to the
-    // minimum height. (A zero viewport isn't laid out yet, not folded.)
-    if (h === undefined) {
-      const viewportH = window.innerHeight;
-      if (viewportH === 0 || viewportH > SHADED_MAX_H) return;
-      h = MIN_H;
-    }
-
-    this.folded = null;
     this.enqueue('expand the window', async () => {
+      let h = this.unfoldedH;
+
+      // Not folded: nothing to do (hostWindow's startup post, usually).
+      // Unless the window is folded anyway, as after a page reload, which
+      // loses this bookkeeping but not the native fold: then unfold to the
+      // minimum height. (A zero viewport isn't laid out yet, not folded.)
+      if (!wasFolded) {
+        const viewportH = window.innerHeight;
+        if (viewportH === 0 || viewportH > SHADED_MAX_H) return;
+        h = MIN_H;
+      }
+
       const grown = unfolded(UNFOLD_WAIT_MS);
       try {
         await this.appWindow.setSize(new LogicalSize(window.innerWidth, h));
@@ -318,7 +401,7 @@ export class WindowManager {
     const target = zoomTarget({
       inner,
       position: { x: outer.x / scale, y: outer.y / scale },
-      workArea: monitor ? logicalWorkArea(monitor) : null,
+      workArea: monitor ? logicalWorkArea(monitor, window.screen) : null,
       ideal,
       min: { w: MIN_W, h: MIN_H },
       lastStandard: this.lastStandard,
@@ -353,10 +436,52 @@ export class WindowManager {
     this.growPress = null;
     if (!press) {
       this.appWindow.startResizeDragging('SouthEast').catch(reportFailure('resize the window'));
+      this.recoverNextPress();
       return;
     }
 
     this.followGrow(press);
+  }
+
+  /**
+   * After the OS has taken a press over for a move or resize, pass the
+   * next press on as the pointerdown it is.
+   *
+   * WebKitGTK never sees the release that ends the window manager's
+   * move or resize, so it still counts the button as down. It then
+   * turns the next press into a pointermove with `button` 0, the
+   * Pointer Events rule for a second button pressed during a press
+   * (WebKit's PointerCaptureController), not a pointerdown. Osmium's
+   * boxes, buttons and title bar act on pointerdown, so that press did
+   * nothing; the System 7 UI acted on mousedown and click, which still
+   * fire. That pointermove is dispatched as a pointerdown instead, and
+   * when its default is prevented, the mousedown WebKit sends next is
+   * held back, as after a prevented pointerdown. The release then
+   * reaches WebKit and ends the stale press. A pointerdown or pointerup
+   * first means no release was lost: nothing to do.
+   */
+  private recoverNextPress(): void {
+    this.stopPressRecovery?.();
+
+    const types = ['pointermove', 'pointerdown', 'pointerup'] as const;
+    const onPointer = (e: PointerEvent) => {
+      if (e.pointerType !== 'mouse') return;
+      if (e.type === 'pointermove' && e.button !== MAIN_BUTTON) return; // a move
+
+      stop();
+      if (e.type !== 'pointermove' || !e.target) return;
+
+      e.stopImmediatePropagation();
+      const press = new PointerEvent('pointerdown', pressLike(e));
+      if (!e.target.dispatchEvent(press)) holdBackMouseDown();
+    };
+    const stop = () => {
+      for (const type of types) window.removeEventListener(type, onPointer, true);
+      this.stopPressRecovery = null;
+    };
+
+    for (const type of types) window.addEventListener(type, onPointer, true);
+    this.stopPressRecovery = stop;
   }
 
   /**
