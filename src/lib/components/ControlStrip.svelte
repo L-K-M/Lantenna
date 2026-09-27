@@ -16,7 +16,7 @@
   import { get } from 'svelte/store';
   import { setButtonTitle } from 'osmium-ui';
   import type { PopupParams } from '$lib/osm/actions';
-  import { balloon, checkboxBalloon, highlight, osmButton, popup } from '$lib/osm/actions';
+  import { balloon, checkboxBalloon, dimmable, highlight, osmButton, popup } from '$lib/osm/actions';
   import {
     DEPTH_BALLOON,
     FIND_BALLOON,
@@ -227,9 +227,9 @@
     type="button"
     class="osm-button lan-scan"
     data-width="82"
-    disabled={!scanEnabled}
     bind:this={scanButton}
     use:osmButton={() => run({ id: 'scan.toggle' })}
+    use:dimmable={!scanEnabled}
     use:balloon={scanHelp}
   >
     Scan

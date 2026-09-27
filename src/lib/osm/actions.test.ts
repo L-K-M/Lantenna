@@ -1,6 +1,6 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MENU_SEPARATOR } from 'osmium-ui';
-import { areaBalloon, balloon, checkboxBalloon, osmButton, popup, type PopupParams } from './actions';
+import { areaBalloon, balloon, checkboxBalloon, dimmable, osmButton, popup, type PopupParams } from './actions';
 
 const osm = vi.hoisted(() => ({
   popup: { selected: 0, setItems: vi.fn(), setSelected: vi.fn(), destroy: vi.fn() },
@@ -75,6 +75,69 @@ it('runs the latest button action', () => {
 
   expect(first).not.toHaveBeenCalled();
   expect(second).toHaveBeenCalledOnce();
+});
+
+describe('a dimmable button', () => {
+  afterEach(() => {
+    document.body.textContent = '';
+  });
+
+  function mounted(dimmed: boolean) {
+    const button = document.body.appendChild(document.createElement('button'));
+    const run = vi.fn();
+    osmButton(button, run);
+    const action = dimmable(button, dimmed);
+    const press = () => osm.pushButton.mock.calls[0][1]();
+    return { button, run, action, press };
+  }
+
+  const state = (b: HTMLButtonElement) => ({ disabled: b.disabled, ariaDisabled: b.getAttribute('aria-disabled') });
+
+  it('is disabled while dimmed without the keyboard', () => {
+    const { button, action } = mounted(true);
+    expect(state(button)).toEqual({ disabled: true, ariaDisabled: null });
+
+    action.update!(false);
+    expect(state(button)).toEqual({ disabled: false, ariaDisabled: null });
+  });
+
+  it('keeps the keyboard when it dims, and ignores presses until it is enabled again', () => {
+    const { button, run, action, press } = mounted(false);
+    button.focus();
+
+    action.update!(true);
+    expect(document.activeElement).toBe(button);
+    expect(state(button)).toEqual({ disabled: false, ariaDisabled: 'true' });
+    press();
+    expect(run).not.toHaveBeenCalled();
+
+    action.update!(false);
+    expect(state(button)).toEqual({ disabled: false, ariaDisabled: null });
+    press();
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it('is disabled as usual once the keyboard leaves', async () => {
+    const { button, action } = mounted(false);
+    const other = document.body.appendChild(document.createElement('button'));
+    button.focus();
+    action.update!(true);
+
+    other.focus();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(state(button)).toEqual({ disabled: true, ariaDisabled: null });
+  });
+
+  it('stays dimmed with the keyboard while the window loses focus', async () => {
+    const { button, action } = mounted(false);
+    button.focus();
+    action.update!(true);
+
+    // The element keeps the DOM focus; only the events come.
+    button.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: null }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(state(button)).toEqual({ disabled: false, ariaDisabled: 'true' });
+  });
 });
 
 it('attaches Balloon Help and detaches it on destroy', () => {

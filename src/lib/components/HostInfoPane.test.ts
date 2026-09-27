@@ -229,6 +229,26 @@ describe('buttons', () => {
     ]);
   });
 
+  it('keep the keyboard when they dim under it, so a second press does nothing', async () => {
+    render(HostInfoPane);
+    select(printer);
+    enable('host.wake', 'host.deepScan', 'host.open');
+
+    for (const name of ['Wake', 'Deep Scan']) {
+      button(name).focus();
+      enable('host.open');
+      expect(document.activeElement).toBe(button(name));
+      expect(button(name).getAttribute('aria-disabled')).toBe('true');
+
+      commands.run.mockClear();
+      await fireEvent.click(button(name), { detail: 0 });
+      fireEvent.keyDown(button(name), { key: 'Enter' });
+      expect(commands.run).not.toHaveBeenCalled();
+      enable('host.wake', 'host.deepScan', 'host.open');
+      expect(button(name).hasAttribute('aria-disabled')).toBe(false);
+    }
+  });
+
   it('Open is the default button', () => {
     render(HostInfoPane);
     expect(button('Open').classList.contains('osm-default')).toBe(true);

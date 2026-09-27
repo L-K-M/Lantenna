@@ -12,6 +12,14 @@
     overflow: hidden;
     background: transparent;
   }
+
+  /* A push button dimmed while it keeps the keyboard ($lib/osm/actions
+     dimmable), drawn as osmium.css draws :disabled, pressed or not. */
+  :global(.osm-button[aria-disabled='true']),
+  :global(.osm-button[aria-disabled='true'].osm-pressed) {
+    border-image-source: var(--osm-sprite-button-disabled);
+    color: #888;
+  }
 </style>
 
 <slot />

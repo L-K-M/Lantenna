@@ -64,7 +64,7 @@
   import { hostModel } from '$lib/app/hostModel';
   import { ui, type InfoTab } from '$lib/app/ui';
   import { infoPaneApi } from '$lib/app/views';
-  import { balloon, osmButton } from '$lib/osm/actions';
+  import { balloon, dimmable, osmButton } from '$lib/osm/actions';
   import { scanProgress } from '$lib/util/scanStore';
   import InfoFingerprint from './InfoFingerprint.svelte';
   import InfoGeneral from './InfoGeneral.svelte';
@@ -169,15 +169,15 @@
   <button
     class="osm-button lan-wake"
     type="button"
-    disabled={!wakeEnabled}
     use:osmButton={() => run({ id: 'host.wake' })}
+    use:dimmable={!wakeEnabled}
     use:balloon={() => wakeBalloon(noMac ? 'noMac' : null)}>Wake</button
   >
   <button
     class="osm-button lan-deep-scan"
     type="button"
-    disabled={!deepScanEnabled}
     use:osmButton={() => run({ id: 'host.deepScan' })}
+    use:dimmable={!deepScanEnabled}
     use:balloon={() => deepScanBalloon(busy ? 'busy' : null)}>Deep Scan</button
   >
   <button

@@ -72,15 +72,60 @@ export function popup(node: HTMLButtonElement, p: PopupParams): ActionReturn<Pop
  * `<button class="osm-button" use:osmButton={action}>Title</button>`: press
  * tracking and title layout (pushButton). Change the title with Osmium's
  * setButtonTitle, not the template, so the layout follows. Osmium has no
- * teardown for push buttons; their listeners go with the element.
+ * teardown for push buttons; their listeners go with the element. A
+ * button `dimmable` dimmed under the keyboard does nothing.
  */
 export function osmButton(node: HTMLButtonElement, action: () => void): ActionReturn<() => void> {
   let current = action;
-  pushButton(node, () => current());
+  pushButton(node, () => {
+    if (node.getAttribute('aria-disabled') !== 'true') current();
+  });
 
   return {
     update(next) {
       current = next;
+    }
+  };
+}
+
+/**
+ * `use:dimmable={dimmed}` on an osmButton, in place of `disabled={dimmed}`:
+ * a button that dims while it has the keyboard keeps it. A disabled
+ * button can't (Chromium moves the focus to <body>, WebKit leaves it on
+ * a control that takes no keys), and the keyboard home then gives it to
+ * the host view, where a second press of Space or Return, likely after
+ * Wake shows nothing near the button, would star or open the selected
+ * host. Until the keyboard leaves, the button is dimmed with
+ * aria-disabled instead (drawn dimmed by +layout.svelte, ignored by
+ * osmButton), as the WAI-ARIA APG does for controls that become
+ * unavailable; then it is disabled as usual, out of the Tab order.
+ */
+export function dimmable(node: HTMLButtonElement, dimmed: boolean): ActionReturn<boolean> {
+  let current = dimmed;
+
+  const apply = () => {
+    const keep = current && document.activeElement === node;
+    node.disabled = current && !keep;
+    if (keep) node.setAttribute('aria-disabled', 'true');
+    else node.removeAttribute('aria-disabled');
+  };
+  // Read once the focus has moved: the window losing OS focus sends
+  // focusout too, but the button keeps the DOM focus then. Not in a
+  // microtask: during the move the focus is on <body> (Chromium), and
+  // the keyboard home, seeing the button dim then, would take the
+  // keyboard from the control Tab is moving it to.
+  const onBlur = () => setTimeout(apply, 0);
+
+  node.addEventListener('focusout', onBlur);
+  apply();
+
+  return {
+    update(next) {
+      current = next;
+      apply();
+    },
+    destroy() {
+      node.removeEventListener('focusout', onBlur);
     }
   };
 }
