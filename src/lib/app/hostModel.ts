@@ -29,7 +29,7 @@ import { isPrivateMac } from '$lib/util/mac';
 import { getPortTarget, primaryPortTarget, type PortTarget } from '$lib/util/portTargets';
 import { scanStore, type ScanStoreState } from '$lib/util/scanStore';
 import { customNameFor, iconName, listName } from './hostNames';
-import { sortRows } from './hostSort';
+import { ipOrder, sortRows } from './hostSort';
 import { ui, type ShowScope } from './ui';
 
 /** The Status column (2.6): a host found new by the last scan, one the
@@ -39,6 +39,9 @@ export type RowStatus = '' | 'New' | 'Checking…' | 'Not seen' | 'Hidden';
 
 export interface HostRow {
   readonly ip: string;
+  /** hostSort's ipOrder(ip), computed once per row: every sort compares
+   * it, and the model sorts on every scan event. */
+  readonly ipNum: number;
   readonly host: Host;
   /** The trimmed custom name, or null. */
   readonly customName: string | null;
@@ -212,6 +215,7 @@ function hostRow(host: Host, s: RowState): HostRow {
   const icon = getHostIcon(host, s.customName ?? '');
   const row: HostRow = Object.freeze({
     ip: host.ip,
+    ipNum: ipOrder(host.ip),
     host,
     customName: s.customName,
     listName: listName(host, s.customName),

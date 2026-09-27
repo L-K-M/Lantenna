@@ -2,6 +2,7 @@
 // and HostRow values as unit B's model would build them. Not app code.
 
 import type { HostRow } from '$lib/app/hostModel';
+import { ipOrder } from '$lib/app/hostSort';
 import type { DeviceFingerprint, Host } from '$lib/types';
 import { getPortTarget, primaryPortTarget, type PortTarget } from '$lib/util/portTargets';
 
@@ -46,6 +47,7 @@ export function hostRow(h: Host = host(), overrides: Partial<HostRow> = {}): Hos
 
   return {
     ip: h.ip,
+    ipNum: ipOrder(h.ip),
     host: h,
     customName,
     listName: customName || h.name || 'Unknown',

@@ -60,7 +60,7 @@ const NORMAL_ORDER: Readonly<Record<ColumnId, Compare>> = {
   // A to Z.
   name: (a, b) => collator.compare(a.listName, b.listName),
   // Numeric, ascending.
-  ip: (a, b) => ipOrder(a.ip) - ipOrder(b.ip),
+  ip: (a, b) => a.ipNum - b.ipNum,
   status: (a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status],
   kind: (a, b) => collator.compare(a.kind, b.kind),
   vendor: (a, b) => collator.compare(a.vendor, b.vendor),
@@ -95,6 +95,6 @@ export function sortRows(rows: readonly HostRow[], sort: ListViewSort): HostRow[
     const result = compare ? compare(a, b) : 0;
     if (result !== 0) return direction * result;
 
-    return ipOrder(a.ip) - ipOrder(b.ip);
+    return a.ipNum - b.ipNum;
   });
 }

@@ -7,6 +7,7 @@ import { getPortTarget, primaryPortTarget } from '$lib/util/portTargets';
 import type { CommandContext } from './commands';
 import type { FocusKind } from './focus';
 import type { HostModel, HostRow } from './hostModel';
+import { ipOrder } from './hostSort';
 import type { Platform } from './platform';
 import type { UiState } from './ui';
 
@@ -66,6 +67,7 @@ export function row(h: Host, over: Partial<HostRow> = {}): HostRow {
   const customName = over.customName ?? null;
   return {
     ip: h.ip,
+    ipNum: ipOrder(h.ip),
     host: h,
     customName,
     listName: customName || h.name || 'Unknown',
