@@ -8,9 +8,10 @@ const state = vi.hoisted(() => ({ enabled: true, selection: false }));
 vi.mock('./commands', () => ({
   commandContext: readable({}),
   describe: vi.fn(() => ({ title: '', enabled: state.enabled })),
-  hasTextSelection: () => state.selection,
   run: vi.fn()
 }));
+
+vi.mock('$lib/util/selection', () => ({ hasTextSelection: () => state.selection }));
 
 const { run } = await import('./commands');
 const { installPageKeys } = await import('./keys');

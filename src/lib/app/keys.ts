@@ -16,7 +16,8 @@
 // menu, or the browser, does what it does with it.
 
 import { get } from 'svelte/store';
-import { commandContext, describe, hasTextSelection, run, type CommandRef } from './commands';
+import { hasTextSelection } from '$lib/util/selection';
+import { commandContext, describe, run, type CommandRef } from './commands';
 import { classifyFocus } from './focus';
 import { isMac } from './platform';
 

@@ -35,6 +35,7 @@ import {
   type ScanProgressState,
   type ScanStoreState
 } from '$lib/util/scanStore';
+import { hasTextSelection } from '$lib/util/selection';
 import { windowManager } from '$lib/windowManager';
 import {
   beginRename,
@@ -329,13 +330,6 @@ function describeIgnoringModal(ref: CommandRef, ctx: CommandContext, place: Comm
     case 'help.help':
       return { title: place === 'contextual' ? 'Help' : 'Lantenna Help', enabled: true };
   }
-}
-
-/** Whether the document holds a text selection outside any field (pane
- * values are selectable): Copy then copies it, not the host's IP. */
-export function hasTextSelection(): boolean {
-  const selection = window.getSelection();
-  return selection !== null && !selection.isCollapsed && selection.toString() !== '';
 }
 
 /** Run `ref` if it is enabled in the current context; otherwise do

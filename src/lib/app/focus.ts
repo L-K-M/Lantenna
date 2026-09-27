@@ -13,6 +13,7 @@
 
 import { get, readable, type Readable } from 'svelte/store';
 import { isModal, onModalChange } from 'osmium-ui';
+import { hasTextSelection } from '$lib/util/selection';
 import { activeView } from './views';
 
 export type FocusKind = 'list' | 'icons' | 'text' | 'readonly-text' | 'other';
@@ -76,12 +77,6 @@ export const keyboardFocus: Readable<FocusKind> = readable<FocusKind>('other', (
 /** What hides an element without removing it: a `hidden` attribute (the
  * pane, a tab's panel) or the collapsed window (Osmium's class). */
 const HIDDEN_SELECTOR = '[hidden], .osm-shaded';
-
-/** A text selection outside the fields (pane values are selectable). */
-function hasTextSelection(): boolean {
-  const selection = window.getSelection();
-  return selection !== null && !selection.isCollapsed && selection.toString() !== '';
-}
 
 /** Whether the keyboard has no usable place: nowhere (<body>), or an
  * element that is gone, dimmed or hidden. */
