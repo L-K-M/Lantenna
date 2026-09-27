@@ -16,7 +16,11 @@ vi.mock('$lib/app/commands', async () => {
   const { writable } = await import('svelte/store');
   return {
     commandContext: writable({}),
-    describe: (ref: { id: string }) => ({ title: ref.id, enabled: commands.enabled.has(ref.id) }),
+    // As the real model: every command is dimmed while an alert is up.
+    describe: (ref: { id: string }, ctx: { modal?: boolean }) => ({
+      title: ref.id,
+      enabled: commands.enabled.has(ref.id) && !ctx.modal
+    }),
     run: commands.run
   };
 });
@@ -208,6 +212,20 @@ describe('buttons', () => {
       { id: 'host.wake' },
       { id: 'host.deepScan' },
       { id: 'host.open' }
+    ]);
+  });
+
+  it('stay enabled while an alert is up, to take the keyboard back after it', () => {
+    render(HostInfoPane);
+    select(printer);
+    enable('host.wake', 'host.deepScan', 'host.open');
+
+    (commandContext as Writable<object>).set({ modal: true });
+    flushSync();
+    expect([button('Wake').disabled, button('Deep Scan').disabled, button('Open').disabled]).toEqual([
+      false,
+      false,
+      false
     ]);
   });
 

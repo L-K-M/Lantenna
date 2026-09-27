@@ -59,7 +59,7 @@
   import { bindDialogKeys, mountTabs, type OsmiumTabs } from 'osmium-ui';
   import { wakingIp } from '$lib/app/actions';
   import { STATUS_BALLOON, TAB_BALLOON, deepScanBalloon, openBalloon, wakeBalloon } from '$lib/app/balloonTexts';
-  import { commandContext, describe, run } from '$lib/app/commands';
+  import { commandContext, describe, run, type CommandContext } from '$lib/app/commands';
   import { hostNote } from '$lib/app/feedback';
   import { hostModel } from '$lib/app/hostModel';
   import { ui, type InfoTab } from '$lib/app/ui';
@@ -87,10 +87,16 @@
   );
 
   // The buttons are renderers of the command model (4.1): enabled as the
-  // menu items are, and they run the same commands.
-  const wakeEnabled = $derived(describe({ id: 'host.wake' }, $commandContext).enabled);
-  const deepScanEnabled = $derived(describe({ id: 'host.deepScan' }, $commandContext).enabled);
-  const openEnabled = $derived(describe({ id: 'host.open' }, $commandContext).enabled);
+  // menu items are, and they run the same commands. They ignore its
+  // "alert up" rule, as ControlStrip's controls do: behind an alert the
+  // window draws inactive, which dims them anyway, and a button the
+  // alert came from must stay enabled to take the keyboard back when
+  // the alert closes (Osmium focuses it then, before Svelte could
+  // enable it again).
+  const ctx: CommandContext = $derived({ ...$commandContext, modal: false });
+  const wakeEnabled = $derived(describe({ id: 'host.wake' }, ctx).enabled);
+  const deepScanEnabled = $derived(describe({ id: 'host.deepScan' }, ctx).enabled);
+  const openEnabled = $derived(describe({ id: 'host.open' }, ctx).enabled);
 
   // Why a button is dimmed, for its balloon (4.5); null adds no note.
   const noMac = $derived(selected !== null && !selected.host.fingerprint?.mac_address);
