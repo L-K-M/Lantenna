@@ -303,7 +303,8 @@
 
     // Balloon Help (4.5) on Osmium's parts: the grid, each sortable
     // header and the sort order button (markup of listview.ts).
-    const balloons: OsmiumBalloon[] = [attachBalloon(grid, { content: HOST_LIST_BALLOON })];
+    // The grid's tip follows the pointer (osm/actions.ts, areaBalloon).
+    const balloons: OsmiumBalloon[] = [attachBalloon(grid, { content: HOST_LIST_BALLOON, tip: 'pointer' })];
     for (const c of COLUMNS) {
       const head = host.querySelector<HTMLElement>(`[data-column="${c.id}"] > .osm-colhead`);
       if (head) balloons.push(attachBalloon(head, { content: columnBalloon(c.id) }));

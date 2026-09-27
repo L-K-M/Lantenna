@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { MENU_SEPARATOR } from 'osmium-ui';
-import { balloon, osmButton, popup, type PopupParams } from './actions';
+import { areaBalloon, balloon, osmButton, popup, type PopupParams } from './actions';
 
 const osm = vi.hoisted(() => ({
   popup: { selected: 0, setItems: vi.fn(), setSelected: vi.fn(), destroy: vi.fn() },
@@ -81,9 +81,17 @@ it('attaches Balloon Help and detaches it on destroy', () => {
   const target = document.createElement('button');
   const action = balloon(target, 'Scan button');
 
-  expect(osm.attachBalloon).toHaveBeenCalledWith(target, { content: 'Scan button', trigger: 'balloon-help' });
+  expect(osm.attachBalloon).toHaveBeenCalledWith(target, { content: 'Scan button', trigger: 'balloon-help', tip: 'anchor' });
   action.update!('Stop button');
   expect(osm.balloon.setContent).toHaveBeenCalledWith('Stop button');
   action.destroy!();
+  expect(osm.balloon.detach).toHaveBeenCalledOnce();
+});
+
+it('points an area’s balloon at the pointer, not a far corner', () => {
+  const target = document.createElement('div');
+  const action = areaBalloon(target, 'Host list');
+  expect(osm.attachBalloon).toHaveBeenCalledWith(target, { content: 'Host list', trigger: 'balloon-help', tip: 'pointer' });
+  action.destroy?.();
   expect(osm.balloon.detach).toHaveBeenCalledOnce();
 });

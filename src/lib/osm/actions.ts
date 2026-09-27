@@ -8,7 +8,7 @@
 
 import type { ActionReturn } from 'svelte/action';
 import { attachBalloon, mountPopup, pushButton, trackHighlight } from 'osmium-ui';
-import type { BalloonOptions, PopupOptions } from 'osmium-ui';
+import type { BalloonOptions, BalloonTip, PopupOptions } from 'osmium-ui';
 
 export interface PopupParams {
   /** Titles, { title, disabled } items (drawn dimmed, can't be chosen)
@@ -102,7 +102,29 @@ export function balloon(
   node: HTMLElement,
   content: BalloonOptions['content']
 ): ActionReturn<BalloonOptions['content']> {
-  const help = attachBalloon(node, { content, trigger: 'balloon-help' });
+  return attachHelp(node, content, 'anchor');
+}
+
+/**
+ * `use:areaBalloon={content}`: as `balloon`, for a large area (the host
+ * list, the icon grid, the window header): the tip goes where the
+ * pointer rests. Osmium's default tip sits 10px in from the target's
+ * bottom-right corner, which for a whole list is far from the pointer
+ * and flips the balloon over other controls.
+ */
+export function areaBalloon(
+  node: HTMLElement,
+  content: BalloonOptions['content']
+): ActionReturn<BalloonOptions['content']> {
+  return attachHelp(node, content, 'pointer');
+}
+
+function attachHelp(
+  node: HTMLElement,
+  content: BalloonOptions['content'],
+  tip: BalloonTip
+): ActionReturn<BalloonOptions['content']> {
+  const help = attachBalloon(node, { content, trigger: 'balloon-help', tip });
 
   return {
     update(next) {

@@ -37,7 +37,7 @@
   import { centerText, mountTextView, type OsmiumTextView } from 'osmium-ui';
   import { NOTES_BALLOON } from '$lib/app/balloonTexts';
   import type { HostRow } from '$lib/app/hostModel';
-  import { balloon } from '$lib/osm/actions';
+  import { areaBalloon } from '$lib/osm/actions';
 
   let { row }: { row: HostRow | null } = $props();
 
@@ -55,7 +55,7 @@
       mode: 'read-only',
       font: 'geneva-10'
     });
-    const help = balloon(view.textarea, NOTES_BALLOON);
+    const help = areaBalloon(view.textarea, NOTES_BALLOON);
 
     return () => {
       help.destroy?.();

@@ -162,7 +162,8 @@
     });
 
     const grid = listHost.querySelector<HTMLElement>('.osm-lv-grid');
-    const help = grid ? attachBalloon(grid, { content: PORTS_BALLOON, trigger: 'balloon-help' }) : null;
+    // The list's tip follows the pointer (osm/actions.ts, areaBalloon).
+    const help = grid ? attachBalloon(grid, { content: PORTS_BALLOON, trigger: 'balloon-help', tip: 'pointer' }) : null;
 
     show(rows, row?.ip ?? null, scanning);
 

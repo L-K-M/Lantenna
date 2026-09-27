@@ -76,7 +76,7 @@
   import { hostModel, type HostModel, type HostRow } from '$lib/app/hostModel';
   import { ui } from '$lib/app/ui';
   import { activeView, type HostViewApi } from '$lib/app/views';
-  import { balloon } from '$lib/osm/actions';
+  import { areaBalloon } from '$lib/osm/actions';
   import { STAR } from '$lib/osm/sprites';
   import { scanStore } from '$lib/util/scanStore';
 
@@ -489,7 +489,7 @@
     aria-label="Hosts"
     tabindex={rows.length ? -1 : 0}
     bind:this={grid}
-    use:balloon={HOST_LIST_BALLOON}
+    use:areaBalloon={HOST_LIST_BALLOON}
     onkeydown={onKeydown}
     onpointerdown={onPointerdown}
     ondblclick={onDblclick}
