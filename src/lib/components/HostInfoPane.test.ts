@@ -81,7 +81,7 @@ function pane(): HTMLElement {
 }
 
 function status(): HTMLElement {
-  return document.querySelector('.lan-status') as HTMLElement;
+  return document.querySelector('.lan-host-status') as HTMLElement;
 }
 
 beforeEach(() => {

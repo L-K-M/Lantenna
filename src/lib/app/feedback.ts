@@ -9,7 +9,9 @@
 //   installFeedback closes what is still open.
 // - Per-host results go to the host status line (hostNote, 5.3), one
 //   note per IP. The line shows the selected host's note; selecting
-//   another host drops the previous one's.
+//   another host drops the previous one's. Live states (a wake being
+//   sent, a deep scan's progress) are not notes: the pane works them
+//   out from wakingIp and scanProgress, so they can't go stale here.
 // - lastError records which kind of failure set the store's error, for
 //   the header's error line (5.2 rows 10 and 11).
 //
@@ -27,10 +29,10 @@ import type {
   HostedWindow,
   OsmiumAlert
 } from 'osmium-ui';
-import { formatClock, formatCount, plural } from '$lib/util/format';
+import { formatClock, plural } from '$lib/util/format';
 import type { ScanEvent } from '$lib/util/scanEvents';
 import { scanEvents } from '$lib/util/scanEvents';
-import { scanProgress, scanStore } from '$lib/util/scanStore';
+import { scanStore } from '$lib/util/scanStore';
 import { explainError } from './errorText';
 
 // ---- alerts --------------------------------------------------------------
@@ -219,7 +221,8 @@ function onScanEvent(e: ScanEvent): void {
       setHostNote(e.ip, `Deep scan finished at ${formatClock(new Date())}: ${openPortsText(e.openPorts)}.`);
       return;
     case 'deep-scan-failed':
-      // Failures are alerts, never status lines: drop the progress note.
+      // Failures are alerts, never status lines: drop the host's older
+      // note, which no longer describes it.
       setHostNote(e.ip, '');
       void stopAlert(`Lantenna couldn’t deep scan ${e.ip}.`, explainError(e.message));
       return;
@@ -229,23 +232,11 @@ function onScanEvent(e: ScanEvent): void {
   }
 }
 
-/** Subscribe to scanEvents; returns the disposer. Also writes the deep
- * scan's progress into its host's note ("Deep scan starting…", "Deep
- * scan: 412 of 2,048 ports, 4 open.") and drops a host's note when
- * another host is selected. The disposer closes open alerts, drops
- * waiting ones and forgets the window. */
+/** Subscribe to scanEvents; returns the disposer. Also drops a host's
+ * note when another host is selected. The disposer closes open alerts,
+ * drops waiting ones and forgets the window. */
 export function installFeedback(): () => void {
   const unsubscribeEvents = scanEvents.subscribe(onScanEvent);
-
-  const unsubscribeProgress = scanProgress.subscribe(({ hostScanProgress: p }) => {
-    if (!p?.running || !p.current_ip) return;
-    setHostNote(
-      p.current_ip,
-      p.total > 0
-        ? `Deep scan: ${formatCount(p.scanned)} of ${plural(p.total, 'port')}, ${formatCount(p.found)} open.`
-        : 'Deep scan starting…'
-    );
-  });
 
   let selectedIp = get(scanStore).selectedHostIp;
   const unsubscribeSelection = scanStore.subscribe(({ selectedHostIp }) => {
@@ -257,7 +248,6 @@ export function installFeedback(): () => void {
 
   return () => {
     unsubscribeEvents();
-    unsubscribeProgress();
     unsubscribeSelection();
     closeAlerts();
     hosted = null;

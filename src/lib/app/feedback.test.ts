@@ -292,21 +292,17 @@ it('says nothing for a completed scan', async () => {
   expect(get(f.hostNote)).toBeNull();
 });
 
-it('follows a deep scan in its host’s note', async () => {
+it('notes a deep scan’s result, not its progress (the pane shows that)', async () => {
   const f = await load();
   dispose = f.installFeedback();
   f.scanStore.setSelectedHost('192.168.1.31');
   const deep = { phase: 'ports' as const, current_ip: '192.168.1.31', running: true };
 
   f.scanProgress.set({ progress: null, hostScanProgress: { ...deep, scanned: 0, total: 0, found: 0 } });
-  expect(get(f.hostNote)).toEqual({ ip: '192.168.1.31', text: 'Deep scan starting…' });
-
   f.scanProgress.set({ progress: null, hostScanProgress: { ...deep, scanned: 412, total: 2048, found: 4 } });
-  expect(get(f.hostNote)?.text).toBe('Deep scan: 412 of 2,048 ports, 4 open.');
-
-  // Finished: running false changes nothing, the event says it.
   f.scanProgress.set({ progress: null, hostScanProgress: { ...deep, scanned: 1, total: 1, found: 5, running: false } });
-  expect(get(f.hostNote)?.text).toBe('Deep scan: 412 of 2,048 ports, 4 open.');
+  expect(get(f.hostNote)).toBeNull();
+
   const finished = new Date(2026, 8, 27, 15, 44);
   vi.useFakeTimers({ now: finished, toFake: ['Date'] });
   try {

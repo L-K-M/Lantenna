@@ -107,6 +107,10 @@ export async function wakeHost(ip: string): Promise<void> {
     await TauriService.wakeHost(mac);
     setHostNote(ip, `Wake-up packet sent to ${mac} at ${formatClock(new Date())}.`);
   } catch (error) {
+    // Failures are alerts, never status lines (5.3): drop the host's
+    // older note, as a failed deep scan does, so the line doesn't show
+    // a result from before this attempt.
+    setHostNote(ip, '');
     const raw = errorMessage(error, 'Failed to send Wake-on-LAN packet');
     void stopAlert('Lantenna couldn’t send the wake-up packet.', `${explainError(raw)} ${WAKE_ADVICE}`);
   } finally {

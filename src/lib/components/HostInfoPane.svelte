@@ -153,7 +153,7 @@
   </div>
 
   <div
-    class="lan-status osm-small"
+    class="lan-host-status osm-small"
     role="status"
     aria-live="polite"
     aria-busy={status.busy ? 'true' : undefined}
@@ -196,7 +196,7 @@
     bottom: 89px;
   }
 
-  .lan-status {
+  .lan-host-status {
     position: absolute;
     left: 12px;
     width: 276px;

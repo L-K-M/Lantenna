@@ -171,7 +171,9 @@ describe('waking', () => {
       'Lantenna couldn’t send the wake-up packet.',
       "explained(Invalid MAC address 'zz') Check that this computer is connected to the network, then try again."
     );
-    expect(feedback.setHostNote).not.toHaveBeenCalled();
+    // The failure clears the host's older note instead of adding one.
+    expect(feedback.setHostNote).toHaveBeenCalledTimes(1);
+    expect(feedback.setHostNote).toHaveBeenCalledWith('192.168.1.31', '');
     expect(get(actions.wakingIp)).toBeNull();
   });
 
