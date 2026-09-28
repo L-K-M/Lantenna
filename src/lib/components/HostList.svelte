@@ -450,12 +450,13 @@
   }
 
   /* Over the rows and the scroll bars, which would cover an outline of
-     the grid (they are positioned). */
+     the grid (they are positioned). Above their arrow boxes too, which
+     osmium.css stacks at z-index 2 in the same stacking context. */
   :global(.osm-kbd) .lan-list:global(.lan-unselected) :global(.osm-lv-grid:focus-visible .osm-lv-body::after) {
     content: '';
     position: absolute;
     inset: 0;
-    z-index: 1;
+    z-index: 3;
     box-shadow: inset 0 0 0 2px var(--osm-focus-ring);
     pointer-events: none;
   }
