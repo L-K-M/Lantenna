@@ -10,6 +10,17 @@
 // which also flashes the Edit title; a second handler here would copy
 // twice or keep the bar from seeing the key.
 //
+// Select All (Command-A; Control-A on Linux) is kept from the engine
+// there: the Edit item is dimmed (hosts are selected one at a time), but
+// the engine's select-all would select the pane's values, and the next
+// Copy would copy them instead of the host's IP (3.2). On macOS this
+// also keeps the predefined Select All from running.
+//
+// On Linux, Control-Shift-Z and Control-Y in a text field redo. The Edit
+// menu has no Redo (4.3), and WebKitGTK binds no key to it, as it binds
+// none to Undo (which Control-Z runs through the menu bar); Chromium
+// redoes natively, and execCommand('redo') does the same there.
+//
 // WKWebView gives the page the first chance at Command keys and passes
 // the rest to the native menu, so every other key is left alone. A key
 // whose command is dimmed (no selection) is left alone too: the native
@@ -21,19 +32,31 @@ import { commandContext, describe, run, type CommandRef } from './commands';
 import { classifyFocus } from './focus';
 import { isMac } from './platform';
 
-/** The command a keydown asks of the page, or null for any other key. */
-function pageCommand(e: KeyboardEvent): CommandRef | null {
-  if (e.defaultPrevented || e.repeat || e.isComposing || e.altKey || e.shiftKey) return null;
+/** What the page does with a keydown: run a command, keep the key
+ * from the engine, or redo. */
+type PageKey = { readonly run: CommandRef } | 'ignore' | 'redo';
 
+/** Whether `e` is the platform's command key with `key` and no other
+ * modifier but, with `shift`, Shift. */
+function commandKey(e: KeyboardEvent, key: string, shift = false): boolean {
   const commandHeld = isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
-  if (!commandHeld) return null;
+  return commandHeld && !e.altKey && e.shiftKey === shift && e.key.toLowerCase() === key;
+}
+
+/** What a keydown asks of the page, or null for any other key. */
+function pageKey(e: KeyboardEvent): PageKey | null {
+  if (e.defaultPrevented || e.repeat || e.isComposing) return null;
 
   const where = classifyFocus(e.target instanceof Element ? e.target : null);
+  if (where === 'text') {
+    return !isMac && (commandKey(e, 'z', true) || commandKey(e, 'y')) ? 'redo' : null;
+  }
   if (where !== 'list' && where !== 'icons') return null;
 
-  if (e.key === 'Backspace') return { id: 'host.toggleHidden' };
+  if (commandKey(e, 'backspace')) return { run: { id: 'host.toggleHidden' } };
+  if (commandKey(e, 'a')) return 'ignore';
   // Selected pane text copies as text (the native Copy does that).
-  if (isMac && e.key.toLowerCase() === 'c' && !hasTextSelection()) return { id: 'edit.copyIp' };
+  if (isMac && commandKey(e, 'c') && !hasTextSelection()) return { run: { id: 'edit.copyIp' } };
   return null;
 }
 
@@ -41,11 +64,23 @@ function pageCommand(e: KeyboardEvent): CommandRef | null {
  * view's own handler that took the key comes first. */
 export function installPageKeys(): () => void {
   const onKeyDown = (e: KeyboardEvent) => {
-    const ref = pageCommand(e);
-    if (ref === null || !describe(ref, get(commandContext)).enabled) return;
+    const key = pageKey(e);
+    if (key === null) return;
 
+    if (key === 'ignore') {
+      e.preventDefault();
+      return;
+    }
+
+    if (key === 'redo') {
+      e.preventDefault();
+      document.execCommand('redo');
+      return;
+    }
+
+    if (!describe(key.run, get(commandContext)).enabled) return;
     e.preventDefault();
-    run(ref);
+    run(key.run);
   };
 
   window.addEventListener('keydown', onKeyDown);

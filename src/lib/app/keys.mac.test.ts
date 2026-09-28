@@ -80,11 +80,23 @@ it('leaves Command-C to the native Copy in text, with a text selection, or with 
 });
 
 it('leaves every other Command key to the native menu', () => {
-  for (const key of ['r', '.', 'f', 'o', 'i', 'd', 'w', 'q', 'v', 'x', 'a', 'z']) {
+  for (const key of ['r', '.', 'f', 'o', 'i', 'd', 'w', 'q', 'v', 'x', 'z']) {
     expect(press(place('lan-list'), { key, metaKey: true }).defaultPrevented, key).toBe(false);
   }
   // Control is not the command key on macOS.
   expect(press(place('lan-list'), { key: 'Backspace', ctrlKey: true }).defaultPrevented).toBe(false);
   expect(press(place('lan-list'), { key: 'c', ctrlKey: true }).defaultPrevented).toBe(false);
+  expect(run).not.toHaveBeenCalled();
+});
+
+it('keeps Command-A from the native Select All in the list and the icons only', () => {
+  for (const view of ['lan-list', 'lan-icons']) {
+    expect(press(place(view), { key: 'a', metaKey: true }).defaultPrevented, view).toBe(true);
+  }
+  const field = document.createElement('input');
+  place('lan-list').append(field);
+  expect(press(field, { key: 'a', metaKey: true }).defaultPrevented).toBe(false);
+  // Command-Shift-Z redoes through the native menu's predefined Redo.
+  expect(press(field, { key: 'z', metaKey: true, shiftKey: true }).defaultPrevented).toBe(false);
   expect(run).not.toHaveBeenCalled();
 });

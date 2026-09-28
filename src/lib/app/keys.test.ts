@@ -1,5 +1,6 @@
 // Page keys on Linux (happy-dom's user agent): Control-Backspace in the
-// list or the icon grid, and nothing else.
+// list or the icon grid, Control-A kept from the engine there, and the
+// redo keys in text fields.
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { readable } from 'svelte/store';
 
@@ -101,4 +102,41 @@ it('stops listening once disposed', () => {
   dispose();
   press(place('lan-list'), { key: 'Backspace', ctrlKey: true });
   expect(run).not.toHaveBeenCalled();
+});
+
+it('keeps Control-A from the engine’s select-all in the list and the icons', () => {
+  for (const view of ['lan-list', 'lan-icons']) {
+    expect(press(place(view), { key: 'a', ctrlKey: true }).defaultPrevented, view).toBe(true);
+    expect(press(place(view), { key: 'A', ctrlKey: true }).defaultPrevented, view).toBe(true); // Caps Lock
+  }
+  expect(run).not.toHaveBeenCalled();
+
+  // Text fields select their own text; Select All elsewhere is the bar's.
+  const field = document.createElement('input');
+  place('lan-list').append(field);
+  const outside = document.createElement('button');
+  document.body.append(outside);
+  for (const target of [field, outside]) {
+    expect(press(target, { key: 'a', ctrlKey: true }).defaultPrevented).toBe(false);
+  }
+});
+
+it('redoes on Control-Shift-Z and Control-Y in a text field, which WebKitGTK binds no key to', () => {
+  const exec = vi.spyOn(document, 'execCommand').mockReturnValue(true);
+  const field = document.createElement('input');
+  document.body.append(field);
+  const notes = document.createElement('textarea');
+  notes.readOnly = true;
+  document.body.append(notes);
+
+  expect(press(field, { key: 'Z', ctrlKey: true, shiftKey: true }).defaultPrevented).toBe(true);
+  expect(press(field, { key: 'y', ctrlKey: true }).defaultPrevented).toBe(true);
+  expect(exec.mock.calls).toEqual([['redo'], ['redo']]);
+
+  // Undo is the menu bar's; a read-only view and the list have no redo.
+  expect(press(field, { key: 'z', ctrlKey: true }).defaultPrevented).toBe(false);
+  expect(press(notes, { key: 'Z', ctrlKey: true, shiftKey: true }).defaultPrevented).toBe(false);
+  expect(press(place('lan-list'), { key: 'y', ctrlKey: true }).defaultPrevented).toBe(false);
+  expect(exec).toHaveBeenCalledTimes(2);
+  exec.mockRestore();
 });
