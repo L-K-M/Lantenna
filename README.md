@@ -4,13 +4,34 @@
 > LLM disclosure: This codebase was written with substantial help from large language models: AI coding agents working from the [`AGENTS.md`](AGENTS.md) brief in this repo.
 
 Lantenna is a Tauri-based program for macOS and Linux that scans the local LAN and displays discovered hosts, host names, and open ports.
+It looks and works like a Mac OS 8.5 utility, drawn with [Osmium UI](https://github.com/L-K-M/osmium-ui).
 
 **Latest release:** v<!-- version -->1.0.1<!-- /version --> · [Download](https://github.com/L-K-M/Lantenna/releases/latest)
 
-![Screenshot of Lantenna showing a list of discovered hosts with their IP addresses, host names, and open ports](./media-sources/screenshot.png)
+![Screenshot of Lantenna in its Mac OS 8 window: a list of discovered hosts with their IP addresses, kinds, vendors and open ports, and the Host Information pane for a printer](./media-sources/screenshot.png)
 
 > [!IMPORTANT]
 > LLM Disclosure: This project was developed with the assistance of large language models (AI coding tools).
+
+## Using Lantenna
+
+Choose an interface and a depth, then click **Scan**. The window header
+says what the scan is doing; hosts appear in the list as they are found.
+Select a host to see its addresses, ports and fingerprint in the Host
+Information pane, and double-click it (or press Return) to open its web
+page, file server, remote login or screen sharing.
+
+- Every command is in the menu bar (on Linux, inside the window).
+  Control-click or right-click a host, or empty space in the list, for a
+  contextual menu.
+- Keys (Control instead of Command on Linux): ⌘R Scan, ⌘. Stop, ⌘F Find,
+  ⌘O Open, ⌘I Get Info, ⌘D Deep Scan, ⌘W Close Window. While the list
+  has the keyboard, ⌘C copies the selected host's IP address and ⌘⌫
+  (Control-Backspace on Linux) hides or shows it.
+- Click a star to make a host a favorite; the Favorites menu jumps to it.
+- Help > Show Balloons explains every control.
+- View > as Icons shows the hosts as icons; View > Hide Host Information
+  gives the list the whole window.
 
 ## Platform support
 
@@ -69,6 +90,13 @@ npm run tauri dev
 # Build for production
 npm run tauri build
 ```
+
+To work on the interface in a browser without the backend, run
+`npm run dev -- --mode mock` and open
+`http://localhost:1420/?scenario=scanning&platform=mac`: a mock backend
+(`src/lib/dev/mockBackend.ts`) plays scripted scans. Scenarios include
+`idle`, `first-run`, `scanning`, `fingerprint`, `stopping`, `error`,
+`empty` and `many`; `platform=linux` shows the Linux layout.
 
 Bundles for the host architecture are written below
 `src-tauri/target/release/bundle/` — a `.dmg` on macOS; a `.deb` and an

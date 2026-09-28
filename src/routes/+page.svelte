@@ -1,360 +1,196 @@
+<!--
+  Owner: scaffold (spec 8.3). Spec: 2.1 to 2.10, 8.3 (page skeleton).
+  The one Lantenna window: Osmium's hostWindow draws the frame around
+  .osm-content, and the regions stack inside it. This file owns the
+  region boxes (the CSS below); each component owns what is inside its
+  region.
+-->
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
   import {
-    Checkbox,
-    ErrorBanner,
-    Notification,
-    ProgressBar,
-    TitleBar,
-    getSystem7WindowStyle
-  } from '@lkmc/system7-ui';
+    hostWindow,
+    isModal,
+    onBalloonHelpChange,
+    onModalChange,
+    setBalloonHelp,
+    type WindowOp
+  } from 'osmium-ui';
 
-  import HostIconGrid from '$lib/components/HostIconGrid.svelte';
-  import HostInspector from '$lib/components/HostInspector.svelte';
-  import HostTable from '$lib/components/HostTable.svelte';
-  import ScanToolbar from '$lib/components/ScanToolbar.svelte';
+  import ControlStrip from '$lib/components/ControlStrip.svelte';
+  import HostIconView from '$lib/components/HostIconView.svelte';
+  import HostInfoPane from '$lib/components/HostInfoPane.svelte';
+  import HostList from '$lib/components/HostList.svelte';
+  import MenuBar from '$lib/components/MenuBar.svelte';
+  import WindowHeader from '$lib/components/WindowHeader.svelte';
 
-  import { TauriService } from '$lib/tauri';
-  import { WindowManager } from '$lib/windowManager';
-  import { hostMatchesQuery } from '$lib/util/hostSearch';
-  import { notifications } from '$lib/util/notifications';
-  import { describeScanProgress, isIndeterminatePhase } from '$lib/util/scanProgress';
-  import { scanProgress, scanStore } from '$lib/util/scanStore';
-  import { windowFocused } from '$lib/util/windowState';
-  import type { HostViewMode, SystemColors } from '$lib/types';
+  import { applySystemColors } from '$lib/app/colors';
+  import { installContextMenuGuard } from '$lib/app/contextMenus';
+  import { bindWindow, installFeedback } from '$lib/app/feedback';
+  import { installKeyboardHome } from '$lib/app/focus';
+  import { installPageKeys } from '$lib/app/keys';
+  import { MIN_H, MIN_W } from '$lib/app/layout';
+  import { installNativeMenu } from '$lib/app/nativeMenu';
+  import { isMac } from '$lib/app/platform';
+  import { ui } from '$lib/app/ui';
+  import { scheduleUpdateCheck } from '$lib/app/updates';
+  import { hostedWindow } from '$lib/app/views';
+  import { registerAppSprites } from '$lib/osm/sprites';
+  import { scanStore } from '$lib/util/scanStore';
+  import { windowManager } from '$lib/windowManager';
 
-  const VIEW_MODE_STORAGE_KEY = 'lantenna.viewMode';
+  let frame: HTMLDivElement;
 
-  let isWindowShaded = false;
-  let viewMode: HostViewMode = loadViewMode();
-
-  function loadViewMode(): HostViewMode {
-    try {
-      return localStorage.getItem(VIEW_MODE_STORAGE_KEY) === 'icons' ? 'icons' : 'list';
-    } catch {
-      return 'list';
-    }
+  /** hostWindow's window ops go to the Tauri window. The fold is mirrored
+   * into ui first, the startup winShade { on: false } included. */
+  function post(op: WindowOp) {
+    if (op.op === 'winShade') ui.setShaded(op.on);
+    windowManager.apply(op);
   }
-
-  function setViewMode(mode: HostViewMode) {
-    viewMode = mode;
-    try {
-      localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
-    } catch {
-      // Only a convenience; the view still switches.
-    }
-  }
-  let systemColors: SystemColors | null = null;
-
-  $: ({
-    interfaces,
-    selectedInterface,
-    scanApproach,
-    hosts,
-    newHostIps,
-    customNames,
-    favoriteIps,
-    hiddenIps,
-    showHiddenEntries,
-    staleFavoriteIps,
-    pendingIps,
-    scanning,
-    stopping,
-    loading,
-    error,
-    query,
-    selectedHostIp
-  } = $scanStore);
-
-  $: ({ progress, hostScanProgress } = $scanProgress);
-
-  $: hiddenSet = new Set(hiddenIps);
-
-  $: queryMatchedHosts = hosts.filter((host) => hostMatchesQuery(host, customNames[host.ip] || '', query));
-
-  $: tableEmptyText =
-    query.trim() && hosts.length > 0 ? `No hosts match “${query.trim()}”.` : 'No hosts yet. Start a scan.';
-
-  $: hiddenCount = hosts.filter((host) => hiddenSet.has(host.ip)).length;
-
-  $: visibleHosts = showHiddenEntries ? hosts : hosts.filter((host) => !hiddenSet.has(host.ip));
-
-  $: filteredHosts = showHiddenEntries
-    ? queryMatchedHosts
-    : queryMatchedHosts.filter((host) => !hiddenSet.has(host.ip));
-
-  $: selectedHost = visibleHosts.find((host) => host.ip === selectedHostIp) || null;
-
-  $: hostScanTarget = hostScanProgress?.current_ip || 'selected host';
-  $: fullScanActive = scanning || Boolean(progress?.running);
-  $: footerStatus = stopping
-    ? 'Stopping scan...'
-    : fullScanActive
-    ? describeScanProgress(progress)
-    : hostScanProgress?.running
-      ? hostScanProgress.total > 0
-        ? `Deep scan ${hostScanTarget}: ${hostScanProgress.scanned}/${hostScanProgress.total} ports, ${hostScanProgress.found} open`
-        : `Deep scan ${hostScanTarget} in progress...`
-      : 'Idle';
-
-  $: activeFooterProgress = fullScanActive ? progress : hostScanProgress?.running ? hostScanProgress : null;
-  $: showFooterProgress = Boolean(activeFooterProgress?.running);
-  $: footerProgressMax = activeFooterProgress && activeFooterProgress.total > 0 ? activeFooterProgress.total : 1;
-  $: footerProgressValue = activeFooterProgress ? Math.min(activeFooterProgress.scanned, footerProgressMax) : 0;
-  $: footerProgressIndeterminate = fullScanActive && isIndeterminatePhase(progress);
-  $: footerProgressAriaLabel = fullScanActive
-    ? `Scan progress: ${describeScanProgress(progress)}`
-    : hostScanProgress?.running
-      ? hostScanProgress.total > 0
-        ? `Deep scan progress for ${hostScanTarget}: ${hostScanProgress.scanned} of ${hostScanProgress.total} ports`
-        : `Deep scan in progress for ${hostScanTarget}`
-      : 'Scan progress';
-
-  $: windowStyle = systemColors ? getSystem7WindowStyle(systemColors) : '';
-
-  const windowManager = new WindowManager();
 
   onMount(() => {
-    scanStore.init();
-    void loadSystemColors();
+    const disposers: (() => void)[] = [];
 
-    const unlistenActivity = windowManager.subscribeActivity((active) => {
-      windowFocused.set(active);
+    registerAppSprites();
+
+    // Balloon Help: restore the remembered state, remember changes.
+    setBalloonHelp(get(ui).balloons);
+    disposers.push(onBalloonHelpChange((state) => ui.setBalloons(state)));
+
+    // `post` makes the page native: the zoom and grow sizes are used only
+    // by a browser tab without it, so zoom's standard size is a dummy.
+    const hosted = hostWindow(frame, {
+      title: 'Lantenna',
+      post,
+      zoom: { standard: { w: 0, h: 0 } },
+      grow: { min: { w: MIN_W, h: MIN_H } },
+      escape: 'ignore',
+      activation: 'manual'
     });
+    hostedWindow.set(hosted);
+    bindWindow(hosted);
+
+    // hostWindow unfolds the page itself when the window grows tall
+    // again while shaded (an OS resize), without posting an op.
+    const syncShade = () => ui.setShaded(hosted.shaded);
+    window.addEventListener('resize', syncShade);
+    disposers.push(() => window.removeEventListener('resize', syncShade));
+
+    // Active while the OS says so and no alert is up (spec 2.10). The
+    // backend's activity event keeps the title bar active during a Linux
+    // move grab, which takes the keyboard focus.
+    let osActive = true;
+    const sync = () => hosted.window.setActive(osActive && !isModal());
+    disposers.push(onModalChange(sync));
+    disposers.push(
+      windowManager.subscribeActivity((active) => {
+        osActive = active;
+        ui.setActive(active);
+        sync();
+        if (active) void applySystemColors();
+      })
+    );
+
+    // Feedback subscribes before init, so no store event is missed.
+    disposers.push(installFeedback());
+    void scanStore.init();
+    void applySystemColors();
+    if (isMac) disposers.push(installNativeMenu());
+    disposers.push(installPageKeys());
+    disposers.push(installContextMenuGuard());
+    // The host view takes the keyboard now and whenever it has nowhere
+    // else to be (spec 3.2).
+    disposers.push(installKeyboardHome(frame));
+    disposers.push(scheduleUpdateCheck());
+    if (isMac) disposers.push(windowManager.trackGrow(frame));
+    disposers.push(windowManager.watchResize());
 
     return () => {
-      unlistenActivity();
+      for (const dispose of disposers.reverse()) dispose();
       scanStore.destroy();
+      hostedWindow.set(null);
+      hosted.destroy();
     };
   });
-
-  function handleWindowClose() {
-    windowManager.close();
-  }
-
-  async function handleWindowShade() {
-    isWindowShaded = await windowManager.toggleShade();
-  }
-
-  function handleWindowDrag() {
-    windowManager.startDragging();
-  }
-
-  function getHostTableHeightMetrics(): { viewportHeight: number; contentHeight: number } | null {
-    const tableBodyContainer = document.querySelector<HTMLDivElement>('.table-body-container');
-    const tableBody = tableBodyContainer?.querySelector<HTMLTableElement>('table');
-
-    if (!tableBodyContainer || !tableBody) {
-      return null;
-    }
-
-    return {
-      viewportHeight: tableBodyContainer.clientHeight,
-      contentHeight: tableBody.getBoundingClientRect().height
-    };
-  }
-
-  async function handleWindowResizeToFit() {
-    if (isWindowShaded) {
-      return;
-    }
-
-    await tick();
-
-    const tableHeightMetrics = getHostTableHeightMetrics();
-    if (!tableHeightMetrics) {
-      return;
-    }
-
-    const heightDelta = Math.round(tableHeightMetrics.contentHeight - tableHeightMetrics.viewportHeight);
-    await windowManager.resizeHeightBy(heightDelta);
-  }
-
-  async function loadSystemColors() {
-    try {
-      systemColors = await TauriService.getSystemColors();
-    } catch {
-      systemColors = null;
-    }
-  }
 </script>
 
-<div class="window-frame s7-root" class:window-unfocused={!$windowFocused} style={windowStyle}>
-  <TitleBar
-    title="Lantenna"
-    focused={$windowFocused}
-    closable
-    collapsible
-    shadeable
-    draggable
-    onclose={handleWindowClose}
-    oncollapse={handleWindowResizeToFit}
-    onshade={handleWindowShade}
-    ondragstart={handleWindowDrag}
-  />
-
-  {#if !isWindowShaded}
-    <Notification notifications={$notifications} ondismiss={(id) => notifications.remove(id)} />
-
-    <main class="app-content">
-      <ScanToolbar
-        interfaces={interfaces}
-        selectedInterface={selectedInterface}
-        approach={scanApproach}
-        {scanning}
-        {stopping}
-        {query}
-        {viewMode}
-        onViewModeChange={setViewMode}
-        onInterfaceChange={(name) => scanStore.setInterface(name)}
-        onApproachChange={(approach) => scanStore.setScanApproach(approach)}
-        onStart={() => scanStore.startScan()}
-        onStop={() => scanStore.cancelScan()}
-        onQueryChange={(value) => scanStore.setQuery(value)}
-      />
-
-      {#if error}
-        <ErrorBanner message={error} onclose={() => scanStore.clearError()} />
-      {/if}
-
-      <section class="results-layout">
-        {#if viewMode === 'icons'}
-          <HostIconGrid
-            hosts={filteredHosts}
-            loading={loading || scanning}
-            {selectedHostIp}
-            {customNames}
-            {favoriteIps}
-            {hiddenIps}
-            {staleFavoriteIps}
-            {newHostIps}
-            emptyText={tableEmptyText}
-            onSelectHost={(ip) => scanStore.setSelectedHost(ip)}
-          />
-        {:else}
-          <HostTable
-            hosts={filteredHosts}
-            loading={loading || scanning}
-            {selectedHostIp}
-            {customNames}
-            {favoriteIps}
-            {hiddenIps}
-            {staleFavoriteIps}
-            {pendingIps}
-            {newHostIps}
-            emptyText={tableEmptyText}
-            onSelectHost={(ip) => scanStore.setSelectedHost(ip)}
-            onToggleFavorite={(ip) => scanStore.toggleFavorite(ip)}
-            onToggleHidden={(ip) => scanStore.toggleHidden(ip)}
-            onClearCustomName={(ip) => scanStore.setCustomName(ip, '')}
-          />
-        {/if}
-        <HostInspector
-          host={selectedHost}
-          {customNames}
-          deepScanRunning={Boolean(hostScanProgress?.running)}
-          onSetCustomName={(ip, name) => scanStore.setCustomName(ip, name)}
-          onDeepScan={(ip) => scanStore.refreshHostPorts(ip, 'deep')}
-        />
-      </section>
-    </main>
-
-    <footer class="app-footer">
-      {#if showFooterProgress}
-        <div class="footer-progress">
-          <ProgressBar
-            value={footerProgressValue}
-            max={footerProgressMax}
-            indeterminate={footerProgressIndeterminate}
-            height={16}
-            title={footerProgressAriaLabel}
-            ariaLabel={footerProgressAriaLabel}
-          />
-        </div>
-      {/if}
-      <span class="footer-status">{footerStatus}</span>
-      {#if hiddenCount > 0}
-        <div class="hidden-footer-toggle">
-          <Checkbox
-            checked={showHiddenEntries}
-            label="Show hidden entries"
-            onchange={(checked) => scanStore.setShowHiddenEntries(checked)}
-          />
-        </div>
-      {/if}
-    </footer>
-  {/if}
+<div class="osm-page-window" bind:this={frame}>
+  <div class="osm-content lan-content">
+    {#if !isMac}<MenuBar />{/if}
+    <ControlStrip />
+    <WindowHeader />
+    <div class="lan-main" class:lan-no-pane={!$ui.infoPaneShown}>
+      <div class="lan-view">
+        {#if $ui.viewMode === 'list'}<HostList />{:else}<HostIconView />{/if}
+      </div>
+      <HostInfoPane />
+    </div>
+  </div>
 </div>
 
 <style>
-  .window-frame {
-    --system7-color-accent: #000;
-    --system7-color-accent-text: #fff;
-    --system7-color-highlight: #000;
-    --system7-color-highlight-text: #fff;
-    --system7-color-success: #000;
-    --system7-color-error: #000;
-    --system7-color-info: #000;
-    width: 100vw;
-    height: 100vh;
-    background: #fff;
-    border: 1px solid #000;
-    box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.2);
+  .lan-content {
     display: flex;
     flex-direction: column;
   }
 
-  .window-frame :global(.notification.success),
-  .window-frame :global(.notification.error),
-  .window-frame :global(.notification.info) {
-    border-left: 2px solid var(--system7-color-ink, #000);
+  /* Osmium hides a collapsed window's content with .osm-shaded
+     .osm-content; the scoped rule above has the same specificity and
+     may load later, so hide it here too. */
+  :global(.osm-shaded) .lan-content {
+    display: none;
   }
 
-  .app-content {
+  /* Region boxes (spec 2.3). The regions are rendered by child
+     components, hence :global. */
+  .lan-content > :global(.lan-menubar) {
+    flex: none;
+  }
+
+  .lan-content > :global(.lan-strip) {
+    flex: none;
+    height: 64px;
+    position: relative;
+  }
+
+  .lan-content > :global(.lan-header) {
+    flex: none;
+    position: relative;
+  }
+
+  .lan-main {
     flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
     min-height: 0;
+    display: flex;
   }
 
-  .results-layout {
+  .lan-view {
     flex: 1;
-    min-height: 0;
-    display: flex;
-    overflow: hidden;
+    min-width: 0;
+    position: relative;
+    border-right: 1px solid #000;
   }
 
-  .app-footer {
-    border-top: 1.5px solid #000;
-    padding: 4px 8px;
-    min-height: 24px;
-    display: flex;
-    align-items: center;
-    white-space: nowrap;
-    gap: 12px;
+  .lan-no-pane .lan-view {
+    border-right: 0;
   }
 
-  .footer-status {
-    flex: 0 0 auto;
+  .lan-view > :global(.lan-list),
+  .lan-view > :global(.lan-icons) {
+    position: absolute;
+    inset: 0;
   }
 
-  .footer-progress {
-    width: clamp(140px, 24vw, 280px);
-    min-width: 140px;
-    display: inline-flex;
-    align-items: center;
+  .lan-main > :global(.lan-pane) {
+    flex: none;
+    width: 300px;
+    position: relative;
+    box-shadow: inset 1px 0 #fff;
   }
 
-  .hidden-footer-toggle {
-    margin-left: auto;
-    display: inline-flex;
-    align-items: center;
-  }
-
-  @media (max-width: 980px) {
-    .results-layout {
-      flex-direction: column;
-    }
+  .lan-main > :global(.lan-pane[hidden]) {
+    display: none;
   }
 </style>

@@ -12,9 +12,11 @@ import type {
   ScanResult
 } from '$lib/types';
 import { errorMessage } from './errors';
-import { notifications } from './notifications';
+import { MAX_SCAN_HOSTS } from './scanLimits';
+import { scanEvents } from './scanEvents';
+import { readJson, readString, writeJson, writeString } from './storage';
 
-interface ScanStoreState {
+export interface ScanStoreState {
   interfaces: NetworkInterface[];
   selectedInterface: string | null;
   scanApproach: ScanApproach;
@@ -34,6 +36,8 @@ interface ScanStoreState {
   query: string;
   selectedHostIp: string | null;
   lastScanAt: string | null;
+  /** Whether the scan that set lastScanAt was stopped before it finished. */
+  lastScanCancelled: boolean;
 }
 
 type FavoriteHostSnapshots = Record<string, Host>;
@@ -43,7 +47,6 @@ const FAVORITE_HOSTS_STORAGE_KEY = 'lantenna.favoriteHosts';
 const HIDDEN_IPS_STORAGE_KEY = 'lantenna.hiddenIps';
 const CUSTOM_NAMES_STORAGE_KEY = 'lantenna.customNames';
 const SELECTED_INTERFACE_STORAGE_KEY = 'lantenna.selectedInterface';
-const MAX_SCAN_HOSTS = 4096;
 
 interface ScanApproachSettings {
   portProfile: PortProfile;
@@ -89,98 +92,46 @@ function settingsToApproach(portProfile: PortProfile, discoveryMode: DiscoveryMo
   return 'balanced';
 }
 
-function canUseStorage(): boolean {
-  return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+// Storage goes through storage.ts, which never throws: a missing or
+// full localStorage reads as empty and drops writes with a warning,
+// instead of breaking the store's update() (spec 3.5).
+
+function isArray(value: unknown): value is unknown[] {
+  return Array.isArray(value);
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function loadStringList(key: string): string[] {
+  const list = readJson(key, isArray) ?? [];
+  return list.filter((item): item is string => typeof item === 'string');
 }
 
 function loadFavoriteIps(): string[] {
-  if (!canUseStorage()) {
-    return [];
-  }
-
-  try {
-    const raw = window.localStorage.getItem(FAVORITE_IPS_STORAGE_KEY);
-    if (!raw) {
-      return [];
-    }
-
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    return parsed.filter((item): item is string => typeof item === 'string');
-  } catch {
-    return [];
-  }
+  return loadStringList(FAVORITE_IPS_STORAGE_KEY);
 }
 
 function loadHiddenIps(): string[] {
-  if (!canUseStorage()) {
-    return [];
-  }
-
-  try {
-    const raw = window.localStorage.getItem(HIDDEN_IPS_STORAGE_KEY);
-    if (!raw) {
-      return [];
-    }
-
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    return parsed.filter((item): item is string => typeof item === 'string');
-  } catch {
-    return [];
-  }
+  return loadStringList(HIDDEN_IPS_STORAGE_KEY);
 }
 
 function saveFavoriteIps(favoriteIps: string[]) {
-  if (!canUseStorage()) {
-    return;
-  }
-
-  window.localStorage.setItem(FAVORITE_IPS_STORAGE_KEY, JSON.stringify(favoriteIps));
+  writeJson(FAVORITE_IPS_STORAGE_KEY, favoriteIps);
 }
 
 function saveHiddenIps(hiddenIps: string[]) {
-  if (!canUseStorage()) {
-    return;
-  }
-
-  window.localStorage.setItem(HIDDEN_IPS_STORAGE_KEY, JSON.stringify(hiddenIps));
+  writeJson(HIDDEN_IPS_STORAGE_KEY, hiddenIps);
 }
 
+/** Snapshots are not validated beyond being an object (as before). */
 function loadFavoriteHostSnapshots(): FavoriteHostSnapshots {
-  if (!canUseStorage()) {
-    return {};
-  }
-
-  try {
-    const raw = window.localStorage.getItem(FAVORITE_HOSTS_STORAGE_KEY);
-    if (!raw) {
-      return {};
-    }
-
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') {
-      return {};
-    }
-
-    return parsed as FavoriteHostSnapshots;
-  } catch {
-    return {};
-  }
+  return (readJson(FAVORITE_HOSTS_STORAGE_KEY, isObject) ?? {}) as FavoriteHostSnapshots;
 }
 
 function saveFavoriteHostSnapshots(snapshots: FavoriteHostSnapshots) {
-  if (!canUseStorage()) {
-    return;
-  }
-
-  window.localStorage.setItem(FAVORITE_HOSTS_STORAGE_KEY, JSON.stringify(snapshots));
+  writeJson(FAVORITE_HOSTS_STORAGE_KEY, snapshots);
 }
 
 function normalizeIpList(ips: string[]): string[] {
@@ -189,62 +140,31 @@ function normalizeIpList(ips: string[]): string[] {
 }
 
 function loadCustomNames(): Record<string, string> {
-  if (!canUseStorage()) {
-    return {};
-  }
+  const stored = readJson(CUSTOM_NAMES_STORAGE_KEY, isObject) ?? {};
+  const entries = Object.entries(stored).filter(
+    (entry): entry is [string, string] => typeof entry[0] === 'string' && typeof entry[1] === 'string'
+  );
 
-  try {
-    const raw = window.localStorage.getItem(CUSTOM_NAMES_STORAGE_KEY);
-    if (!raw) {
-      return {};
-    }
-
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') {
-      return {};
-    }
-
-    const entries = Object.entries(parsed).filter(
-      (entry): entry is [string, string] => typeof entry[0] === 'string' && typeof entry[1] === 'string'
-    );
-
-    return Object.fromEntries(entries);
-  } catch {
-    return {};
-  }
+  return Object.fromEntries(entries);
 }
 
 function saveCustomNames(customNames: Record<string, string>) {
-  if (!canUseStorage()) {
-    return;
-  }
-
-  window.localStorage.setItem(CUSTOM_NAMES_STORAGE_KEY, JSON.stringify(customNames));
+  writeJson(CUSTOM_NAMES_STORAGE_KEY, customNames);
 }
 
 function loadSelectedInterfaceKey(): string | null {
-  if (!canUseStorage()) {
-    return null;
-  }
-
-  const raw = window.localStorage.getItem(SELECTED_INTERFACE_STORAGE_KEY);
+  const raw = readString(SELECTED_INTERFACE_STORAGE_KEY);
   return raw && raw.length > 0 ? raw : null;
 }
 
+/** null (or empty) removes the key. */
 function saveSelectedInterfaceKey(selectedInterface: string | null) {
-  if (!canUseStorage()) {
-    return;
-  }
-
-  if (!selectedInterface) {
-    window.localStorage.removeItem(SELECTED_INTERFACE_STORAGE_KEY);
-    return;
-  }
-
-  window.localStorage.setItem(SELECTED_INTERFACE_STORAGE_KEY, selectedInterface);
+  writeString(SELECTED_INTERFACE_STORAGE_KEY, selectedInterface || null);
 }
 
-function interfaceKey(item: NetworkInterface): string {
+/** The `name|ip` key that identifies an interface in the store, the
+ * Interface pop-up and the Scan menu (spec 3.1 1.6). */
+export function interfaceKey(item: NetworkInterface): string {
   return `${item.name}|${item.ip}`;
 }
 
@@ -256,7 +176,12 @@ function splitInterfaceKey(value: string): { name: string; ip: string } {
   };
 }
 
-function findInterfaceByKey(interfaces: NetworkInterface[], selectedInterface: string | null): NetworkInterface | null {
+/** The interface a stored key names: the exact `name|ip`, else the only
+ * interface with that name (also for legacy keys without `|`), else null. */
+export function findInterfaceByKey(
+  interfaces: readonly NetworkInterface[],
+  selectedInterface: string | null
+): NetworkInterface | null {
   if (!selectedInterface) {
     return null;
   }
@@ -426,11 +351,14 @@ const initialState: ScanStoreState = {
   scanning: false,
   stopping: false,
   pendingIps: [],
-  loading: false,
+  // True until init() settles, so the first paint says "Reading the last
+  // scan…" (spec 2.9) rather than "no interfaces" (5.2 row 12).
+  loading: true,
   error: null,
   query: '',
   selectedHostIp: null,
-  lastScanAt: null
+  lastScanAt: null,
+  lastScanCancelled: false
 };
 
 function ipToNumber(ip: string): number {
@@ -483,7 +411,7 @@ function upsertHost(hosts: Host[], host: Host): Host[] {
   return [...hosts, host];
 }
 
-interface ScanProgressState {
+export interface ScanProgressState {
   progress: ScanProgress | null;
   hostScanProgress: ScanProgress | null;
 }
@@ -612,6 +540,7 @@ function createScanStore() {
             scanning: false,
             stopping: false,
             lastScanAt: event.payload.completed_at,
+            lastScanCancelled: wasCancelled,
             error: null
           };
         });
@@ -637,12 +566,11 @@ function createScanStore() {
         activeComparisonEnabled = false;
         activeBaselineIps = new Set();
 
-        notifications.add(
-          wasCancelled
-            ? `Scan cancelled: ${event.payload.hosts.length} hosts discovered before stop.`
-            : `Scan complete: ${event.payload.hosts.length} hosts found.`,
-          wasCancelled ? 'info' : 'success'
-        );
+        scanEvents.emit({
+          type: 'scan-complete',
+          hostCount: event.payload.hosts.length,
+          cancelled: wasCancelled
+        });
       })
     );
 
@@ -662,7 +590,7 @@ function createScanStore() {
           ...value,
           progress: value.progress ? { ...value.progress, running: false, current_ip: null } : null
         }));
-        notifications.add(event.payload.message, 'error');
+        scanEvents.emit({ type: 'scan-error', message: event.payload.message });
       })
     );
 
@@ -672,11 +600,11 @@ function createScanStore() {
   return {
     subscribe,
     init: async () => {
-      await attachListeners();
-
       update((state) => ({ ...state, loading: true, error: null }));
 
       try {
+        await attachListeners();
+
         const [interfaces, previous] = await Promise.all([
           TauriService.getNetworkInterfaces(),
           TauriService.getScanResults()
@@ -706,6 +634,7 @@ function createScanStore() {
             staleFavoriteIps,
             newHostIps: [],
             lastScanAt: previous?.completed_at || state.lastScanAt,
+            lastScanCancelled: previous?.completed_at ? previous.cancelled : state.lastScanCancelled,
             loading: false,
             error: null
           };
@@ -713,7 +642,7 @@ function createScanStore() {
       } catch (error) {
         const message = errorMessage(error, 'Failed to initialize scanner');
         update((state) => ({ ...state, loading: false, error: message }));
-        notifications.add(message, 'error');
+        scanEvents.emit({ type: 'init-failed', message });
       }
     },
     destroy: () => {
@@ -851,7 +780,7 @@ function createScanStore() {
       const selectedInterface = findInterfaceByKey(currentState.interfaces, currentState.selectedInterface);
 
       if (!selectedInterface) {
-        notifications.add('Choose a network interface first.', 'error');
+        scanEvents.emit({ type: 'no-interface' });
         return;
       }
 
@@ -859,13 +788,6 @@ function createScanStore() {
       const previousProgress = currentProgress.progress;
       const previousHostScanProgress = currentProgress.hostScanProgress;
       const maxHosts = selectedInterface.host_count > 0 ? Math.min(selectedInterface.host_count, MAX_SCAN_HOSTS) : null;
-
-      if (selectedInterface.host_count > MAX_SCAN_HOSTS) {
-        notifications.add(
-          `Large subnet detected (${selectedInterface.host_count} hosts). Scanning first ${MAX_SCAN_HOSTS} hosts.`,
-          'info'
-        );
-      }
 
       activeComparisonEnabled = scanTargetMatches(latestScanTarget, selectedInterface.name, selectedInterface.subnet);
       activeBaselineIps = new Set(activeComparisonEnabled ? latestScanHostIps : []);
@@ -919,7 +841,7 @@ function createScanStore() {
           newHostIps: previousNewHostIps
         }));
         scanProgress.set({ progress: previousProgress, hostScanProgress: previousHostScanProgress });
-        notifications.add(message, 'error');
+        scanEvents.emit({ type: 'start-failed', message });
       }
     },
     cancelScan: async () => {
@@ -936,12 +858,12 @@ function createScanStore() {
         await TauriService.cancelScan();
       } catch (error) {
         update((state) => ({ ...state, stopping: false }));
-        notifications.add(errorMessage(error, 'Failed to cancel scan'), 'error');
+        scanEvents.emit({ type: 'cancel-failed', message: errorMessage(error, 'Failed to cancel scan') });
       }
     },
     refreshHostPorts: async (ip: string, profile: PortProfile = 'deep') => {
       if (currentProgress.hostScanProgress?.running) {
-        notifications.add('A host deep scan is already in progress.', 'info');
+        scanEvents.emit({ type: 'deep-scan-busy', ip });
         return;
       }
 
@@ -988,10 +910,14 @@ function createScanStore() {
           };
         });
         finishHostScan(host.open_ports.length);
-        notifications.add(`Deep scan complete for ${ip}.`, 'success');
+        scanEvents.emit({ type: 'deep-scan-done', ip, openPorts: host.open_ports.length });
       } catch (error) {
         finishHostScan(null);
-        notifications.add(errorMessage(error, 'Failed to scan host ports'), 'error');
+        scanEvents.emit({
+          type: 'deep-scan-failed',
+          ip,
+          message: errorMessage(error, 'Failed to scan host ports')
+        });
       }
     }
   };

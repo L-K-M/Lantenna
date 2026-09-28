@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- A Mac OS 8.5 look, drawn with Osmium UI: a Platinum window with close,
+  zoom, collapse and grow boxes; labeled controls on the gray; a Finder
+  window header with chasing arrows and a progress bar; a Finder-style list
+  with a Status column, a star column and resizable, remembered columns; a
+  Host Information pane with General, Ports and Fingerprint tabs; and the
+  icon view restyled to match.
+- Menus for every command (the native menu bar on macOS, a Mac OS 8 menu
+  bar inside the window on Linux), contextual menus in both views and
+  keyboard equivalents such as Command-R to scan and Command-period to stop.
+- No more toasts: scan state lives in the window header, per-host results in
+  the pane's status line, and failures in alerts that say what to do next.
+- Balloon Help (Help > Show Balloons) replaces the hover tooltips.
+- Favorites, hidden hosts and custom names carry over; the host's name is
+  now edited in the General tab, and the Favorites menu jumps to a favorite.
+- macOS follows the system accent color; Linux uses Mac OS 8.5's default
+  Lavender.
 - Linux builds: Ubuntu/Linux `.deb` and `.AppImage` bundles next to the macOS
   `.dmg`. On Linux the neighbour table is read with `ip neigh` (falling back to
   `arp`), and the title bar tracks GTK's own active state while dragging.

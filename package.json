@@ -1,11 +1,11 @@
 {
   "name": "lantenna",
   "version": "1.0.1",
-  "description": "System 7 LAN scanner for macOS and Linux",
+  "description": "Mac OS 8 LAN scanner for macOS and Linux",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build",
+    "build": "vite build && node scripts/check-built-html.mjs",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
@@ -14,8 +14,8 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@lkmc/system7-ui": "^0.2.1",
-    "@tauri-apps/api": "^2"
+    "@tauri-apps/api": "^2",
+    "osmium-ui": "github:L-K-M/osmium-ui#38da138e37efab8377b6b30ad0b4a47854de0748"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.6",
@@ -23,7 +23,7 @@
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tauri-apps/cli": "^2",
     "@testing-library/svelte": "^5.4.2",
-    "jsdom": "^26.1.0",
+    "happy-dom": "^20.14.5",
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",
     "typescript": "~5.6.2",
