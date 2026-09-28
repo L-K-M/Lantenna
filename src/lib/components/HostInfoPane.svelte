@@ -231,4 +231,18 @@
     left: 223px;
     bottom: 16px;
   }
+
+  /* The tabs' selectable values (3.3) select in the Highlight Color,
+     as Osmium's fields do (osmium.css .osm-edit::selection), and show
+     no selection in an inactive window. */
+  .lan-pane :global(:is(.lan-value, .lan-line)::selection) {
+    background: var(--osm-highlight);
+    background: color-mix(in srgb, var(--osm-highlight) 99.6%, transparent);
+    color: var(--osm-highlight-text);
+  }
+
+  :global(.osm-inactive) .lan-pane :global(:is(.lan-value, .lan-line)::selection) {
+    background: transparent;
+    color: inherit;
+  }
 </style>
