@@ -21,6 +21,13 @@
     color: #888;
   }
 
+  /* A pop-up dimmed while it keeps the keyboard (the popup action), as
+     osmium.css draws :disabled. */
+  :global(.osm-popup[aria-disabled='true']) {
+    border-image-source: var(--osm-sprite-popup-disabled);
+    color: #888;
+  }
+
   /* The check mark of a checked menu item or chosen pop-up item is
      osmium.css generated content, which would count toward the item's
      accessible name ("✓ as List") next to its aria-checked or

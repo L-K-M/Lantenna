@@ -230,6 +230,9 @@ it('lists the interfaces, or says there are none', async () => {
   const items = [...document.querySelectorAll('.osm-menu .osm-menu-item')].map((li) => li.textContent);
   expect(items).toEqual(['en0 (192.168.1.0/24)', 'en7 (10.0.0.0/16)']);
   await fireEvent.keyDown(document.querySelector('.osm-menu')!, { key: 'Escape' });
+  // Escape gave the pop-up the keyboard back; elsewhere it dims for real.
+  s.find.focus();
+  await settle();
 
   setStore({ interfaces: [], selectedInterface: null });
   await settle();
@@ -260,6 +263,36 @@ it('dims Interface and Depth (with their labels) while scanning; Show stays live
   expect(s.label('lan-show').classList.contains('osm-disabled')).toBe(false);
   expect(s.find.disabled).toBe(false);
   expect(describedText(s.iface)).toContain('Not available while a scan is running.');
+});
+
+it('keeps the keyboard on a pop-up that dims under it, opening no menu', async () => {
+  const s = mount();
+  s.depth.focus();
+
+  // Command-R while Depth has the keyboard: a disabled pop-up would
+  // lose it to the host list, where the next Space would star a host.
+  setStore({ scanning: true });
+  await settle();
+
+  expect(document.activeElement).toBe(s.depth);
+  expect(s.depth.disabled).toBe(false);
+  expect(s.depth.getAttribute('aria-disabled')).toBe('true');
+  expect(s.label('lan-depth').classList.contains('osm-disabled')).toBe(true);
+
+  for (const key of [' ', 'Enter', 'ArrowDown', 'ArrowUp']) await fireEvent.keyDown(s.depth, { key });
+  await fireEvent.pointerDown(s.depth, { button: 0 });
+  await fireEvent.click(s.depth, { detail: 0 });
+  expect(document.querySelector('.osm-menu')).toBeNull();
+
+  // Once the keyboard moves on, the pop-up is disabled as usual.
+  s.find.focus();
+  await settle();
+  expect(s.depth.disabled).toBe(true);
+  expect(s.depth.hasAttribute('aria-disabled')).toBe(false);
+
+  setStore({ scanning: false });
+  await settle();
+  expect(s.depth.disabled).toBe(false);
 });
 
 it('dims Show with its label when the command model does', () => {

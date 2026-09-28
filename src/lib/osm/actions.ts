@@ -38,10 +38,14 @@ function sameItems(a: PopupOptions['items'], b: PopupOptions['items']): boolean 
  * Updates call setItems only when the items really changed (a new array
  * with the same titles is no change), else setSelected when the
  * selection moved, so an open menu isn't rebuilt on every store tick.
+ * `disabled` follows dimmable's rule: a pop-up that dims while it has
+ * the keyboard keeps it, dimmed and opening nothing, until it leaves.
  */
 export function popup(node: HTMLButtonElement, p: PopupParams): ActionReturn<PopupParams> {
   let params = p;
-  node.disabled = Boolean(p.disabled);
+  // Before mountPopup, so these listeners run ahead of Osmium's.
+  const dim = keepKeyboardWhileDimmed(node, Boolean(p.disabled));
+  ignorePressesWhileDimmed(node);
   const handle = mountPopup(node, {
     items: p.items,
     selected: p.selected,
@@ -53,7 +57,7 @@ export function popup(node: HTMLButtonElement, p: PopupParams): ActionReturn<Pop
     update(next) {
       const previous = params;
       params = next;
-      node.disabled = Boolean(next.disabled);
+      dim.set(Boolean(next.disabled));
 
       if (!sameItems(previous.items, next.items)) {
         handle.setItems(next.items, next.selected);
@@ -64,8 +68,31 @@ export function popup(node: HTMLButtonElement, p: PopupParams): ActionReturn<Pop
     },
     destroy() {
       handle.destroy();
+      dim.destroy();
     }
   };
+}
+
+/** Keys that open an Osmium pop-up menu (mountPopup). */
+const POPUP_KEYS = new Set(['ArrowDown', 'ArrowUp', ' ', 'Enter']);
+
+/** A pop-up dimmed under the keyboard (aria-disabled, see dimmable)
+ * opens no menu: its presses stop here, ahead of Osmium's listeners. */
+function ignorePressesWhileDimmed(node: HTMLButtonElement): void {
+  const dimmed = () => node.getAttribute('aria-disabled') === 'true';
+  const stop = (e: Event) => {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  };
+  node.addEventListener('keydown', (e) => {
+    if (dimmed() && POPUP_KEYS.has(e.key)) stop(e);
+  });
+  node.addEventListener('pointerdown', (e) => {
+    if (dimmed()) stop(e);
+  });
+  node.addEventListener('click', (e) => {
+    if (dimmed()) stop(e);
+  });
 }
 
 /**
@@ -113,8 +140,28 @@ export function osmButton(node: HTMLButtonElement, action: () => void): ActionRe
  * aria-disabled instead (drawn dimmed by +layout.svelte, ignored by
  * osmButton), as the WAI-ARIA APG does for controls that become
  * unavailable; then it is disabled as usual, out of the Tab order.
+ * The popup action applies the same rule to Osmium's pop-ups.
  */
 export function dimmable(node: HTMLButtonElement, dimmed: boolean): ActionReturn<boolean> {
+  const dim = keepKeyboardWhileDimmed(node, dimmed);
+
+  return {
+    update(next) {
+      dim.set(next);
+    },
+    destroy() {
+      dim.destroy();
+    }
+  };
+}
+
+/** dimmable's rule for any button: `set(dimmed)` disables it, or, while
+ * it has the keyboard, marks it aria-disabled until the keyboard leaves.
+ * Pressing it then is its owner's to ignore. */
+function keepKeyboardWhileDimmed(
+  node: HTMLButtonElement,
+  dimmed: boolean
+): { set(dimmed: boolean): void; destroy(): void } {
   let current = dimmed;
 
   const apply = () => {
@@ -134,7 +181,7 @@ export function dimmable(node: HTMLButtonElement, dimmed: boolean): ActionReturn
   apply();
 
   return {
-    update(next) {
+    set(next) {
       current = next;
       apply();
     },
