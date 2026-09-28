@@ -293,6 +293,14 @@
     openHostMenu(rows[index].ip, underName(el));
   }
 
+  /** The tile below tile `at` in rows of `cols`: the next row's last
+   * tile when that row is short of `at`'s column, and `at` itself in the
+   * last row, as the list stays put at its end (3.2). */
+  function below(at: number, cols: number, last: number): number {
+    if (at + cols <= last) return at + cols;
+    return Math.floor(last / cols) > Math.floor(at / cols) ? last : at;
+  }
+
   const NAV_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown']);
 
   function onKeydown(e: KeyboardEvent): void {
@@ -314,8 +322,8 @@
       const next =
         e.key === 'ArrowRight' ? (at < 0 ? 0 : Math.min(last, at + 1))
         : e.key === 'ArrowLeft' ? (at < 0 ? last : Math.max(0, at - 1))
-        : e.key === 'ArrowDown' ? (at < 0 ? 0 : Math.min(last, at + cols))
-        : e.key === 'ArrowUp' ? (at < 0 ? last : Math.max(0, at - cols))
+        : e.key === 'ArrowDown' ? (at < 0 ? 0 : below(at, cols, last))
+        : e.key === 'ArrowUp' ? (at < 0 ? last : at < cols ? at : at - cols)
         : e.key === 'Home' ? 0
         : e.key === 'End' ? last
         : e.key === 'PageDown' ? Math.min(last, Math.max(0, at) + page)

@@ -276,6 +276,38 @@ describe('keyboard', () => {
     expect(tileOf(container, '10.0.0.3').tabIndex).toBe(0);
   });
 
+  it('moves up and down by rows, staying put where no row is above or below', async () => {
+    const { container } = render(HostIconView);
+    const grid = gridOf(container);
+    // Three tiles a row: 10.0.0.3, .50, .1 / .2, .10.
+    Object.defineProperty(grid, 'clientWidth', { value: 380, configurable: true });
+    const selected = () => get(scanStore).selectedHostIp;
+    const key = (k: string) => fireEvent.keyDown(document.activeElement!, { key: k });
+
+    await fireEvent.keyDown(grid, { key: 'ArrowRight' });
+    await key('ArrowRight');
+    expect(selected()).toBe('10.0.0.50');
+    await key('ArrowUp'); // the top row
+    expect(selected()).toBe('10.0.0.50');
+    await key('ArrowDown');
+    expect(selected()).toBe('10.0.0.10');
+    await key('ArrowDown'); // the last row
+    expect(selected()).toBe('10.0.0.10');
+    await key('ArrowLeft');
+    await key('ArrowDown');
+    expect(selected()).toBe('10.0.0.2');
+
+    // The next row is short of the column: its last tile.
+    await key('Home');
+    await key('ArrowRight');
+    await key('ArrowRight');
+    expect(selected()).toBe('10.0.0.1');
+    await key('ArrowDown');
+    expect(selected()).toBe('10.0.0.10');
+    await key('ArrowUp');
+    expect(selected()).toBe('10.0.0.50');
+  });
+
   it('starts from the end going backward without a selection', async () => {
     const { container } = render(HostIconView);
     await fireEvent.keyDown(gridOf(container), { key: 'ArrowUp' });
