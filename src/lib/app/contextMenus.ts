@@ -14,6 +14,8 @@
 // else, text fields included (3.3; fixes BUG-13). closeContextMenu() ends
 // an open menu before a native menu command runs (see nativeMenu.ts).
 // installControlClick() makes Control-click a menu request on Linux.
+// keyMenuWait() recognizes the contextmenu event that may follow the
+// menu key, whose menu a view has already opened.
 
 import { get } from 'svelte/store';
 import { showContextMenu, type OsmiumContextMenu } from 'osmium-ui';
@@ -57,6 +59,45 @@ export function installContextMenuGuard(): () => void {
   const guard = (e: MouseEvent) => e.preventDefault();
   window.addEventListener('contextmenu', guard);
   return () => window.removeEventListener('contextmenu', guard);
+}
+
+/** A contextmenu event this soon after the menu key or Shift-F10, with
+ * no press between, is that key's. */
+const KEY_MENU_MS = 500;
+
+/** keyMenuWait's answer to a view. */
+export interface KeyMenuWait {
+  /** The view opened the menu from the menu key or Shift-F10. */
+  keyPressed(): void;
+  /** A pointer press: the contextmenu event of a right-click or
+   * Control-click that follows is not the key's. */
+  pressed(): void;
+  /** For a contextmenu event: whether it is the key's own (Chromium
+   * sends one, WebKit none), to be dropped. True once per key. */
+  takeKeyEvent(): boolean;
+}
+
+/**
+ * The views open the menu from the menu key itself, as WebKit
+ * (WKWebView, WebKitGTK) sends no contextmenu event for it; this tells
+ * them which contextmenu event is the key's, so the menu opens once.
+ */
+export function keyMenuWait(): KeyMenuWait {
+  let keyAt = -Infinity;
+
+  return {
+    keyPressed() {
+      keyAt = performance.now();
+    },
+    pressed() {
+      keyAt = -Infinity;
+    },
+    takeKeyEvent() {
+      if (performance.now() - keyAt >= KEY_MENU_MS) return false;
+      keyAt = -Infinity;
+      return true;
+    }
+  };
 }
 
 /** A system contextmenu event this soon after one made from a

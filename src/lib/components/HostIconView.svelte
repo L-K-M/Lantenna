@@ -72,7 +72,7 @@
   import { attachScrollbar, centerText, installOsmium, type MenuPoint } from 'osmium-ui';
   import { openHost } from '$lib/app/actions';
   import { HOST_LIST_BALLOON } from '$lib/app/balloonTexts';
-  import { installControlClick, openHostMenu, openViewMenu } from '$lib/app/contextMenus';
+  import { installControlClick, keyMenuWait, openHostMenu, openViewMenu } from '$lib/app/contextMenus';
   import { hostModel, type HostModel, type HostRow } from '$lib/app/hostModel';
   import { ui } from '$lib/app/ui';
   import { activeView, type HostViewApi } from '$lib/app/views';
@@ -95,11 +95,6 @@
   /** Type-select starts over after this long without a key (Osmium's
    * list uses the same second). */
   const TYPE_RESET_MS = 1000;
-
-  /** A contextmenu event this soon after the menu key or Shift-F10,
-   * with no press between, is that key's (where the system sends one
-   * too): the menu is open. */
-  const KEY_MENU_MS = 500;
 
   let host: HTMLDivElement;
   let grid: HTMLDivElement;
@@ -159,14 +154,14 @@
   let captionFont = '';
   const layouts = new WeakMap<HostRow, { readonly ready: number; readonly layout: TileLayout }>();
 
-  function measurer(bold: boolean): ((s: string) => number) | null {
+  function measurer(weight: 'bold' | 'regular'): ((s: string) => number) | null {
     context ??= document.createElement('canvas').getContext('2d');
     if (!context) return null;
     captionFont ||=
       getComputedStyle(document.documentElement).getPropertyValue('--osm-font-caption').trim() ||
       '9px/12px "Osmium Geneva 9", Geneva, sans-serif';
     const ctx = context;
-    const font = `${bold ? 'bold ' : ''}${captionFont}`;
+    const font = `${weight === 'bold' ? 'bold ' : ''}${captionFont}`;
     return (s) => {
       ctx.font = font;
       return Math.round(ctx.measureText(s).width);
@@ -182,8 +177,8 @@
     if (cached?.ready === ready) return cached.layout;
 
     const ipText = row.isNew ? `${row.ip} New` : row.ip;
-    const measureName = measurer(row.isNew);
-    const measure = measurer(false);
+    const measureName = measurer(row.isNew ? 'bold' : 'regular');
+    const measure = measurer('regular');
     const layout: TileLayout =
       measureName && measure
         ? {
@@ -259,7 +254,7 @@
   let typedAt = -Infinity;
   const typing = () => typed !== '' && Date.now() - typedAt < TYPE_RESET_MS;
 
-  let keyMenuAt = -Infinity;
+  const keyMenu = keyMenuWait();
 
   function isInside(e: MouseEvent, el: Element): boolean {
     const r = el.getBoundingClientRect();
@@ -281,7 +276,7 @@
   /** The menu key or Shift-F10: the selected tile's menu under its
    * name, or the view's menu without a (shown) selection. */
   function keyboardMenu(): void {
-    keyMenuAt = performance.now();
+    keyMenu.keyPressed();
     const index = selectedIndex();
     const el = index < 0 ? undefined : tiles.get(rows[index].ip);
     if (!el) {
@@ -353,7 +348,7 @@
 
   function onPointerdown(e: PointerEvent): void {
     // A right-click or Control-click's contextmenu is not the key's.
-    keyMenuAt = -Infinity;
+    keyMenu.pressed();
 
     // Control-click and right-click belong to the contextual menu
     // (contextmenu, or on Linux installControlClick).
@@ -380,10 +375,7 @@
   function onContextmenu(e: MouseEvent): void {
     e.preventDefault();
     // Only the one event the key sends.
-    if (performance.now() - keyMenuAt < KEY_MENU_MS) {
-      keyMenuAt = -Infinity;
-      return;
-    }
+    if (keyMenu.takeKeyEvent()) return;
 
     const el = tileOf(e.target);
     const ip = el?.dataset.ip;

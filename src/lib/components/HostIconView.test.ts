@@ -45,6 +45,7 @@ vi.mock('$lib/app/actions', async (importOriginal) => ({
 }));
 vi.mock('$lib/app/contextMenus', async (importOriginal) => ({
   installControlClick: (await importOriginal<typeof import('$lib/app/contextMenus')>()).installControlClick,
+  keyMenuWait: (await importOriginal<typeof import('$lib/app/contextMenus')>()).keyMenuWait,
   openHostMenu: spies.openHostMenu,
   openViewMenu: spies.openViewMenu,
   installContextMenuGuard: () => () => {}

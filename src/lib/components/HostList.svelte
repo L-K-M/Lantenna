@@ -33,7 +33,7 @@
   import { openHost } from '$lib/app/actions';
   import { columnBalloon, HOST_LIST_BALLOON, SORT_ORDER_BALLOON } from '$lib/app/balloonTexts';
   import type { ColumnId } from '$lib/app/columns';
-  import { installControlClick, openHostMenu, openViewMenu } from '$lib/app/contextMenus';
+  import { installControlClick, keyMenuWait, openHostMenu, openViewMenu } from '$lib/app/contextMenus';
   import { hostModel, type HostModel, type HostRow } from '$lib/app/hostModel';
   import { LIST_ROW_H } from '$lib/app/layout';
   import { ui } from '$lib/app/ui';
@@ -72,11 +72,6 @@
 
   /** Relative Last Seen texts go stale by the minute (1.22). */
   const REFRESH_MS = 60_000;
-
-  /** A contextmenu event this soon after the menu key or Shift-F10,
-   * with no press between, is that key's (Chromium sends one too): the
-   * menu is already open. */
-  const KEY_MENU_MS = 500;
 
   // rowClass results, one array per combination, so 4,096 rows share four.
   const ROW_CLASSES: readonly (readonly string[])[] = [[], ['lan-new'], ['lan-dim'], ['lan-new', 'lan-dim']];
@@ -306,13 +301,13 @@
     // contextmenu event that follows the key (Chromium) is dropped before
     // Osmium's listener and the one above see it; a right-click or
     // Control-click starts with a press, which ends the wait for it.
-    let keyMenuAt = -Infinity;
+    const keyMenu = keyMenuWait();
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key !== 'ContextMenu' && !(e.key === 'F10' && e.shiftKey)) return;
 
       e.preventDefault();
-      keyMenuAt = performance.now();
+      keyMenu.keyPressed();
       flush();
       const ip = view.selected;
       if (ip !== null && view.rows.some((row) => row.ip === ip)) {
@@ -323,13 +318,9 @@
       openViewMenu(gridCorner());
     };
     const dropKeyMenuEvent = (e: MouseEvent) => {
-      if (performance.now() - keyMenuAt >= KEY_MENU_MS) return;
-      keyMenuAt = -Infinity;
-      e.preventDefault();
+      if (keyMenu.takeKeyEvent()) e.preventDefault();
     };
-    const endKeyMenuWait = () => {
-      keyMenuAt = -Infinity;
-    };
+    const endKeyMenuWait = () => keyMenu.pressed();
     grid.addEventListener('keydown', onKeyDown);
     host.addEventListener('contextmenu', dropKeyMenuEvent, true);
     host.addEventListener('pointerdown', endKeyMenuWait, true);

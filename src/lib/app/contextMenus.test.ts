@@ -15,7 +15,7 @@ vi.mock('./hostModel', async () => {
   return { hostModel: fake.model };
 });
 
-const { closeContextMenu, installContextMenuGuard, openHostMenu, openViewMenu } = await import('./contextMenus');
+const { closeContextMenu, installContextMenuGuard, keyMenuWait, openHostMenu, openViewMenu } = await import('./contextMenus');
 const { EMPTY_MODEL, host, row } = await import('./commands.fixture');
 const { scanStore } = await import('$lib/util/scanStore');
 const { ui } = await import('./ui');
@@ -156,4 +156,26 @@ it('keeps the browser’s menu away after every other handler', () => {
   field.dispatchEvent(after);
   expect(after.defaultPrevented).toBe(false);
   field.remove();
+});
+
+it('drops the one contextmenu event that follows the menu key, and no other', () => {
+  let now = 1000;
+  vi.spyOn(performance, 'now').mockImplementation(() => now);
+  const wait = keyMenuWait();
+  expect(wait.takeKeyEvent()).toBe(false);
+
+  wait.keyPressed();
+  now += 100;
+  expect(wait.takeKeyEvent()).toBe(true);
+  expect(wait.takeKeyEvent()).toBe(false);
+
+  // A press first: the right-click's event is not the key's.
+  wait.keyPressed();
+  wait.pressed();
+  expect(wait.takeKeyEvent()).toBe(false);
+
+  // Too late to be the key's (WebKit sends none).
+  wait.keyPressed();
+  now += 500;
+  expect(wait.takeKeyEvent()).toBe(false);
 });

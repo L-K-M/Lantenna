@@ -36,11 +36,14 @@ import { isMac } from './platform';
  * from the engine, or redo. */
 type PageKey = { readonly run: CommandRef } | 'ignore' | 'redo';
 
-/** Whether `e` is the platform's command key with `key` and no other
- * modifier but, with `shift`, Shift. */
-function commandKey(e: KeyboardEvent, key: string, shift = false): boolean {
+/** Whether Shift goes with the command key. */
+type ShiftState = 'plain' | 'shifted';
+
+/** Whether `e` is the platform's command key with `key`, Shift as
+ * `shift` says, and no other modifier. */
+function commandKey(e: KeyboardEvent, key: string, shift: ShiftState = 'plain'): boolean {
   const commandHeld = isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
-  return commandHeld && !e.altKey && e.shiftKey === shift && e.key.toLowerCase() === key;
+  return commandHeld && !e.altKey && e.shiftKey === (shift === 'shifted') && e.key.toLowerCase() === key;
 }
 
 /** What a keydown asks of the page, or null for any other key. */
@@ -53,7 +56,7 @@ function pageKey(e: KeyboardEvent): PageKey | null {
   if (e.repeat) return null;
 
   if (where === 'text') {
-    return !isMac && (commandKey(e, 'z', true) || commandKey(e, 'y')) ? 'redo' : null;
+    return !isMac && (commandKey(e, 'z', 'shifted') || commandKey(e, 'y')) ? 'redo' : null;
   }
   if (where !== 'list' && where !== 'icons') return null;
 
