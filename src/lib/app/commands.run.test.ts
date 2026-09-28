@@ -271,11 +271,13 @@ it('focuses Find and selects its text', () => {
   expect([field.selectionStart, field.selectionEnd]).toEqual([0, 7]);
 });
 
+/** A text field with the keyboard and all its text selected. */
 function focusedField(value = 'office printer') {
   const field = document.createElement('input');
   field.value = value;
   document.body.append(field);
   field.focus();
+  field.select();
   return field;
 }
 
@@ -306,7 +308,7 @@ it('copies text with the browser, and the selected host’s IP in the list', () 
   expect(exec).toHaveBeenCalledTimes(3);
 });
 
-it('reports a copy the browser refused', () => {
+it('reports a copy or cut the browser refused', () => {
   focusedField();
   vi.spyOn(document, 'execCommand').mockReturnValue(false);
   go('edit.copy');
@@ -314,6 +316,24 @@ it('reports a copy the browser refused', () => {
     'Lantenna couldn’t copy to the Clipboard.',
     'Press Control-C to copy the selection instead.'
   );
+  go('edit.cut');
+  expect(feedback.stopAlert).toHaveBeenLastCalledWith(
+    'Lantenna couldn’t cut to the Clipboard.',
+    'Press Control-X to cut the selection instead.'
+  );
+});
+
+it('does nothing for Cut or Copy with nothing selected, as the keys do', () => {
+  // WebKit's execCommand returns false then: no alert for that.
+  const field = focusedField();
+  const exec = vi.spyOn(document, 'execCommand').mockReturnValue(false);
+  for (const caret of [0, 3]) {
+    field.setSelectionRange(caret, caret);
+    go('edit.copy');
+    go('edit.cut');
+  }
+  expect(exec).not.toHaveBeenCalled();
+  expect(feedback.stopAlert).not.toHaveBeenCalled();
 });
 
 it('pastes what the Clipboard holds, or says to use the key', async () => {

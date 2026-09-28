@@ -511,13 +511,26 @@ function focusFind(): void {
   field.select();
 }
 
-/** Linux Edit menu clicks on text (keys go to the browser instead). */
+/** Whether the field with the keyboard, or else the document, has
+ * text selected. A field whose type has no selection counts. */
+function textSelected(): boolean {
+  const field = document.activeElement;
+  if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) {
+    return field.selectionStart === null || field.selectionStart !== field.selectionEnd;
+  }
+  return hasTextSelection();
+}
+
+/** Linux Edit menu clicks on text (keys go to the browser instead).
+ * With nothing selected there is nothing to cut or copy, and the keys
+ * do nothing then; WebKit's execCommand reports it as a failure. */
 function editClipboard(command: 'cut' | 'copy'): void {
+  if (!textSelected()) return;
   if (document.execCommand(command)) return;
 
   const key = command === 'cut' ? 'X' : 'C';
   void stopAlert(
-    'Lantenna couldn’t copy to the Clipboard.',
+    `Lantenna couldn’t ${command} to the Clipboard.`,
     `Press ${cmdName}-${key} to ${command} the selection instead.`
   );
 }
