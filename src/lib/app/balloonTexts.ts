@@ -3,11 +3,13 @@
 // Created by the scaffold with the texts of table 4.5, so units B, C and
 // D attach balloons to their own controls (`use:balloon`) with one set of
 // words. Constants for the fixed texts; functions for the ones that
-// follow state. Pass the functions' calls inside a content function,
-// `use:balloon={() => scanBalloon(state())}`, so an open balloon follows
-// the control. A `dimmedFor` argument names why the control is dimmed;
-// null (enabled, or dimmed for another reason, such as no selection)
-// adds nothing.
+// follow state. Pass a function's result, `use:balloon={scanBalloon(state)}`
+// or a $derived of it, so Svelte hands each new text to the action,
+// which updates the description and an open balloon. Osmium would re-run
+// a content function only when the control's attributes change, so a
+// dimmed control's reason would go stale while it stays dimmed. A
+// `dimmedFor` argument names why the control is dimmed; null (enabled,
+// or dimmed for another reason, such as no selection) adds nothing.
 
 import type { ColumnId } from './columns';
 import type { InfoTab } from './ui';

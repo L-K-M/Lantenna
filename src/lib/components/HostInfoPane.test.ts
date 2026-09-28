@@ -249,6 +249,32 @@ describe('buttons', () => {
     }
   });
 
+  it('keep a dimmed button’s reason current in its description', () => {
+    const describedText = (b: HTMLElement) =>
+      (b.getAttribute('aria-describedby') ?? '')
+        .split(/\s+/)
+        .map((id) => document.getElementById(id)?.textContent ?? '')
+        .join(' ');
+    render(HostInfoPane);
+    expect(button('Wake').disabled).toBe(true);
+    expect(describedText(button('Wake'))).not.toContain('MAC address is unknown');
+
+    // Dimmed before and after: only the reason changes.
+    select(hostRow(host({ ip: '192.168.1.82', fingerprint: null })));
+    expect(button('Wake').disabled).toBe(true);
+    expect(describedText(button('Wake'))).toContain('MAC address is unknown');
+
+    deepScanning({});
+    expect(describedText(button('Deep Scan'))).toContain('Not available while another deep scan is running.');
+    (scanProgress as Writable<object>).set({ progress: null, hostScanProgress: null });
+    flushSync();
+    expect(button('Deep Scan').disabled).toBe(true);
+    expect(describedText(button('Deep Scan'))).not.toContain('deep scan is running');
+
+    select(hostRow(host({ open_ports: [] })));
+    expect(describedText(button('Open'))).toContain('offers no service');
+  });
+
   it('Open is the default button', () => {
     render(HostInfoPane);
     expect(button('Open').classList.contains('osm-default')).toBe(true);

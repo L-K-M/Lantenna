@@ -102,6 +102,13 @@
   const noMac = $derived(selected !== null && !selected.host.fingerprint?.mac_address);
   const busy = $derived($scanProgress.hostScanProgress?.running === true);
   const noTarget = $derived(selected !== null && selected.primaryTarget === null);
+  // The texts themselves, not functions returning them: Svelte passes a
+  // changed text to the action, which updates the description even
+  // while the button stays dimmed. Osmium re-runs a function only when
+  // the button's attributes change.
+  const wakeHelp = $derived(wakeBalloon(noMac ? 'noMac' : null));
+  const deepScanHelp = $derived(deepScanBalloon(busy ? 'busy' : null));
+  const openHelp = $derived(openBalloon(noTarget ? 'noTarget' : null));
 
   function tabIndex(tab: InfoTab): number {
     return TABS.findIndex((t) => t.id === tab);
@@ -171,14 +178,14 @@
     type="button"
     use:osmButton={() => run({ id: 'host.wake' })}
     use:dimmable={!wakeEnabled}
-    use:balloon={() => wakeBalloon(noMac ? 'noMac' : null)}>Wake</button
+    use:balloon={wakeHelp}>Wake</button
   >
   <button
     class="osm-button lan-deep-scan"
     type="button"
     use:osmButton={() => run({ id: 'host.deepScan' })}
     use:dimmable={!deepScanEnabled}
-    use:balloon={() => deepScanBalloon(busy ? 'busy' : null)}>Deep Scan</button
+    use:balloon={deepScanHelp}>Deep Scan</button
   >
   <button
     class="osm-button osm-default lan-open"
@@ -186,7 +193,7 @@
     disabled={!openEnabled}
     bind:this={openButton}
     use:osmButton={() => run({ id: 'host.open' })}
-    use:balloon={() => openBalloon(noTarget ? 'noTarget' : null)}>Open</button
+    use:balloon={openHelp}>Open</button
   >
 </div>
 
