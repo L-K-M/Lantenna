@@ -57,6 +57,18 @@ import { closeContextMenu } from './contextMenus';
 type NativeItem = MenuItem | CheckMenuItem | PredefinedMenuItem;
 type Handle = { close(): Promise<void> };
 
+/**
+ * A title as muda (macOS) must get it. muda reads a single '&' as a
+ * mnemonic marker and drops it when it makes a MenuItem or a Submenu
+ * and in every setText, and reads '&&' as one '&'; host names reach
+ * titles ("Add “AT&T Gateway” to Favorites"). It makes a CheckMenuItem
+ * with its text as given, so those take the title itself. The page
+ * keeps the plain title (Applied.title) to compare with describe().
+ */
+function nativeText(title: string): string {
+  return title.replaceAll('&', '&&');
+}
+
 /** The longest a change waits for its pass when no frame comes. */
 const FALLBACK_MS = 250;
 
@@ -183,7 +195,7 @@ export function installNativeMenu(): () => void {
     } else {
       applied.accelerator = accelerator(info.key);
       handle = await MenuItem.new({
-        text: info.title,
+        text: nativeText(info.title),
         enabled: info.enabled,
         ...(applied.accelerator === null ? {} : { accelerator: applied.accelerator }),
         action
@@ -216,7 +228,7 @@ export function installNativeMenu(): () => void {
     try {
       for (const spec of menuBarSpec(ctx)) {
         const items = await createItems(spec, ctx);
-        const submenu = await Submenu.new({ text: spec.title, items: items.map((i) => i.handle) }).catch(
+        const submenu = await Submenu.new({ text: nativeText(spec.title), items: items.map((i) => i.handle) }).catch(
           (error: unknown) => {
             void release(items.map((i) => i.handle));
             throw error;
@@ -264,7 +276,7 @@ export function installNativeMenu(): () => void {
       );
     };
 
-    set('title', info.title, () => handle.setText(info.title));
+    set('title', info.title, () => handle.setText(nativeText(info.title)));
     set('enabled', info.enabled, () => handle.setEnabled(info.enabled));
     if (handle instanceof CheckMenuItem) {
       const checked = info.checked ?? false;
@@ -312,7 +324,7 @@ export function installNativeMenu(): () => void {
 
       if (record.title !== spec.title) {
         const title = spec.title;
-        await record.submenu.setText(title).then(() => {
+        await record.submenu.setText(nativeText(title)).then(() => {
           record.title = title;
         }, warn('update the menu bar'));
       }

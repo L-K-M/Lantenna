@@ -21,6 +21,9 @@ const tauri = vi.hoisted(() => {
     made: []
   };
   let rid = 1;
+  /** What muda shows for a title passed to MenuItem.new, Submenu.new
+   * and setText: a single '&' is a mnemonic marker, '&&' is '&'. */
+  const shown = (text: string) => text.replaceAll('&&', '\0').replaceAll('&', '').replaceAll('\0', '&');
 
   class Base {
     readonly rid = rid++;
@@ -44,14 +47,14 @@ const tauri = vi.hoisted(() => {
       return item;
     }
     init(o: { text: string; enabled?: boolean; accelerator?: string; action?: () => void }) {
-      this.text = o.text;
+      this.text = shown(o.text);
       this.enabled = o.enabled ?? true;
       this.accelerator = o.accelerator ?? null;
       this.action = o.action;
     }
     async setText(text: string) {
-      log.push(`text ${this.text} -> ${text}`);
-      this.text = text;
+      log.push(`text ${this.text} -> ${shown(text)}`);
+      this.text = shown(text);
     }
     async setEnabled(enabled: boolean) {
       log.push(`enabled ${this.text} -> ${enabled}`);
@@ -68,6 +71,8 @@ const tauri = vi.hoisted(() => {
     static override async new(o: { text: string; enabled?: boolean; checked?: boolean; action?: () => void }) {
       const item = new this();
       item.init(o);
+      // muda makes a check item with its text as given.
+      item.text = o.text;
       item.checked = o.checked ?? false;
       return item;
     }
@@ -94,7 +99,7 @@ const tauri = vi.hoisted(() => {
       const submenus = state.made.filter((m) => m instanceof Submenu).length;
       if (state.failSubmenuAfter !== null && submenus >= state.failSubmenuAfter) throw new Error('menu new: out of memory');
       const s = new Submenu();
-      s.text = o.text;
+      s.text = shown(o.text);
       s.items = [...o.items];
       return s;
     }
@@ -110,7 +115,7 @@ const tauri = vi.hoisted(() => {
       this.items.push(...list);
     }
     async setText(text: string) {
-      this.text = text;
+      this.text = shown(text);
     }
     async setAsHelpMenuForNSApp() {
       state.helpMenu = this;
@@ -367,6 +372,32 @@ it('rebuilds a submenu when its structure changes, and only that one', async () 
   );
   await settle();
   expect(tauri.log).toEqual(['text printer.local (192.168.1.31) -> Office Printer (192.168.1.31)']);
+});
+
+it('shows an ampersand in a host’s name, which muda would read as a mnemonic', async () => {
+  const gateway = host('192.168.1.1', { name: 'AT&T Gateway' });
+  const store = { favoriteIps: ['192.168.1.1'], hosts: [gateway] };
+  ctxStore.set(selecting(row(gateway, { favorite: true }), { platform: 'mac', store }));
+  await install();
+  expect(dump(submenu('Favorites'))).toEqual([
+    'Remove “AT&T Gateway” from Favorites',
+    '-',
+    'AT&T Gateway (192.168.1.1)'
+  ]);
+
+  // Renamed: setText.
+  const renamed = { ...store, customNames: { '192.168.1.1': 'Tom & Jerry && Co' } };
+  ctxStore.set(selecting(row(gateway, { favorite: true, customName: 'Tom & Jerry && Co' }), { platform: 'mac', store: renamed }));
+  await settle();
+  expect(dump(submenu('Favorites'))).toEqual([
+    'Remove “Tom & Jerry && Co” from Favorites',
+    '-',
+    'Tom & Jerry && Co (192.168.1.1)'
+  ]);
+
+  // The item still runs its command: the page compares plain titles.
+  item('Favorites', 'Tom & Jerry && Co (192.168.1.1)').action!();
+  expect(commands.run).toHaveBeenCalledWith({ id: 'fav.reveal', arg: '192.168.1.1' });
 });
 
 it('runs the command of a chosen item', async () => {
