@@ -73,8 +73,9 @@
   /** Relative Last Seen texts go stale by the minute (1.22). */
   const REFRESH_MS = 60_000;
 
-  /** A contextmenu event this soon after the menu key or Shift-F10 is
-   * that key's (Chromium sends one too): the menu is already open. */
+  /** A contextmenu event this soon after the menu key or Shift-F10,
+   * with no press between, is that key's (Chromium sends one too): the
+   * menu is already open. */
   const KEY_MENU_MS = 500;
 
   // rowClass results, one array per combination, so 4,096 rows share four.
@@ -301,9 +302,10 @@
     // The menu key and Shift-F10 (3.2). Osmium's list answers only the
     // contextmenu event browsers send for them, and WebKit (WKWebView,
     // WebKitGTK) sends none, so the list opens the menu from the key:
-    // the selected row's under its name, else the view's. A contextmenu
-    // event that follows the key (Chromium) is dropped before Osmium's
-    // listener and the one above see it.
+    // the selected row's under its name, else the view's. The one
+    // contextmenu event that follows the key (Chromium) is dropped before
+    // Osmium's listener and the one above see it; a right-click or
+    // Control-click starts with a press, which ends the wait for it.
     let keyMenuAt = -Infinity;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -321,10 +323,16 @@
       openViewMenu(gridCorner());
     };
     const dropKeyMenuEvent = (e: MouseEvent) => {
-      if (performance.now() - keyMenuAt < KEY_MENU_MS) e.preventDefault();
+      if (performance.now() - keyMenuAt >= KEY_MENU_MS) return;
+      keyMenuAt = -Infinity;
+      e.preventDefault();
+    };
+    const endKeyMenuWait = () => {
+      keyMenuAt = -Infinity;
     };
     grid.addEventListener('keydown', onKeyDown);
     host.addEventListener('contextmenu', dropKeyMenuEvent, true);
+    host.addEventListener('pointerdown', endKeyMenuWait, true);
 
     function gridCorner(): MenuPoint {
       const r = scroller.getBoundingClientRect();
@@ -407,6 +415,7 @@
       host.removeEventListener('contextmenu', onContextMenu);
       stopControlClick();
       host.removeEventListener('contextmenu', dropKeyMenuEvent, true);
+      host.removeEventListener('pointerdown', endKeyMenuWait, true);
       grid.removeEventListener('keydown', onKeyDown);
       for (const b of balloons) b.detach();
       view.destroy();

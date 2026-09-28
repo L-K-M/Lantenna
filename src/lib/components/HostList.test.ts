@@ -385,6 +385,26 @@ describe('contextual menus', () => {
     expect(spies.openViewMenu).toHaveBeenCalledTimes(1);
   });
 
+  it('opens a right-click’s menu that follows the key’s menu, after the key’s own event', async () => {
+    scanStore.setSelectedHost('10.0.0.2');
+    const { container } = render(HostList);
+    const { grid } = parts(container);
+    await nextFrame();
+    const label = rowOf(container, '10.0.0.1').querySelector('.osm-lv-label')!;
+
+    // WebKit sends no contextmenu for the key: the right-click is next.
+    grid.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true, cancelable: true }));
+    await fireEvent.pointerDown(label, { button: 2 });
+    await fireEvent.contextMenu(label, { button: 2, clientX: 70, clientY: 45 });
+    expect(spies.openHostMenu.mock.calls.map(([ip]) => ip)).toEqual(['10.0.0.2', '10.0.0.1']);
+
+    // Chromium's event for the key is dropped, and only that one.
+    grid.dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true, cancelable: true }));
+    await fireEvent.contextMenu(grid);
+    await fireEvent.contextMenu(label, { button: 2, clientX: 70, clientY: 45 });
+    expect(spies.openHostMenu.mock.calls.map(([ip]) => ip)).toEqual(['10.0.0.2', '10.0.0.1', '10.0.0.1', '10.0.0.1']);
+  });
+
   it('opens the menus on a Control-click, which Linux sends no contextmenu for', async () => {
     const { container } = render(HostList);
     const { grid, scroller } = parts(container);

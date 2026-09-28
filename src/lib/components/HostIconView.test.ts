@@ -386,6 +386,26 @@ describe('contextual menus', () => {
     expect(spies.openHostMenu).toHaveBeenCalledTimes(1);
   });
 
+  it('opens a right-click’s menu that follows the key’s menu, after the key’s own event', async () => {
+    scanStore.setSelectedHost('10.0.0.2');
+    const { container } = render(HostIconView);
+    const printer = tileOf(container, '10.0.0.2');
+    const nas = tileOf(container, '10.0.0.3');
+    nas.getBoundingClientRect = () => new DOMRect(0, 0, 112, 72);
+
+    // WebKit sends no contextmenu for the key: the right-click is next.
+    await fireEvent.keyDown(printer, { key: 'F10', shiftKey: true });
+    await fireEvent.pointerDown(nas, { button: 2 });
+    await fireEvent.contextMenu(nas, { button: 2, clientX: 20, clientY: 30 });
+    expect(spies.openHostMenu.mock.calls.map(([ip]) => ip)).toEqual(['10.0.0.2', '10.0.0.3']);
+
+    // Chromium's event for the key is dropped, and only that one.
+    await fireEvent.keyDown(document.activeElement!, { key: 'ContextMenu' });
+    await fireEvent.contextMenu(nas);
+    await fireEvent.contextMenu(nas, { clientX: 20, clientY: 30 });
+    expect(spies.openHostMenu.mock.calls.map(([ip]) => ip)).toEqual(['10.0.0.2', '10.0.0.3', '10.0.0.3', '10.0.0.3']);
+  });
+
   it('shows the selected tile before opening its menu from the keyboard', async () => {
     scanStore.setSelectedHost('10.0.0.10');
     const { container } = render(HostIconView);

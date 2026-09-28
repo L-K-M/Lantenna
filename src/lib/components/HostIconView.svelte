@@ -96,8 +96,9 @@
    * list uses the same second). */
   const TYPE_RESET_MS = 1000;
 
-  /** A contextmenu event this soon after the menu key or Shift-F10 is
-   * that key's (where the system sends one too): the menu is open. */
+  /** A contextmenu event this soon after the menu key or Shift-F10,
+   * with no press between, is that key's (where the system sends one
+   * too): the menu is open. */
   const KEY_MENU_MS = 500;
 
   let host: HTMLDivElement;
@@ -343,6 +344,9 @@
   }
 
   function onPointerdown(e: PointerEvent): void {
+    // A right-click or Control-click's contextmenu is not the key's.
+    keyMenuAt = -Infinity;
+
     // Control-click and right-click belong to the contextual menu
     // (contextmenu, or on Linux installControlClick).
     if (e.button !== 0 || e.ctrlKey) return;
@@ -367,7 +371,11 @@
    * contextmenu event (aimed at the focused element, anywhere). */
   function onContextmenu(e: MouseEvent): void {
     e.preventDefault();
-    if (performance.now() - keyMenuAt < KEY_MENU_MS) return;
+    // Only the one event the key sends.
+    if (performance.now() - keyMenuAt < KEY_MENU_MS) {
+      keyMenuAt = -Infinity;
+      return;
+    }
 
     const el = tileOf(e.target);
     const ip = el?.dataset.ip;
