@@ -17,10 +17,11 @@
 // longer matches the state (Stop Scan chosen just as the scan ended)
 // does nothing, rather than what its new title says. Every call is
 // async IPC; a failure is logged and retried on the next pass, never
-// shown. A native command first closes an open Osmium contextual menu,
-// as choosing from the menu bar ends any menu tracking: Osmium's menu
-// lets Command keys through to this menu, and would otherwise keep the
-// keyboard from the field or view the command moves to.
+// shown. A native command first closes an open Osmium contextual or
+// pop-up menu, as choosing from the menu bar ends any menu tracking:
+// Osmium's menus let Command keys through to this menu, and would
+// otherwise stay drawn over the field or view the command moves the
+// keyboard to, and spend the next click closing.
 //
 // Handles live in Tauri's resource table until closed. The disposer
 // closes them all once no pass is running; the app keeps its own
@@ -53,6 +54,7 @@ import {
   type SpecEntry
 } from './commands';
 import { closeContextMenu } from './contextMenus';
+import { closePopupMenus } from '$lib/osm/actions';
 
 type NativeItem = MenuItem | CheckMenuItem | PredefinedMenuItem;
 type Handle = { close(): Promise<void> };
@@ -161,6 +163,7 @@ export function installNativeMenu(): () => void {
     if (disposed || record.ref === null) return;
 
     closeContextMenu();
+    closePopupMenus();
 
     // Act on what the item said when it was chosen, or not at all.
     if (describe(record.ref, get(commandContext)).title === record.applied.title) run(record.ref);

@@ -155,6 +155,7 @@ vi.mock('./commands', async (importOriginal) => {
 
 const commands = await import('./commands');
 const { openViewMenu } = await import('./contextMenus');
+const { mountPopup } = await import('osmium-ui');
 const { installNativeMenu } = await import('./nativeMenu');
 const { EN0, EN7, context, host, row, selecting } = await import('./commands.fixture');
 
@@ -518,6 +519,24 @@ it('closes an open contextual menu before running a command', async () => {
   item('Edit', 'Find').action!();
   expect(document.querySelector('.osm-contextmenu')).toBeNull();
   expect(commands.run).toHaveBeenCalledWith({ id: 'edit.find' });
+});
+
+it('closes an open pop-up menu before running a command', async () => {
+  await install();
+  const button = document.body.appendChild(document.createElement('button'));
+  button.className = 'osm-popup';
+  const depth = mountPopup(button, { items: ['Fast', 'Balanced'], selected: 1, label: 'Depth', onChange: vi.fn() });
+  try {
+    button.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+    expect(document.querySelector('.osm-menu[role=listbox]')).not.toBeNull();
+
+    item('Edit', 'Find').action!();
+    expect(document.querySelector('.osm-menu[role=listbox]')).toBeNull();
+    expect(commands.run).toHaveBeenCalledWith({ id: 'edit.find' });
+  } finally {
+    depth.destroy();
+    button.remove();
+  }
 });
 
 it('finishes a rebuild that failed part way on the next pass, releasing what it made', async () => {

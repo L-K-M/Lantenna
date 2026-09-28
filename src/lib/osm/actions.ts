@@ -73,6 +73,18 @@ export function popup(node: HTMLButtonElement, p: PopupParams): ActionReturn<Pop
   };
 }
 
+/**
+ * Close any open pop-up menu without choosing, as Escape does. Osmium's
+ * pop-up has no close() short of destroy(), so this sends the menu the
+ * Escape it listens for; the event doesn't bubble, so no page key
+ * handler sees it. Osmium follow-up: a public way to end menu tracking.
+ */
+export function closePopupMenus(): void {
+  for (const menu of document.querySelectorAll('.osm-menu[role="listbox"]')) {
+    menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+  }
+}
+
 /** Keys that open an Osmium pop-up menu (mountPopup). */
 const POPUP_KEYS = new Set(['ArrowDown', 'ArrowUp', ' ', 'Enter']);
 
