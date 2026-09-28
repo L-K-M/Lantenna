@@ -8,6 +8,12 @@ on:
 permissions:
   contents: write # create the GitHub Release and upload assets
 
+# One release run per ref; a re-run of the same tag must finish, not be
+# cancelled mid-publish.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -18,6 +24,7 @@ jobs:
   create-release:
     name: Create draft release
     runs-on: ubuntu-22.04
+    timeout-minutes: 10
     outputs:
       release_id: ${{ steps.create.outputs.result }}
     steps:
@@ -64,6 +71,8 @@ jobs:
             args: ''
             rust-targets: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.platform }}
+    # Tauri builds from scratch (deps compile included) take tens of minutes.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
 
@@ -145,6 +154,7 @@ jobs:
     name: Publish release
     needs: [create-release, build-desktop]
     runs-on: ubuntu-22.04
+    timeout-minutes: 10
     steps:
       - name: Mark release as published
         uses: actions/github-script@v9

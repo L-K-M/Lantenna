@@ -6,10 +6,14 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Cancel in-progress runs for the same ref (e.g. new pushes to a PR).
+permissions:
+  contents: read
+
+# Cancel superseded runs on PRs, never an in-progress main run: a permanently
+# "cancelled" main commit masks breakage and breaks CI bisection.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,6 +23,7 @@ jobs:
   frontend:
     name: Frontend (check & build)
     runs-on: ubuntu-22.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -51,6 +56,9 @@ jobs:
       matrix:
         platform: [macos-latest, ubuntu-22.04]
     runs-on: ${{ matrix.platform }}
+    # A cache-miss cold build with the Tauri system deps can take half an hour;
+    # a wedged one must not burn six.
+    timeout-minutes: 60
     # The crate lives in src-tauri/, not the repo root. Without this every cargo
     # step fails with "could not find `Cargo.toml`".
     defaults:

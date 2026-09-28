@@ -1,4 +1,63 @@
-# AGENTS.md
+# AGENTS.md — working on Lantenna
+
+Lantenna is a Tauri v2 app (a SvelteKit frontend in `src/` over a Rust backend
+in `src-tauri/`). It scans the local LAN and shows discovered hosts and open
+ports, drawn like a Mac OS 8.5 utility with
+[Osmium UI](https://github.com/L-K-M/osmium-ui). It ships for macOS and Linux;
+there is no Windows target.
+
+## Toolchain
+
+- **Node 20** (what CI pins) + npm; `npm ci` to install.
+- **Rust stable** (rustup) for the desktop app. On Debian/Ubuntu the Tauri v2
+  system packages are required; see the README's `apt install` line
+  (`libwebkit2gtk-4.1-dev`, `libxdo-dev`, `libssl-dev`,
+  `libayatana-appindicator3-dev`, `librsvg2-dev`, …). macOS needs nothing extra.
+
+## Commands
+
+| Task | Command |
+|---|---|
+| Dev server (browser, mock backend) | `npm run dev -- --mode mock`, open `http://localhost:1420/?scenario=scanning&platform=mac` |
+| Desktop dev | `npm run tauri dev` |
+| Type-check | `npm run check` (svelte-kit sync + svelte-check) |
+| Frontend tests | `npm test` (vitest under happy-dom) |
+| Frontend build | `npm run build` (vite + scripts/check-built-html.mjs) |
+| Rust checks (CI parity) | `cargo fmt --all --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`; all run from `src-tauri/` |
+| Verify + build the app | `scripts/build.sh [--clean] [--install] [--run]` |
+| Release | `scripts/release.sh X.Y.Z [--push]` → tag triggers release.yml (macOS .dmg ×2, Linux .deb + .AppImage) |
+
+`src-tauri/` is a single crate with no root `Cargo.toml`: run cargo commands
+from `src-tauri/` or pass `--manifest-path src-tauri/Cargo.toml`.
+
+## Gotchas
+
+- **`build/` must exist before any cargo command.** `tauri::generate_context!`
+  embeds the built frontend at compile time, so `npm run build` comes first;
+  `scripts/build.sh` orders it that way; CI does the same.
+- **osmium-ui is a git-pinned dependency** (`package.json` →
+  `github:L-K-M/osmium-ui#<sha>`). Bump it with
+  `npm install 'osmium-ui@github:L-K-M/osmium-ui#<ref>'` and commit both
+  `package.json` and `package-lock.json`.
+- **Bundle targets differ per OS.** `src-tauri/tauri.linux.conf.json` overrides
+  `targets: "all"` to `["deb", "appimage"]` (deliberately no .rpm) and declares
+  the `iputils-ping`/`iproute2` packages the scanner shells out to; the Tauri
+  CLI merges it automatically on Linux.
+- **The version lives in three files** (`package.json`,
+  `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`) plus the README marker.
+  `scripts/release.sh` (kind `tauri`) keeps them in step; the committed version
+  and the tag must match because tauri-action builds the committed version but
+  only *names* the release from the tag.
+- The bundled binary is `lantenna` (from the Cargo package name); the app
+  bundle is `Lantenna.app`, identifier `ch.lkmc.lantenna`.
+- `src-tauri/gen/` is gitignored; `src-tauri/icons/` is derived from
+  `media-sources/` and committed.
+
+## Docs
+
+`CICD.md` documents the workflows and the optional Apple/updater signing
+secrets; `FINGERPRINTING.md` documents the host-fingerprint data;
+`ANALYSIS.md` collects design notes.
 
 <!-- shared-rules:start -->
 
