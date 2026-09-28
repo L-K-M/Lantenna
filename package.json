@@ -15,7 +15,7 @@
   "license": "MIT",
   "dependencies": {
     "@tauri-apps/api": "^2",
-    "osmium-ui": "github:L-K-M/osmium-ui#6785a256e520f676625b690f10cb62f74f9e617a"
+    "osmium-ui": "github:L-K-M/osmium-ui#38da138e37efab8377b6b30ad0b4a47854de0748"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.6",
