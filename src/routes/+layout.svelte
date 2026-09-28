@@ -20,6 +20,18 @@
     border-image-source: var(--osm-sprite-button-disabled);
     color: #888;
   }
+
+  /* The check mark of a checked menu item or chosen pop-up item is
+     osmium.css generated content, which would count toward the item's
+     accessible name ("✓ as List") next to its aria-checked or
+     aria-selected; empty alternative text leaves it out. The plain
+     declaration is for WebKit without alternative text (before Safari
+     17.4). Osmium follow-up. */
+  :global(html .osm-menu-item[aria-selected='true']::before),
+  :global(html .osm-menu-item[aria-checked='true']::before) {
+    content: '\2713';
+    content: '\2713' / '';
+  }
 </style>
 
 <slot />
