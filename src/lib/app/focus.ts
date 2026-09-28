@@ -153,7 +153,9 @@ export function installKeyboardHome(frame: HTMLElement): () => void {
    * the page never sees end (the OS takes the mouse to move the window)
    * is over by the next key, which checks what that press left. */
   let pressing = false;
-  /** The Tab key is down. */
+  /** The Tab key is down. Its keyup never comes when Tab took the
+   * keyboard out of the page (a browser's toolbar gets it), so a press,
+   * another key or the window's focus changing ends it too. */
   let tabbing = false;
   /** Tab took the keyboard out of the page, and it hasn't come back. */
   let tabbedOut = false;
@@ -187,6 +189,7 @@ export function installKeyboardHome(frame: HTMLElement): () => void {
   };
   const onPress = () => {
     pressing = true;
+    tabbing = false;
     tabbedOut = false;
     pressSelected = false;
     selectionAtPress = selectionEnds();
@@ -203,9 +206,12 @@ export function installKeyboardHome(frame: HTMLElement): () => void {
   };
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Tab') tabbing = true;
-    else if (!MODIFIER_KEYS.has(e.key) && tabbedOut) {
-      tabbedOut = false;
-      queue();
+    else if (!MODIFIER_KEYS.has(e.key)) {
+      tabbing = false;
+      if (tabbedOut) {
+        tabbedOut = false;
+        queue();
+      }
     }
 
     if (!pressing) return;
@@ -215,6 +221,10 @@ export function installKeyboardHome(frame: HTMLElement): () => void {
   const onKeyUp = (e: KeyboardEvent) => {
     if (e.key === 'Tab') tabbing = false;
   };
+  // After the focusout that Tab sent out of the page.
+  const onWindowFocusChange = () => {
+    tabbing = false;
+  };
   document.addEventListener('focusout', onFocusOut);
   document.addEventListener('focusin', onFocusIn);
   document.addEventListener('pointerdown', onPress, true);
@@ -223,6 +233,8 @@ export function installKeyboardHome(frame: HTMLElement): () => void {
   document.addEventListener('keydown', onKey, true);
   document.addEventListener('keyup', onKeyUp, true);
   document.addEventListener('selectionchange', onSelectionChange);
+  window.addEventListener('blur', onWindowFocusChange);
+  window.addEventListener('focus', onWindowFocusChange);
 
   const observer = new MutationObserver(queue);
   observer.observe(frame, { attributes: true, attributeFilter: ['class'] });
@@ -252,6 +264,8 @@ export function installKeyboardHome(frame: HTMLElement): () => void {
     document.removeEventListener('keydown', onKey, true);
     document.removeEventListener('keyup', onKeyUp, true);
     document.removeEventListener('selectionchange', onSelectionChange);
+    window.removeEventListener('blur', onWindowFocusChange);
+    window.removeEventListener('focus', onWindowFocusChange);
     observer.disconnect();
     stopModal();
   };

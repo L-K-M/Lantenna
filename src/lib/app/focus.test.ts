@@ -281,6 +281,41 @@ describe('the keyboard\'s home', () => {
     h.dispose();
   });
 
+  it('ends a Tab whose keyup never came at the next press, key or window focus change', async () => {
+    const key = (type: string, k: string) => document.dispatchEvent(new KeyboardEvent(type, { key: k, bubbles: true }));
+    const press = (type: string) => document.dispatchEvent(new PointerEvent(type, { bubbles: true }));
+
+    // Tab takes the keyboard to the browser's toolbar: no keyup.
+    for (const end of ['press', 'key', 'blur', 'focus']) {
+      const h = home();
+      await settle();
+      h.byId('deep').focus();
+      key('keydown', 'Tab');
+      h.byId('deep').blur();
+      await settle();
+
+      // Back with a click in the list, a key, or the window's focus.
+      if (end === 'press') {
+        press('pointerdown');
+        h.grid.focus();
+        press('pointerup');
+      } else {
+        h.grid.focus();
+        if (end === 'key') key('keydown', 'ArrowDown');
+        else window.dispatchEvent(new FocusEvent(end));
+      }
+      await settle();
+
+      // A click on the gray then gives the keyboard back to the view.
+      press('pointerdown');
+      h.grid.blur();
+      press('pointerup');
+      await settle();
+      expect(document.activeElement, end).toBe(h.grid);
+      h.dispose();
+    }
+  });
+
   it('waits while the window is collapsed', async () => {
     const h = home();
     await settle();
