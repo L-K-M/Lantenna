@@ -210,7 +210,7 @@ it('chooses an interface and a depth only while idle', () => {
 
 it('changes the view, the pane, hidden hosts, Balloon Help', () => {
   go('view.mode', 'icons');
-  expect(ui).toBeDefined();
+  expect(get(ui).viewMode).toBe('icons');
   go('view.scope', 'favorites');
   go('view.infoPane');
   let state!: import('./ui').UiState;
