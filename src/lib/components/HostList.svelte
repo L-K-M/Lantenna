@@ -38,7 +38,7 @@
   import { LIST_ROW_H } from '$lib/app/layout';
   import { ui } from '$lib/app/ui';
   import { activeView, type HostViewApi } from '$lib/app/views';
-  import { AREA_TIP } from '$lib/osm/actions';
+  import { AREA_TIP, pressOnceOnReturn } from '$lib/osm/actions';
   import { STAR } from '$lib/osm/sprites';
   import { formatRelativeTime, normalizeSpaces } from '$lib/util/format';
   import { scanStore } from '$lib/util/scanStore';
@@ -381,7 +381,10 @@
       if (head) balloons.push(attachBalloon(head, { content: columnBalloon(c.id) }));
     }
     const sortButton = host.querySelector<HTMLElement>('.osm-lv-sortdir');
-    if (sortButton) balloons.push(attachBalloon(sortButton, { content: SORT_ORDER_BALLOON }));
+    if (sortButton) {
+      balloons.push(attachBalloon(sortButton, { content: SORT_ORDER_BALLOON }));
+      pressOnceOnReturn(sortButton);
+    }
 
     const api: HostViewApi = {
       element: grid,

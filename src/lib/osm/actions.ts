@@ -69,17 +69,31 @@ export function popup(node: HTMLButtonElement, p: PopupParams): ActionReturn<Pop
 }
 
 /**
+ * Return held on the focused `button` presses it once. Browsers click a
+ * focused button on every auto-repeated Return keydown (Space clicks on
+ * keyup, once); Return elsewhere ignores repeats (the views, Osmium's
+ * pop-ups, menus and bindDialogKeys). The listener goes with the element.
+ */
+export function pressOnceOnReturn(button: HTMLElement): void {
+  button.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.repeat) e.preventDefault();
+  });
+}
+
+/**
  * `<button class="osm-button" use:osmButton={action}>Title</button>`: press
  * tracking and title layout (pushButton). Change the title with Osmium's
  * setButtonTitle, not the template, so the layout follows. Osmium has no
  * teardown for push buttons; their listeners go with the element. A
- * button `dimmable` dimmed under the keyboard does nothing.
+ * button `dimmable` dimmed under the keyboard does nothing, and Return
+ * held on it presses it once.
  */
 export function osmButton(node: HTMLButtonElement, action: () => void): ActionReturn<() => void> {
   let current = action;
   pushButton(node, () => {
     if (node.getAttribute('aria-disabled') !== 'true') current();
   });
+  pressOnceOnReturn(node);
 
   return {
     update(next) {

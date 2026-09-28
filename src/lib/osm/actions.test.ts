@@ -77,6 +77,21 @@ it('runs the latest button action', () => {
   expect(second).toHaveBeenCalledOnce();
 });
 
+it('presses a button once for a held Return, as Return elsewhere', () => {
+  const button = document.createElement('button');
+  osmButton(button, vi.fn());
+  const enter = (repeat: boolean) => {
+    const e = new KeyboardEvent('keydown', { key: 'Enter', repeat, bubbles: true, cancelable: true });
+    button.dispatchEvent(e);
+    return e.defaultPrevented;
+  };
+
+  // The browser clicks on each keydown it isn't kept from.
+  expect(enter(false)).toBe(false);
+  expect(enter(true)).toBe(true);
+  expect(enter(true)).toBe(true);
+});
+
 describe('a dimmable button', () => {
   afterEach(() => {
     document.body.textContent = '';
