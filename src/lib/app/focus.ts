@@ -82,6 +82,26 @@ const HIDDEN_SELECTOR = '[hidden], .osm-shaded';
  * <body> as it is. */
 const MODIFIER_KEYS: ReadonlySet<string> = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock']);
 
+/** Where a text selection starts and ends, to tell two apart. */
+interface SelectionEnds {
+  readonly anchor: Node | null;
+  readonly anchorOffset: number;
+  readonly focus: Node | null;
+  readonly focusOffset: number;
+}
+
+/** The ends of the document's text selection, or null for none. */
+function selectionEnds(): SelectionEnds | null {
+  if (!hasTextSelection()) return null;
+  const s = window.getSelection()!;
+  return { anchor: s.anchorNode, anchorOffset: s.anchorOffset, focus: s.focusNode, focusOffset: s.focusOffset };
+}
+
+function sameEnds(a: SelectionEnds | null, b: SelectionEnds | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.anchor === b.anchor && a.anchorOffset === b.anchorOffset && a.focus === b.focus && a.focusOffset === b.focusOffset;
+}
+
 /** Whether the keyboard has no usable place: nowhere (<body>), or an
  * element that is gone, dimmed or hidden. */
 function keyboardStranded(): boolean {
@@ -106,7 +126,10 @@ function keyboardStranded(): boolean {
  * (the window collapsed), and not for a press that selects text in the
  * pane (3.3, for Copy): a press moves the keyboard when it ends, and
  * only if it left no selection, since moving the focus drops the
- * selection (Chromium while the drag starts, WebKit after it).
+ * selection (Chromium while the drag starts, WebKit after it). Only
+ * the latest press's selection counts: an older one survives presses
+ * on the gray and on buttons (Chromium), and WebKitGTK clears it only
+ * after the click, so the check runs again when the selection empties.
  *
  * Nor when Tab or Shift-Tab takes the keyboard out of the page past
  * the last or first control: that is the tab order wrapping (3.2), a
@@ -134,10 +157,15 @@ export function installKeyboardHome(frame: HTMLElement): () => void {
   let tabbing = false;
   /** Tab took the keyboard out of the page, and it hasn't come back. */
   let tabbedOut = false;
+  /** The latest press changed the text selection (made the one there
+   * is, if any), and the selection at its start. */
+  let pressSelected = false;
+  let selectionAtPress: SelectionEnds | null = null;
 
   const check = () => {
     queued = false;
-    if (pressing || tabbedOut || isModal() || !keyboardStranded() || hasTextSelection()) return;
+    if (pressing || tabbedOut || isModal() || !keyboardStranded()) return;
+    if (pressSelected && hasTextSelection()) return;
 
     const view = get(activeView);
     if (!view || view.element.closest(HIDDEN_SELECTOR)) return;
@@ -160,10 +188,18 @@ export function installKeyboardHome(frame: HTMLElement): () => void {
   const onPress = () => {
     pressing = true;
     tabbedOut = false;
+    pressSelected = false;
+    selectionAtPress = selectionEnds();
   };
   const onRelease = () => {
     pressing = false;
+    // selectionchange may come after the release.
+    if (!sameEnds(selectionEnds(), selectionAtPress)) pressSelected = true;
     queue();
+  };
+  const onSelectionChange = () => {
+    if (pressing) pressSelected = true;
+    else if (!hasTextSelection()) queue();
   };
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Tab') tabbing = true;
@@ -186,6 +222,7 @@ export function installKeyboardHome(frame: HTMLElement): () => void {
   document.addEventListener('pointercancel', onRelease, true);
   document.addEventListener('keydown', onKey, true);
   document.addEventListener('keyup', onKeyUp, true);
+  document.addEventListener('selectionchange', onSelectionChange);
 
   const observer = new MutationObserver(queue);
   observer.observe(frame, { attributes: true, attributeFilter: ['class'] });
@@ -214,6 +251,7 @@ export function installKeyboardHome(frame: HTMLElement): () => void {
     document.removeEventListener('pointercancel', onRelease, true);
     document.removeEventListener('keydown', onKey, true);
     document.removeEventListener('keyup', onKeyUp, true);
+    document.removeEventListener('selectionchange', onSelectionChange);
     observer.disconnect();
     stopModal();
   };

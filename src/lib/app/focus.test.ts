@@ -181,6 +181,46 @@ describe('the keyboard\'s home', () => {
     h.dispose();
   });
 
+  it('lets only the latest press’s selection keep the keyboard off the view', async () => {
+    const h = home();
+    await settle();
+    const press = (select?: () => void) => {
+      document.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      select?.();
+      document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+    };
+
+    h.grid.blur();
+    press(() => window.getSelection()!.selectAllChildren(h.byId('value')));
+    await settle();
+    expect(document.activeElement).toBe(document.body);
+
+    // A later press on the gray or a button leaves the selection as it
+    // was (Chromium): it no longer keeps the keyboard away.
+    press();
+    await settle();
+    expect(document.activeElement).toBe(h.grid);
+    h.dispose();
+  });
+
+  it('takes it back when the selection empties after the press (WebKitGTK)', async () => {
+    const h = home();
+    await settle();
+
+    h.grid.blur();
+    document.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    window.getSelection()!.selectAllChildren(h.byId('value'));
+    document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+    await settle();
+    expect(document.activeElement).toBe(document.body);
+
+    window.getSelection()!.removeAllRanges();
+    document.dispatchEvent(new Event('selectionchange'));
+    await settle();
+    expect(document.activeElement).toBe(h.grid);
+    h.dispose();
+  });
+
   it('takes it back at the next key after a press the page never saw end', async () => {
     const h = home();
     await settle();
