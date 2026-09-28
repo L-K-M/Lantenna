@@ -323,10 +323,13 @@
     top: 8px;
   }
 
+  /* 124px, not spec 2.3's 120: "Favorite Hosts" is 90px in Charcoal 12,
+     and the pop-up's frame leaves its title 4px less than its width
+     minus 30px. */
   .lan-show {
     left: 79px;
     top: 36px;
-    width: 120px;
+    width: 124px;
   }
 
   .lan-show-hidden {
