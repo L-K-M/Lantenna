@@ -816,9 +816,11 @@ export function viewMenuSpec(ctx: CommandContext): readonly SpecEntry[] {
 
 /** The Edit items that leave their key equivalents to the browser while
  * text has the keyboard, so native editing (and its clipboard, which
- * needs no permission) handles them. */
+ * needs no permission) handles them. Not Undo: WebKitGTK binds no key
+ * to it (its editing keys come from GTK's text widget, which has no
+ * undo; browsers built on it add their own), so Control-Z runs the
+ * item, whose execCommand('undo') the engine does. */
 const TEXT_EDIT_IDS: ReadonlySet<CommandId> = new Set([
-  'edit.undo',
   'edit.cut',
   'edit.copy',
   'edit.paste',

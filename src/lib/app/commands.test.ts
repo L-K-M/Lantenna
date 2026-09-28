@@ -500,10 +500,12 @@ group('osmiumMenuEntries', () => {
     expect(open).toEqual({ title: 'Open', action: expect.any(Function) });
   });
 
-  it('leaves text-editing keys to the browser while text has the keyboard', () => {
+  it('leaves text-editing keys to the browser while text has the keyboard, but not Undo', () => {
     const edits: SpecEntry[] = [{ id: 'edit.undo' }, { id: 'edit.copy' }, { id: 'edit.copyIp' }];
     const inText = osmiumMenuEntries(edits, selecting(r, { focus: 'text' }), 'menubar');
-    expect(inText.map((e) => (e === MENU_SEPARATOR ? null : e.keyDispatch))).toEqual(['browser', 'browser', undefined]);
+    // WebKitGTK does nothing with Control-Z: the item's action undoes.
+    expect(inText.map((e) => (e === MENU_SEPARATOR ? null : e.keyDispatch))).toEqual([undefined, 'browser', undefined]);
+    expect(inText[0]).toMatchObject({ title: 'Undo', key: 'Z', action: expect.any(Function) });
     const inList = osmiumMenuEntries(edits, selecting(r, { focus: 'list' }), 'menubar');
     expect(inList.map((e) => (e === MENU_SEPARATOR ? null : e.keyDispatch))).toEqual([undefined, undefined, undefined]);
   });

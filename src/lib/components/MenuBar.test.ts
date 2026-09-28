@@ -1,5 +1,5 @@
 // The Linux menu bar: Osmium's bar with the menus of 4.3, keys with
-// Control, text-editing keys left to the browser, and Edit items that
+// Control, text-editing keys (but Undo) left to the browser, and Edit items that
 // describe the field the keyboard was in when the menu opened.
 import { render } from '@testing-library/svelte';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -85,16 +85,22 @@ it('runs an enabled item’s key equivalent', () => {
   expect([find.selectionStart, find.selectionEnd]).toEqual([0, 3]);
 });
 
-it('leaves editing keys in a text field to the browser, flashing Edit', () => {
+it('leaves editing keys in a text field to the browser, flashing Edit, but runs Undo', () => {
   const bar = mount();
   const field = document.createElement('input');
   document.body.append(field);
   field.focus();
 
-  for (const key of ['z', 'x', 'c', 'v', 'a']) {
+  for (const key of ['x', 'c', 'v', 'a']) {
     expect(keydown(field, { key, ctrlKey: true }).defaultPrevented, key).toBe(false);
   }
   expect(titles(bar)[2]!.classList.contains('osm-open')).toBe(true);
+
+  // WebKitGTK binds nothing to Control-Z: the item undoes.
+  const exec = vi.spyOn(document, 'execCommand').mockReturnValue(true);
+  expect(keydown(field, { key: 'z', ctrlKey: true }).defaultPrevented).toBe(true);
+  expect(exec).toHaveBeenCalledWith('undo');
+  exec.mockRestore();
 });
 
 it('describes the field the keyboard was in when the menu opened, across menus', () => {
