@@ -277,6 +277,20 @@ export function areaBalloon(
   return attachHelp(node, content, AREA_TIP);
 }
 
+/**
+ * `use:fieldBalloon={content}`: as `balloon`, for a text field with its
+ * label on the same row (Find). The default tip, 10px up from the
+ * field's bottom edge, leaves a balloon that flips left (no room on the
+ * right) over the label; on the bottom edge the body starts below the
+ * label's row.
+ */
+export function fieldBalloon(
+  node: HTMLInputElement,
+  content: BalloonOptions['content']
+): ActionReturn<BalloonOptions['content']> {
+  return attachHelp(node, content, { tip: 'anchor', anchor: { x: 10, y: 0 } });
+}
+
 function attachHelp(
   node: HTMLElement,
   content: BalloonOptions['content'],

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MENU_SEPARATOR } from 'osmium-ui';
-import { areaBalloon, balloon, checkboxBalloon, dimmable, osmButton, popup, type PopupParams } from './actions';
+import { areaBalloon, balloon, checkboxBalloon, dimmable, fieldBalloon, osmButton, popup, type PopupParams } from './actions';
 
 const osm = vi.hoisted(() => ({
   popup: { selected: 0, setItems: vi.fn(), setSelected: vi.fn(), destroy: vi.fn() },
@@ -178,6 +178,19 @@ it('points an area’s balloon at the pointer, or for the keyboard at its middle
   });
   action.destroy?.();
   expect(osm.balloon.detach).toHaveBeenCalledOnce();
+});
+
+it('points a text field’s balloon at its lower edge, clear of the label beside it', () => {
+  const field = document.createElement('input');
+  fieldBalloon(field, 'Find field');
+
+  // Checked in the browser by the harness's balloon-find shots.
+  expect(osm.attachBalloon).toHaveBeenCalledWith(field, {
+    content: 'Find field',
+    trigger: 'balloon-help',
+    tip: 'anchor',
+    anchor: { x: 10, y: 0 }
+  });
 });
 
 it('points a checkbox’s balloon past its title, describing the box itself', () => {

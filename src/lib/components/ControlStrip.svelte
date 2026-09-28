@@ -16,7 +16,7 @@
   import { get } from 'svelte/store';
   import { setButtonTitle } from 'osmium-ui';
   import type { PopupParams } from '$lib/osm/actions';
-  import { balloon, checkboxBalloon, dimmable, highlight, osmButton, popup } from '$lib/osm/actions';
+  import { balloon, checkboxBalloon, dimmable, fieldBalloon, highlight, osmButton, popup } from '$lib/osm/actions';
   import {
     DEPTH_BALLOON,
     FIND_BALLOON,
@@ -275,7 +275,7 @@
     spellcheck="false"
     bind:value={() => store.query, (query: string) => scanStore.setQuery(query)}
     onkeydown={onFindKey}
-    use:balloon={FIND_BALLOON}
+    use:fieldBalloon={FIND_BALLOON}
   />
 </div>
 
