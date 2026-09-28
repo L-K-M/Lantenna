@@ -108,6 +108,7 @@ it('keeps Control-A from the engine’s select-all in the list and the icons', (
   for (const view of ['lan-list', 'lan-icons']) {
     expect(press(place(view), { key: 'a', ctrlKey: true }).defaultPrevented, view).toBe(true);
     expect(press(place(view), { key: 'A', ctrlKey: true }).defaultPrevented, view).toBe(true); // Caps Lock
+    expect(press(place(view), { key: 'a', ctrlKey: true, repeat: true }).defaultPrevented, view).toBe(true); // held
   }
   expect(run).not.toHaveBeenCalled();
 

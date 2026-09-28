@@ -45,16 +45,19 @@ function commandKey(e: KeyboardEvent, key: string, shift = false): boolean {
 
 /** What a keydown asks of the page, or null for any other key. */
 function pageKey(e: KeyboardEvent): PageKey | null {
-  if (e.defaultPrevented || e.repeat || e.isComposing) return null;
+  if (e.defaultPrevented || e.isComposing) return null;
 
   const where = classifyFocus(e.target instanceof Element ? e.target : null);
+  // Held, too: each repeat would select again.
+  if ((where === 'list' || where === 'icons') && commandKey(e, 'a')) return 'ignore';
+  if (e.repeat) return null;
+
   if (where === 'text') {
     return !isMac && (commandKey(e, 'z', true) || commandKey(e, 'y')) ? 'redo' : null;
   }
   if (where !== 'list' && where !== 'icons') return null;
 
   if (commandKey(e, 'backspace')) return { run: { id: 'host.toggleHidden' } };
-  if (commandKey(e, 'a')) return 'ignore';
   // Selected pane text copies as text (the native Copy does that).
   if (isMac && commandKey(e, 'c') && !hasTextSelection()) return { run: { id: 'edit.copyIp' } };
   return null;
