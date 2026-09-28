@@ -197,6 +197,50 @@ describe('the keyboard\'s home', () => {
     h.dispose();
   });
 
+  it('lets Tab take the keyboard out of the page, and brings it home at the next other key', async () => {
+    const h = home();
+    await settle();
+    const key = (type: string, k: string) => document.dispatchEvent(new KeyboardEvent(type, { key: k, bubbles: true }));
+
+    // Tab past the last control: the tab order wraps through <body>,
+    // or the web view hands the keyboard to the first control.
+    h.byId('deep').focus();
+    key('keydown', 'Tab');
+    h.byId('deep').blur();
+    key('keyup', 'Tab');
+    await settle();
+    expect(document.activeElement).toBe(document.body);
+
+    // Shift for a Shift-Tab back keeps it there too.
+    key('keydown', 'Shift');
+    await settle();
+    expect(document.activeElement).toBe(document.body);
+
+    key('keydown', 'ArrowDown');
+    await settle();
+    expect(document.activeElement).toBe(h.grid);
+    expect(h.focus).toHaveBeenCalledTimes(2);
+    h.dispose();
+  });
+
+  it('forgets the Tab once the keyboard is back in the page', async () => {
+    const h = home();
+    await settle();
+    const key = (type: string, k: string) => document.dispatchEvent(new KeyboardEvent(type, { key: k, bubbles: true }));
+
+    h.byId('deep').focus();
+    key('keydown', 'Tab');
+    h.byId('deep').blur();
+    h.byId('hidden').focus();
+    key('keyup', 'Tab');
+
+    // A control that dims under the keyboard later still sends it home.
+    h.byId('hidden').setAttribute('disabled', '');
+    await settle();
+    expect(document.activeElement).toBe(h.grid);
+    h.dispose();
+  });
+
   it('waits while the window is collapsed', async () => {
     const h = home();
     await settle();

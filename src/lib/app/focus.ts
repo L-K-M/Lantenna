@@ -78,6 +78,10 @@ export const keyboardFocus: Readable<FocusKind> = readable<FocusKind>('other', (
  * pane, a tab's panel) or the collapsed window (Osmium's class). */
 const HIDDEN_SELECTOR = '[hidden], .osm-shaded';
 
+/** Keys held with Shift-Tab and the like, which keep a Tab wrap's
+ * <body> as it is. */
+const MODIFIER_KEYS: ReadonlySet<string> = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock']);
+
 /** Whether the keyboard has no usable place: nowhere (<body>), or an
  * element that is gone, dimmed or hidden. */
 function keyboardStranded(): boolean {
@@ -104,6 +108,13 @@ function keyboardStranded(): boolean {
  * only if it left no selection, since moving the focus drops the
  * selection (Chromium while the drag starts, WebKit after it).
  *
+ * Nor when Tab or Shift-Tab takes the keyboard out of the page past
+ * the last or first control: that is the tab order wrapping (3.2), a
+ * focusout to nowhere like the others. The web view hands the keyboard
+ * back to the first or last control (WebKit's setInitialFocus); a
+ * browser leaves it on <body> until the next Tab. Any other key there
+ * brings it home.
+ *
  * Browsers report these moves differently, so several things start the
  * check, which runs a microtask later, once the page has settled:
  * focusout to nowhere (Chromium sends it for each case, WebKit only for
@@ -119,10 +130,14 @@ export function installKeyboardHome(frame: HTMLElement): () => void {
    * the page never sees end (the OS takes the mouse to move the window)
    * is over by the next key, which checks what that press left. */
   let pressing = false;
+  /** The Tab key is down. */
+  let tabbing = false;
+  /** Tab took the keyboard out of the page, and it hasn't come back. */
+  let tabbedOut = false;
 
   const check = () => {
     queued = false;
-    if (pressing || isModal() || !keyboardStranded() || hasTextSelection()) return;
+    if (pressing || tabbedOut || isModal() || !keyboardStranded() || hasTextSelection()) return;
 
     const view = get(activeView);
     if (!view || view.element.closest(HIDDEN_SELECTOR)) return;
@@ -135,25 +150,42 @@ export function installKeyboardHome(frame: HTMLElement): () => void {
   };
 
   const onFocusOut = (e: FocusEvent) => {
-    if (e.relatedTarget === null) queue();
+    if (e.relatedTarget !== null) return;
+    if (tabbing) tabbedOut = true;
+    else queue();
+  };
+  const onFocusIn = () => {
+    tabbedOut = false;
   };
   const onPress = () => {
     pressing = true;
+    tabbedOut = false;
   };
   const onRelease = () => {
     pressing = false;
     queue();
   };
-  const onKey = () => {
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Tab') tabbing = true;
+    else if (!MODIFIER_KEYS.has(e.key) && tabbedOut) {
+      tabbedOut = false;
+      queue();
+    }
+
     if (!pressing) return;
     pressing = false;
     queue();
   };
+  const onKeyUp = (e: KeyboardEvent) => {
+    if (e.key === 'Tab') tabbing = false;
+  };
   document.addEventListener('focusout', onFocusOut);
+  document.addEventListener('focusin', onFocusIn);
   document.addEventListener('pointerdown', onPress, true);
   document.addEventListener('pointerup', onRelease, true);
   document.addEventListener('pointercancel', onRelease, true);
   document.addEventListener('keydown', onKey, true);
+  document.addEventListener('keyup', onKeyUp, true);
 
   const observer = new MutationObserver(queue);
   observer.observe(frame, { attributes: true, attributeFilter: ['class'] });
@@ -176,10 +208,12 @@ export function installKeyboardHome(frame: HTMLElement): () => void {
 
   return () => {
     document.removeEventListener('focusout', onFocusOut);
+    document.removeEventListener('focusin', onFocusIn);
     document.removeEventListener('pointerdown', onPress, true);
     document.removeEventListener('pointerup', onRelease, true);
     document.removeEventListener('pointercancel', onRelease, true);
     document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('keyup', onKeyUp, true);
     observer.disconnect();
     stopModal();
   };
