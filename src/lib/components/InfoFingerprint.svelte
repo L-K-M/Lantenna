@@ -195,6 +195,14 @@
     border: 1px solid #000;
   }
 
+  /* The document text view draws no ring and a read-only one no caret,
+     so the box is ringed while it has the keyboard, as the Ports list's
+     grid is (2px out, inside the panel's 10px margin). */
+  :global(.osm-kbd) .lan-notes:focus-within {
+    outline: 2px solid var(--osm-focus-ring);
+    outline-offset: 2px;
+  }
+
   .lan-notes > :global(.osm-textview-strip) {
     display: none;
   }
