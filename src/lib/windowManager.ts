@@ -52,6 +52,10 @@ const SHADED_MAX_H = 60;
  * the minimum size anyway. */
 const UNFOLD_WAIT_MS = 1000;
 
+/** How long zoom waits for a smaller size to reach the window before it
+ * moves the window anyway. */
+const RESIZE_WAIT_MS = 500;
+
 /** PointerEvent.button for the main (left) button. */
 const MAIN_BUTTON = 0;
 
@@ -92,6 +96,24 @@ function unfolded(ms: number): Promise<void> {
     };
     const timer = setTimeout(done, ms);
     window.addEventListener('resize', check);
+  });
+}
+
+/** Resolves once the viewport is `size` (within a pixel), or after
+ * `ms`. Start it before the setSize it waits for. */
+function resizedTo(size: Size, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      window.removeEventListener('resize', check);
+      resolve();
+    };
+    const check = () => {
+      if (Math.abs(window.innerWidth - size.w) <= 1 && Math.abs(window.innerHeight - size.h) <= 1) done();
+    };
+    const timer = setTimeout(done, ms);
+    window.addEventListener('resize', check);
+    check();
   });
 }
 
@@ -414,7 +436,13 @@ export class WindowManager {
       await move();
       await resize();
     } else {
+      // Tauri answers setSize once the change is queued. GTK applies it
+      // at its next layout but sends a move at once, and a window
+      // manager that keeps windows on screen (metacity) pulls the move
+      // of the still-large window back, so unzoom lost its position.
+      const shrunk = resizedTo(size, RESIZE_WAIT_MS);
       await resize();
+      await shrunk;
       await move();
     }
   }

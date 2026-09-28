@@ -445,6 +445,36 @@ describe('zoom box (winZoom)', () => {
     );
   });
 
+  it('moves back only once the window has shrunk (GTK resizes at its next layout)', async () => {
+    const manager = new WindowManager();
+    followSetSize();
+    native.setPosition.mockImplementation(async (p: LogicalPosition) => {
+      native.outerPosition.mockResolvedValue({ x: p.x, y: p.y });
+    });
+    activeView.set(listView(2000));
+    manager.apply({ op: 'winZoom' });
+    await vi.waitFor(() => expect(native.setPosition).toHaveBeenCalledOnce());
+
+    // Tauri answers setSize once the change is queued; the window
+    // manager would keep a move of the still-large window on screen.
+    const landed = deferred<void>();
+    native.setSize.mockImplementation(async (size: LogicalSize) => {
+      void landed.promise.then(() => setViewport(size.width, size.height));
+    });
+    const sizeAtMove: number[][] = [];
+    native.setPosition.mockImplementation(async () => {
+      sizeAtMove.push([window.innerWidth, window.innerHeight]);
+    });
+
+    manager.apply({ op: 'winZoom' });
+    await vi.waitFor(() => expect(native.setSize).toHaveBeenLastCalledWith(new LogicalSize(1200, 760)));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(sizeAtMove).toEqual([]);
+
+    landed.resolve();
+    await vi.waitFor(() => expect(sizeAtMove).toEqual([[1200, 760]]));
+  });
+
   it('works in logical pixels on a Retina screen', async () => {
     native.scaleFactor.mockResolvedValue(2);
     native.outerPosition.mockResolvedValue({ x: 200, y: 160 });
@@ -522,6 +552,7 @@ describe('zoom box (winZoom)', () => {
 
     it('leaves out all the height the screen lost when WebKit describes another frame', async () => {
       setWebKitScreen(0, 900); // the whole screen, as with fingerprinting protection
+      followSetSize();
       activeView.set(listView(2000));
 
       new WindowManager().apply({ op: 'winZoom' });
