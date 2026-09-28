@@ -583,9 +583,10 @@
     align-items: flex-start;
     min-width: 0;
     outline: none;
-    /* Long grids: lay out only the tiles near the view. */
-    content-visibility: auto;
-    contain-intrinsic-size: 112px 72px;
+    /* No content-visibility: auto here. WebKitGTK then stops painting
+       the tile that had the keyboard when it was mounted, once another
+       tile is selected, and a 1,503-tile grid lays out and scrolls as
+       fast without it. */
   }
 
   .lan-tile-icon {
