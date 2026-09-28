@@ -51,6 +51,9 @@ without them (linuxdeploy ships its own `patchelf`).
 
 ### Running CI checks locally
 
+`scripts/build.sh` runs everything below and then builds the host bundles;
+`--install` also installs the result. To run the checks by hand:
+
 ```bash
 # Frontend
 npm ci

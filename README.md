@@ -10,9 +10,6 @@ It looks and works like a Mac OS 8.5 utility, drawn with [Osmium UI](https://git
 
 ![Screenshot of Lantenna in its Mac OS 8 window: a list of discovered hosts with their IP addresses, kinds, vendors and open ports, and the Host Information pane for a printer](./media-sources/screenshot.png)
 
-> [!IMPORTANT]
-> LLM Disclosure: This project was developed with the assistance of large language models (AI coding tools).
-
 ## Using Lantenna
 
 Choose an interface and a depth, then click **Scan**. The window header
@@ -90,6 +87,11 @@ npm run tauri dev
 # Build for production
 npm run tauri build
 ```
+
+Or let `scripts/build.sh` run the CI checks (svelte-check, vitest, cargo
+fmt/clippy/test) and then build the host bundles for you;
+`scripts/build.sh --install` also installs the result (`/Applications` on
+macOS; the `.deb` via apt or the AppImage into `~/Applications` on Linux).
 
 To work on the interface in a browser without the backend, run
 `npm run dev -- --mode mock` and open
