@@ -23,10 +23,12 @@
 # fail when --install/--run was requested.
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+script_path="$script_dir/$(basename "$0")"
+cd "$script_dir/.."
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  awk 'NR==1 && /^#!/ {next} /^#/ {sub(/^# ?/,""); print; next} {exit}' "$0"
+  awk 'NR==1 && /^#!/ {next} /^#/ {sub(/^# ?/,""); print; next} {exit}' "$script_path"
   exit 0
 fi
 
