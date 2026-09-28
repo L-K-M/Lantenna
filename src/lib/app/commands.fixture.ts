@@ -144,6 +144,7 @@ export interface ContextParts {
   focus?: FocusKind;
   modal?: boolean;
   wakingIp?: string | null;
+  textSelected?: boolean;
   platform?: Platform;
 }
 
@@ -159,6 +160,7 @@ export function context(parts: ContextParts = {}): CommandContext {
     focus: parts.focus ?? 'other',
     modal: parts.modal ?? false,
     wakingIp: parts.wakingIp ?? null,
+    textSelected: parts.textSelected ?? false,
     shaded: ui.shaded,
     platform: parts.platform ?? 'linux'
   };

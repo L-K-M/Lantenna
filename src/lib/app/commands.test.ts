@@ -227,6 +227,8 @@ group('describe', () => {
     expect(enabled(selecting(row(bare), { focus: 'list' }))).toEqual(['edit.copy']);
     expect(enabled(selecting(row(bare), { focus: 'icons' }))).toEqual(['edit.copy']);
     expect(enabled(selecting(row(bare), { focus: 'other' }))).toEqual([]);
+    // A selected pane value copies with the keyboard anywhere (3.3).
+    expect(enabled(context({ focus: 'other', textSelected: true }))).toEqual(['edit.copy']);
     expect(edits.map((id) => describe(ref(id), context()).key)).toEqual(['Z', 'X', 'C', 'V', 'A']);
   });
 

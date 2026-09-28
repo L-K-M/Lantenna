@@ -35,7 +35,7 @@ import {
   type ScanProgressState,
   type ScanStoreState
 } from '$lib/util/scanStore';
-import { hasTextSelection } from '$lib/util/selection';
+import { hasTextSelection, textSelection } from '$lib/util/selection';
 import { windowManager } from '$lib/windowManager';
 import {
   beginRename,
@@ -121,6 +121,8 @@ export interface CommandContext {
   focus: FocusKind;
   modal: boolean;
   wakingIp: string | null;
+  /** The document has text selected outside any field (pane values). */
+  textSelected: boolean;
   shaded: boolean;
   platform: Platform;
 }
@@ -134,8 +136,8 @@ const modal: Readable<boolean> = readable(false, (set) => {
 });
 
 export const commandContext: Readable<CommandContext> = derived(
-  [scanStore, scanProgress, ui, hostModel, keyboardFocus, modal, wakingIp],
-  ([$store, $progress, $ui, $model, $focus, $modal, $wakingIp]) => ({
+  [scanStore, scanProgress, ui, hostModel, keyboardFocus, modal, wakingIp, textSelection],
+  ([$store, $progress, $ui, $model, $focus, $modal, $wakingIp, $textSelected]) => ({
     store: $store,
     progress: $progress,
     ui: $ui,
@@ -143,6 +145,7 @@ export const commandContext: Readable<CommandContext> = derived(
     focus: $focus,
     modal: $modal,
     wakingIp: $wakingIp,
+    textSelected: $textSelected,
     shaded: $ui.shaded,
     platform
   })
@@ -217,7 +220,11 @@ function describeIgnoringModal(ref: CommandRef, ctx: CommandContext, place: Comm
     case 'edit.cut':
       return { title: 'Cut', enabled: ctx.focus === 'text', key: 'X' };
     case 'edit.copy':
-      return { title: 'Copy', enabled: inText(ctx.focus) || (inHostView(ctx.focus) && row !== null), key: 'C' };
+      return {
+        title: 'Copy',
+        enabled: inText(ctx.focus) || ctx.textSelected || (inHostView(ctx.focus) && row !== null),
+        key: 'C'
+      };
     case 'edit.paste':
       return { title: 'Paste', enabled: ctx.focus === 'text', key: 'V' };
     case 'edit.selectAll':
