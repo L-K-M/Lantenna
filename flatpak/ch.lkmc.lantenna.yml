@@ -22,4 +22,4 @@ modules:
       - type: dir
         path: ../dist/flatpak/stage
     build-commands:
-      - cp -R bin share /app/
+      - cp -R . /app/
