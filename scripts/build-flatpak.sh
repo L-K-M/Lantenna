@@ -55,7 +55,7 @@ cp -a "$WORK/debroot/usr/." "$WORK/stage/"
 # the app id; the bundler names them after the binary instead.
 # Shipped text files (wrappers, launchers, python) hardcode /usr; inside flatpak the prefix is /app.
 while IFS= read -r f; do
-  sed -i '1!s|/usr/|/app/|g' "$f"
+  sed -i '/^#!/!s|/usr/|/app/|g' "$f"
 done < <(grep -rIl '/usr/' "$WORK/stage" 2>/dev/null || true)
 while IFS= read -r f; do
   sed -i -e 's|Exec=/usr/bin/|Exec=|g' -e 's|Exec=/opt/[^/]*/bin/|Exec=|g' -e 's|Exec=/app/bin/|Exec=|g' -e '/^TryExec=/d' "$f"
@@ -89,7 +89,7 @@ flatpak-builder --user --install-deps-from=flathub --force-clean \
 COMMAND_NAME="$(sed -n 's/^command:[[:space:]]*//p' "$MANIFEST" | head -1)"
 [ -n "$COMMAND_NAME" ] || die "no command: key in $MANIFEST"
 flatpak-builder --run "$WORK/build" "$MANIFEST" \
-  sh -c 'test -x "/app/bin/$1" || { echo "missing /app/bin/$1" >&2; ls -l /app/bin >&2; exit 1; }' _ "$COMMAND_NAME"
+  sh -c 'bin="/app/bin/$1"; test -x "$bin" || { echo "missing $bin" >&2; ls -l /app/bin >&2; exit 1; }; bad="$(ldd "$bin" 2>/dev/null | grep "not found" || true)"; [ -z "$bad" ] || { echo "unresolved libraries:\n$bad" >&2; exit 1; }' _ "$COMMAND_NAME"
 
 VERSION="$(dpkg-deb -f "$DEB" Version)"
 BUNDLE="$ROOT/dist/Lantenna-$VERSION-linux.flatpak"
