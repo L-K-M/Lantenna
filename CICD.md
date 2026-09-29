@@ -7,7 +7,7 @@ configured** — code signing and notarization are optional and only kick in whe
 the relevant secrets are present.
 
 Lantenna started as a **Mac OS X** application and now also ships for Linux, so
-the release matrix covers macOS (`.dmg`) and Ubuntu/Linux (`.deb` + `.AppImage`).
+the release matrix covers macOS (`.dmg`) and Ubuntu/Linux (`.deb` + `.AppImage` + `.flatpak`).
 Each platform has backend code the other never compiles — the AppKit accent and
 highlight colors on macOS (`objc2-app-kit`), and on Linux the GTK decoration-state
 tracking, the `ip neigh` neighbour reader and the iputils `ping` flag dialect — so
@@ -17,7 +17,7 @@ CI lints and tests on both runners to exercise both real targets.
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | PRs + pushes to `main` | Type-check, test and build the SvelteKit frontend, then run `cargo fmt`/`clippy`/`test` on macOS and Ubuntu. |
-| `.github/workflows/release.yml` | Pushing a `v*.*.*` tag | Build the macOS Tauri `.dmg` bundles (Apple Silicon + Intel) and the Linux `.deb`/`.AppImage` bundles (x86_64), and attach them to a GitHub Release. |
+| `.github/workflows/release.yml` | Pushing a `v*.*.*` tag | Build the macOS Tauri `.dmg` bundles (Apple Silicon + Intel) and the Linux `.deb`/`.AppImage` bundles (x86_64), repack the `.deb` as a `.flatpak` bundle (`scripts/build-flatpak.sh`), and attach them to a GitHub Release. |
 
 ## Continuous integration (`ci.yml`)
 
