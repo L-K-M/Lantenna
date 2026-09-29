@@ -58,7 +58,7 @@ while IFS= read -r f; do
   sed -i '1!s|/usr/|/app/|g' "$f"
 done < <(grep -rIl '/usr/' "$WORK/stage" 2>/dev/null || true)
 while IFS= read -r f; do
-  sed -i 's|Exec=/usr/bin/|Exec=|; s|Exec=/opt/[^/]*/bin/|Exec=|' "$f"
+  sed -i -e 's|Exec=/usr/bin/\|Exec=/opt/[^/]*/bin/\|Exec=/app/bin/|Exec=|g' -e '/^TryExec=/d' "$f"
 done < <(find "$WORK/stage/share/applications" -type f -name '*.desktop' 2>/dev/null)
 
 DESKTOP="$(find "$WORK/stage/share/applications" -type f -name '*.desktop' -print -quit 2>/dev/null || true)"
