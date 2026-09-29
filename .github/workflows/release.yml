@@ -193,7 +193,7 @@ jobs:
           for f in dist/*.flatpak; do
             (cd dist && sha256sum "$(basename "$f")" > "$(basename "$f").sha256")
           done
-          gh release upload "${{ github.ref_name }}" dist/*.flatpak dist/*.flatpak.sha256 --clobber
+          gh release upload "$GITHUB_REF_NAME" dist/*.flatpak dist/*.flatpak.sha256 --clobber
 
   # ---------------------------------------------------------------------------
   # Publish the release once every build job has finished successfully.

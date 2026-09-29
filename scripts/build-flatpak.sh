@@ -23,8 +23,8 @@ DEB=""
 for argument in "$@"; do
   case "$argument" in
     --install) INSTALL=1 ;;
-    -h|--help) sed -n '2,11s/^# //p' "$0"; exit 0 ;;
-    *.deb) DEB="$argument" ;;
+    -h|--help) awk 'NR==1&&/^#!/{next} /^set -euo pipefail/{next} /^#/{sub(/^# ?/,"");print;next} {exit}' "$0"; exit 0 ;;
+    *.deb) [ -z "$DEB" ] || die "pass at most one .deb"; DEB="$argument" ;;
     *) echo "Unknown argument: $argument" >&2; exit 2 ;;
   esac
 done
@@ -53,10 +53,10 @@ cp -a "$WORK/debroot/usr/." "$WORK/stage/"
 
 # flatpak exports the desktop file and icons only when they are named after
 # the app id; the bundler names them after the binary instead.
-# Wrapper scripts hardcode /usr; inside flatpak the prefix is /app.
+# Shipped text files (wrappers, launchers, python) hardcode /usr; inside flatpak the prefix is /app.
 while IFS= read -r f; do
   sed -i '1!s|/usr/|/app/|g' "$f"
-done < <(grep -rl '/usr/' "$WORK/stage/bin/" 2>/dev/null || true)
+done < <(grep -rIl '/usr/' "$WORK/stage" 2>/dev/null || true)
 while IFS= read -r f; do
   sed -i 's|Exec=/usr/bin/|Exec=|; s|Exec=/opt/[^/]*/bin/|Exec=|' "$f"
 done < <(find "$WORK/stage/share/applications" -type f -name '*.desktop' 2>/dev/null)
@@ -96,6 +96,6 @@ BUNDLE="$ROOT/dist/Lantenna-$VERSION-linux.flatpak"
 flatpak build-bundle --runtime-repo="$FLATHUB_REPO" \
   "$WORK/repo" "$BUNDLE" "$APP_ID"
 if ((INSTALL)); then
-  flatpak install --user -y --noninteractive --bundle "$BUNDLE"
+  flatpak install --user -y --noninteractive "$BUNDLE"
 fi
 echo "Built ${BUNDLE#"$ROOT"/}"
