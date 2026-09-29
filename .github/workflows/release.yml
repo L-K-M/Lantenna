@@ -163,7 +163,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils \
-            flatpak flatpak-builder
+            flatpak flatpak-builder elfutils
           # Ubuntu 24.04 denies the unprivileged user namespaces bubblewrap
           # (flatpak's sandbox helper) builds in.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true   # absent on kernels without the knob
