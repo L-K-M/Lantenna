@@ -8,6 +8,7 @@
 #                                #   Linux: the .deb via sudo apt install, or
 #                                #          the AppImage into ~/Applications
 #   scripts/build.sh --run       # launch the app afterwards
+#   scripts/build.sh --flatpak   # Linux: also repack the .deb as a Flatpak bundle
 #
 # Verification mirrors ci.yml: svelte-check, vitest and the vite build (which
 # also runs scripts/check-built-html.mjs), then cargo fmt/clippy/test against
@@ -38,12 +39,13 @@ readonly BUNDLE_DIR="src-tauri/target/release/bundle"
 readonly DIST_DIR="dist"
 readonly HOST="$(uname -s)"
 
-clean=0 install=0 run=0
+clean=0 install=0 run=0 flatpak=0
 for argument in "$@"; do
   case "$argument" in
     --clean) clean=1 ;;
     --install) install=1 ;;
     --run) run=1 ;;
+    --flatpak) flatpak=1 ;;
     *) echo "!! unknown argument: $argument (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -107,6 +109,15 @@ if ((${#staged[@]})); then
   printf -- '-- %s\n' "${staged[@]}"
 else
   echo ".. no .dmg/.deb/.AppImage produced for this host"
+fi
+
+if ((flatpak)); then
+  echo "==> flatpak bundle"
+  if [[ "$HOST" == Linux ]]; then
+    ./scripts/build-flatpak.sh "$DIST_DIR"/*.deb
+  else
+    echo "!! --flatpak builds Linux packages; skipping on $HOST" >&2
+  fi
 fi
 
 install_app() {

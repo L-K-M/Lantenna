@@ -1,0 +1,26 @@
+# Flatpak manifest. scripts/build-flatpak.sh extracts the release .deb into
+# dist/flatpak/stage and builds from that — the bundle ships the same files
+# the .deb installs, relaid under flatpak's /app prefix.
+id: ch.lkmc.lantenna
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: lantenna
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # WebKit's GPU rendering.
+  - --device=dri
+  # File open/save dialogs go through the GTK portal; the app's LLM calls
+  # need outbound HTTPS.
+  - --share=network
+modules:
+  - name: lantenna
+    buildsystem: simple
+    sources:
+      - type: dir
+        path: ../dist/flatpak/stage
+    build-commands:
+      - rm -rf DEBIAN
+      - "if [ -d usr ]; then cp -a usr/. /app/; else cp -a . /app/; fi"

@@ -36,11 +36,13 @@ The release workflow builds Lantenna for:
 
 - macOS on Apple Silicon (`aarch64-apple-darwin`), as a `.dmg`
 - macOS on Intel (`x86_64-apple-darwin`), as a `.dmg`
-- Linux on x86_64 (`x86_64-unknown-linux-gnu`), as a `.deb` and an `.AppImage`
+- Linux on x86_64 (`x86_64-unknown-linux-gnu`), as a `.deb`, an `.AppImage`, and a `.flatpak`
 
-The Linux packages are built on Ubuntu 22.04, so they run on Ubuntu 22.04 and
-later; the `.deb` targets Debian-family distributions, and the `.AppImage` should
-work on any distribution with a comparable glibc. Lantenna is not released for
+The `.deb` and `.AppImage` are built on Ubuntu 22.04, so they run on Ubuntu 22.04
+and later; the `.deb` targets Debian-family distributions, and the `.AppImage`
+should work on any distribution with a comparable glibc. The `.flatpak` runs
+against the GNOME runtime on any distribution with Flatpak, independent of the
+build host. Lantenna is not released for
 Windows.
 
 ## Install a release

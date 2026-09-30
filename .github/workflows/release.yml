@@ -148,11 +148,59 @@ jobs:
           args: ${{ matrix.args }}
 
   # ---------------------------------------------------------------------------
+  # Linux Flatpak: repacks a freshly built .deb under the flatpak /app prefix,
+  # so the bundle ships exactly the files the .deb installs.
+  # ---------------------------------------------------------------------------
+  flatpak:
+    name: Linux Flatpak
+    needs: create-release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Tauri and Flatpak system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils \
+            flatpak flatpak-builder elfutils
+          # Ubuntu 24.04 denies the unprivileged user namespaces bubblewrap
+          # (flatpak's sandbox helper) builds in.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true   # absent on kernels without the knob
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Linux .deb
+        uses: tauri-apps/tauri-action@v1
+        with:
+          args: --bundles deb
+
+      - name: Repack, checksum and attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./scripts/build-flatpak.sh src-tauri/target/release/bundle/deb/*.deb
+          for f in dist/*.flatpak; do
+            (cd dist && sha256sum "$(basename "$f")" > "$(basename "$f").sha256")
+          done
+          gh release upload "$GITHUB_REF_NAME" dist/*.flatpak dist/*.flatpak.sha256 --clobber
+
+  # ---------------------------------------------------------------------------
   # Publish the release once every build job has finished successfully.
   # ---------------------------------------------------------------------------
   publish-release:
     name: Publish release
-    needs: [create-release, build-desktop]
+    needs: [create-release, build-desktop, flatpak]
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
