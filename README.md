@@ -51,6 +51,12 @@ On macOS, download the `.dmg` for your Mac's architecture from the
 [latest release](https://github.com/L-K-M/Lantenna/releases/latest) and copy
 Lantenna to your Applications folder.
 
+The build is ad-hoc signed and not notarized. Before the first launch, run:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Lantenna.app"
+```
+
 On Ubuntu (and other Debian-family distributions), download the `.deb` and
 install it (double-click it, or run
 `sudo apt install ./Lantenna_<version>_amd64.deb`), **or** download the
