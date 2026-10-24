@@ -18,7 +18,7 @@
     "osmium-ui": "github:L-K-M/osmium-ui#38da138e37efab8377b6b30ad0b4a47854de0748"
   },
   "devDependencies": {
-    "@sveltejs/adapter-static": "^3.0.6",
+    "@sveltejs/adapter-static": "^4.0.0",
     "@sveltejs/kit": "^2.9.0",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tauri-apps/cli": "^2",
