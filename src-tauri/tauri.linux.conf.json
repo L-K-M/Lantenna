@@ -7,7 +7,19 @@
     "linux": {
       "deb": {
         "depends": ["iputils-ping", "iproute2"],
-        "section": "net"
+        "section": "net",
+        "files": {
+          "/usr/share/doc/lantenna/copyright": "licenses/copyright",
+          "/usr/share/doc/lantenna/Third-Party-Notices.txt": "../build/Third-Party-Notices.txt",
+          "/usr/share/doc/lantenna/Rust-Licenses.html": "licenses/Rust-Licenses.html"
+        }
+      },
+      "appimage": {
+        "files": {
+          "/usr/share/doc/lantenna/copyright": "licenses/copyright",
+          "/usr/share/doc/lantenna/Third-Party-Notices.txt": "../build/Third-Party-Notices.txt",
+          "/usr/share/doc/lantenna/Rust-Licenses.html": "licenses/Rust-Licenses.html"
+        }
       }
     }
   }

@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && npm run notices:app",
     "frontendDist": "../build"
   },
   "app": {
@@ -37,6 +37,12 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "files": {
+        "Resources/Third-Party-Notices.txt": "../build/Third-Party-Notices.txt",
+        "Resources/Rust-Licenses.html": "licenses/Rust-Licenses.html"
+      }
+    }
   }
 }

@@ -1,0 +1,45 @@
+{
+  "comment": "Overrides for scripts/rust-notices.py. The crates below publish no license text on crates.io; their texts are copied verbatim from the upstream repositories into licenses/rust/ (provenance in licenses/README.md). Versions are pinned where the text comes from a release commit or tag, so an upgrade fails the generator until the text is checked again.",
+  "crates": [
+    {
+      "name": "alloc-stdlib",
+      "version": "0.3.0",
+      "files": ["rust/alloc-no-stdlib-0.3.0-LICENSE"],
+      "reason": "Crate publishes no license file; BSD-3-Clause per Cargo.toml. LICENSE copied from github.com/dropbox/rust-alloc-no-stdlib at 0a81fd6, the commit the 0.3.0 crate was published from (.cargo_vcs_info.json)"
+    },
+    {
+      "name": "dlopen2",
+      "version": "0.8.2",
+      "files": ["rust/dlopen2-LICENSE"],
+      "reason": "Crate publishes no license file; MIT per Cargo.toml. LICENSE copied from github.com/OpenByteDev/dlopen2 at cc80e4a, the commit the 0.8.2 crate was published from; Linux only"
+    },
+    {
+      "name": "ndb-oui",
+      "version": "0.4.1",
+      "files": ["rust/ndb-oui-0.4.1-LICENSE"],
+      "note": "Contains MAC OUI vendor data (data/oui.bin, built from resources/oui.csv in github.com/shellrow/ndb) derived from the IEEE Registration Authority's OUI assignments. Upstream does not document how the table was compiled.",
+      "reason": "Crate publishes no license file; MIT per Cargo.toml. LICENSE copied from github.com/shellrow/ndb at bb29a49, the commit the 0.4.1 crate was published from. The crate compiles a vendor table into the binary, so the note records where the data comes from (finding Lantenna-m3)"
+    },
+    {
+      "name": "siphasher",
+      "version": "1.0.2",
+      "files": ["rust/siphasher-1.0.4-LICENSE-MIT", "rust/siphasher-1.0.4-LICENSE-APACHE"],
+      "reason": "The crate's COPYING only points to LICENSE-MIT and LICENSE-APACHE, which 1.0.2 does not publish. Texts copied from github.com/jedisct1/rust-siphash at tag 1.0.4, the first tag that has them; COPYING ships too and carries the copyright lines"
+    },
+    {
+      "name": "objc2*",
+      "files": ["rust/objc2-LICENSE-MIT.txt"],
+      "reason": "The objc2 crates (macOS only) publish no license file. objc2, objc2-foundation and objc2-encode are MIT, the others Zlib OR Apache-2.0 OR MIT (LICENSE.md in github.com/madsmtm/objc2); MIT chosen for all. LICENSE-MIT.txt copied from that repository, which added it in ee9a7ad (March 2026) for every crate in it"
+    },
+    {
+      "name": "block2",
+      "files": ["rust/objc2-LICENSE-MIT.txt"],
+      "reason": "Same repository and terms as objc2 (MIT); macOS only"
+    },
+    {
+      "name": "dispatch2",
+      "files": ["rust/objc2-LICENSE-MIT.txt"],
+      "reason": "Same repository as objc2; Zlib OR Apache-2.0 OR MIT, MIT chosen; macOS only"
+    }
+  ]
+}
