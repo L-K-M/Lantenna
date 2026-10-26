@@ -20,10 +20,14 @@ case "$mode" in
     grep -q 'Copyright notices for The Rust Standard Library' "$res/Rust-Licenses.html"
     ;;
   linux)
-    deb="${2:?usage: $0 linux <deb> <AppImage>}"
-    appimage="$(realpath "${3:?usage: $0 linux <deb> <AppImage>}")"
+    # The callers glob *.deb: more than one match would shift the AppImage
+    # out of position, so reject extra arguments outright.
+    [ "$#" -eq 3 ] || { echo "usage: $0 linux <deb> <AppImage>" >&2; exit 2; }
+    deb="$2"
+    appimage="$(realpath "$3")"
     doc=usr/share/doc/lantenna
     tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
     dpkg-deb -x "$deb" "$tmp/deb"
     (cd "$tmp" && "$appimage" --appimage-extract 'usr/share/*' >/dev/null)
     for root in "$tmp/deb" "$tmp/squashfs-root"; do
@@ -41,7 +45,6 @@ case "$mode" in
     test -s "$tmp/squashfs-root/usr/share/doc/libglib2.0-0/copyright"
     grep -q 'Bundled system libraries' "$tmp/squashfs-root/$doc/Third-Party-Notices.txt"
     grep -q 'type2-runtime' "$tmp/squashfs-root/$doc/Third-Party-Notices.txt"
-    rm -rf "$tmp"
     ;;
   *)
     echo "usage: $0 macos <dir containing Lantenna.app> | linux <deb> <AppImage>" >&2
