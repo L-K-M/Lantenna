@@ -114,12 +114,16 @@ case "$HOST" in
     ;;
   Linux)
     notices_tmp="$(mktemp -d)"
+    # Unpack each package into a fresh directory, so one package's files
+    # cannot satisfy the check for another.
     for deb in "$BUNDLE_DIR"/deb/*.deb; do
+      rm -rf "$notices_tmp/deb"
       dpkg-deb -x "$deb" "$notices_tmp/deb"
       require_notices "$notices_tmp/deb/usr/share/doc/$BINARY_NAME" copyright Third-Party-Notices.txt Rust-Licenses.html
     done
     for image in "$BUNDLE_DIR"/appimage/*.AppImage; do
       image="$(realpath "$image")"
+      rm -rf "$notices_tmp/squashfs-root"
       (cd "$notices_tmp" && "$image" --appimage-extract 'usr/share/doc/*' >/dev/null)
       require_notices "$notices_tmp/squashfs-root/usr/share/doc/$BINARY_NAME" copyright Third-Party-Notices.txt Rust-Licenses.html
     done

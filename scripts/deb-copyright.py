@@ -277,7 +277,7 @@ def generate(spec, own, components, notices_path):
                               + field("Copyright", comp["copyright"]) + f"License: {comp['dep5']}\n"
                               + field("Comment", note))
     for binary, comps in sorted(by_binary.items()):
-        parts = [] if "pending" in own else [own["dep5"]]
+        parts = [] if "pending" in own else [f"({own['dep5']})" if wrap_needed(own["dep5"]) else own["dep5"]]
         holders = [] if "pending" in own else list(own["copyright"])
         note = [f"{binary} statically links:"]
         for comp in comps:
