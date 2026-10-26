@@ -16,17 +16,19 @@ CI lints and tests on both runners to exercise both real targets.
 ## Workflows
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | PRs + pushes to `main` | Type-check, test and build the SvelteKit frontend, then run `cargo fmt`/`clippy`/`test` on macOS and Ubuntu. |
+| `.github/workflows/ci.yml` | PRs + pushes to `main` | Type-check, test and build the SvelteKit frontend, then run `cargo fmt`/`clippy`/`test` on macOS and Ubuntu; build the macOS app, the Linux `.deb`/`.AppImage` and the Flatpak, and check that the license notices are inside them. |
 | `.github/workflows/release.yml` | Pushing a `v*.*.*` tag | Build the macOS Tauri `.dmg` bundles (Apple Silicon + Intel) and the Linux `.deb`/`.AppImage` bundles (x86_64), repack the `.deb` as a `.flatpak` bundle (`scripts/build-flatpak.sh`), and attach them to a GitHub Release. |
 
 ## Continuous integration (`ci.yml`)
 
-The CI workflow has two parallel jobs:
+The CI workflow has four parallel jobs:
 
 - **Frontend (check & build)** — runs on Ubuntu. Installs npm dependencies with
   `npm ci`, runs `npm run check` (`svelte-kit sync` + `svelte-check`), then
   `npm test` (vitest under jsdom: the window-activity subscription lifecycle and
-  the title-bar drag regression), then `npm run build` (`vite build`). The
+  the title-bar drag regression), then `npm run build` (`vite build`, which
+  also writes `build/Third-Party-Notices.txt` for the bundled npm packages),
+  and checks that file and the banner that points every chunk at it. The
   frontend is platform-independent, so it builds on the cheaper Linux runner.
 - **Rust (fmt, clippy, test)** — builds the frontend into `build/` first (because
   `tauri::generate_context!` embeds it at compile time), then runs
@@ -35,8 +37,18 @@ The CI workflow has two parallel jobs:
   runs. The job is a matrix over `macos-latest` and `ubuntu-22.04`: each platform's
   `#[cfg(target_os = ...)]` code (AppKit system colors on macOS; GTK
   decoration-state tracking and the `ip neigh` neighbour reader on Linux) only
-  compiles on its own OS, so both real targets are exercised. The bundles
-  themselves are built by the release workflow.
+  compiles on its own OS, so both real targets are exercised. The Ubuntu leg
+  also runs `scripts/rust-notices.py --check` for all three release targets,
+  which fails when a linked crate has no license text.
+- **Bundle notices**: builds the bundles the release ships (`Lantenna.app` on
+  macOS; the `.deb` and `.AppImage` on Ubuntu 22.04), runs
+  `scripts/appimage-notices.py` on the AppImage as the release does, and
+  checks with `test -s` and `grep` that `Third-Party-Notices.txt`,
+  `Rust-Licenses.html` and (on Linux) the Debian `copyright` file are inside
+  each package.
+- **Flatpak notices**: builds the `.deb` on Ubuntu 24.04 and repacks it with
+  `scripts/build-flatpak.sh`, which fails unless the notices reach
+  `/app/share/doc/lantenna/`.
 
 Lantenna's `src-tauri` is a single crate (not a Cargo workspace), so the cargo
 commands run without `--workspace`. There is no `Cargo.toml` at the repository
@@ -106,6 +118,13 @@ The workflow:
    and `iproute2` packages the scanner shells out to. The Linux leg builds on the
    oldest supported Ubuntu LTS runner so the binaries link against a glibc old
    enough for the systems users run.
+   Tauri's `beforeBuildCommand` runs `scripts/notices.sh`, which generates the
+   license notices, and the bundle config places them in each package. After
+   the build each leg checks them: the macOS legs inside the `.app` and the
+   mounted `.dmg`; the Linux leg adds the Ubuntu libraries' and AppImage
+   runtime's notices and source links to the AppImage
+   (`scripts/appimage-notices.py`), checks the `.deb` and the AppImage, and
+   replaces the uploaded AppImage while the release is still a draft.
 3. **Publishes the release** (flips it from draft to published) once all build
    jobs succeed. If a build fails, the release stays a draft so nothing
    half-built is published.

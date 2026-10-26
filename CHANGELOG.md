@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The app packages ship the third-party license notices: the Rust crates,
+  the Rust standard library and the npm packages the app bundles, in
+  `Third-Party-Notices.txt` and `Rust-Licenses.html`; the Linux packages
+  also carry a Debian `copyright` file, and the AppImage the notices and
+  source links of its Ubuntu libraries and runtime.
 - A Mac OS 8.5 look, drawn with Osmium UI: a Platinum window with close,
   zoom, collapse and grow boxes; labeled controls on the gray; a Finder
   window header with chasing arrows and a progress bar; a Finder-style list

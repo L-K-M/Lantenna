@@ -22,7 +22,7 @@ there is no Windows target.
 | Desktop dev | `npm run tauri dev` |
 | Type-check | `npm run check` (svelte-kit sync + svelte-check) |
 | Frontend tests | `npm test` (vitest under happy-dom) |
-| Frontend build | `npm run build` (vite + scripts/check-built-html.mjs) |
+| Frontend build | `npm run build` (vite + scripts/check-built-html.mjs + npm license notices) |
 | Rust checks (CI parity) | `cargo fmt --all --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`; all run from `src-tauri/` |
 | Verify + build the app | `scripts/build.sh [--clean] [--install] [--run]` |
 | Release | `scripts/release.sh X.Y.Z [--push]` → tag triggers release.yml (macOS .dmg ×2, Linux .deb + .AppImage) |
@@ -52,6 +52,25 @@ from `src-tauri/` or pass `--manifest-path src-tauri/Cargo.toml`.
   bundle is `Lantenna.app`, identifier `ch.lkmc.lantenna`.
 - `src-tauri/gen/` is gitignored; `src-tauri/icons/` is derived from
   `media-sources/` and committed.
+
+## Licensing
+
+- This repository has no LICENSE yet; do not add license claims for the
+  project's own code.
+- Before adding a dependency, vendored file or bundled asset (fonts, images,
+  icons, data), confirm its license allows redistribution in our artifacts.
+  Never vendor third-party code without its license file.
+- `scripts/notices.sh`, run by Tauri's `beforeBuildCommand`, builds
+  `Third-Party-Notices.txt` from the real dependency set
+  (`scripts/rust-notices.py` for the crates, `scripts/third-party-notices.mjs`
+  for the frontend bundle), copies the Rust standard library's
+  `Rust-Licenses.html` and writes the Debian `copyright` file into the
+  gitignored `src-tauri/licenses/`. The generators fail on a component without
+  license text: record gaps as explicit overrides with a reason
+  (`licenses/rust-overrides.json`, `licenses/linux/appimage-notices.json`, or a
+  `--config` file for the npm generator) and vendor the texts under
+  `licenses/` with their provenance in `licenses/README.md`. Keep the CI
+  `test -s` checks passing.
 
 ## Docs
 
