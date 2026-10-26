@@ -156,20 +156,10 @@ jobs:
         if: startsWith(matrix.platform, 'macos')
         run: |
           bundle="src-tauri/target/${{ matrix.rust-targets }}/release/bundle"
-          check() {
-            res="$1/Lantenna.app/Contents/Resources"
-            for f in Third-Party-Notices.txt Rust-Licenses.html; do
-              test -s "$res/$f"
-            done
-            grep -q '^tauri ' "$res/Third-Party-Notices.txt"
-            grep -q '^svelte ' "$res/Third-Party-Notices.txt"
-            grep -q '^objc2 ' "$res/Third-Party-Notices.txt"
-            grep -q 'Copyright notices for The Rust Standard Library' "$res/Rust-Licenses.html"
-          }
-          check "$bundle/macos"
+          scripts/check-bundle-notices.sh macos "$bundle/macos"
           mnt="$(mktemp -d)"
           hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$bundle"/dmg/*.dmg >/dev/null
-          check "$mnt"
+          scripts/check-bundle-notices.sh macos "$mnt"
           hdiutil detach "$mnt" >/dev/null
 
       # tauri-action uploaded the AppImage as linuxdeploy left it. Add the
@@ -184,25 +174,12 @@ jobs:
           python3 scripts/appimage-notices.py appimage "$appimage" \
             --package lantenna --overrides licenses/linux/appimage-notices.json
 
-          doc=usr/share/doc/lantenna
-          tmp="$(mktemp -d)"
-          dpkg-deb -x src-tauri/target/release/bundle/deb/*.deb "$tmp/deb"
-          (cd "$tmp" && "$appimage" --appimage-extract 'usr/share/*' >/dev/null)
-          for root in "$tmp/deb" "$tmp/squashfs-root"; do
-            for f in copyright Third-Party-Notices.txt Rust-Licenses.html; do
-              test -s "$root/$doc/$f"
-            done
-            grep -q '^Files: usr/bin/lantenna$' "$root/$doc/copyright"
-            grep -q '^tauri ' "$root/$doc/Third-Party-Notices.txt"
-            grep -q '^gtk ' "$root/$doc/Third-Party-Notices.txt"
-            grep -q '^option-ext ' "$root/$doc/Third-Party-Notices.txt"
-            grep -q '^osmium-ui ' "$root/$doc/Third-Party-Notices.txt"
-          done
-          test -s "$tmp/squashfs-root/$doc/SOURCES.txt"
-          test -s "$tmp/squashfs-root/usr/share/doc/libglib2.0-0/copyright"
-          grep -q 'Bundled system libraries' "$tmp/squashfs-root/$doc/Third-Party-Notices.txt"
-          grep -q 'type2-runtime' "$tmp/squashfs-root/$doc/Third-Party-Notices.txt"
+          scripts/check-bundle-notices.sh linux \
+            src-tauri/target/release/bundle/deb/*.deb "$appimage"
 
+          # The rewrite invalidates any signature on the image. None exists:
+          # TAURI_SIGNING_PRIVATE_KEY is exported on the macOS legs only. If
+          # updater signing ever reaches this leg, re-sign before the upload.
           gh release upload "$GITHUB_REF_NAME" "$appimage" --clobber
 
   # ---------------------------------------------------------------------------
