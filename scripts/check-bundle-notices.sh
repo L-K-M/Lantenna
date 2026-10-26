@@ -24,10 +24,11 @@ case "$mode" in
     # out of position, so reject extra arguments outright.
     [ "$#" -eq 3 ] || { echo "usage: $0 linux <deb> <AppImage>" >&2; exit 2; }
     deb="$2"
-    appimage="$(realpath "$3")"
+    appimage="$(realpath -e "$3")"
     doc=usr/share/doc/lantenna
-    tmp="$(mktemp -d)"
+    tmp=
     trap 'rm -rf "$tmp"' EXIT
+    tmp="$(mktemp -d)"
     dpkg-deb -x "$deb" "$tmp/deb"
     (cd "$tmp" && "$appimage" --appimage-extract 'usr/share/*' >/dev/null)
     for root in "$tmp/deb" "$tmp/squashfs-root"; do
