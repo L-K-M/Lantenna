@@ -114,11 +114,10 @@ Bundles for the host architecture are written below
 
 ## License
 
-This repository does not include a license for Lantenna's own code. The app
-bundles Tauri and its Rust crates, the Rust standard library, and the Svelte,
-SvelteKit, `@tauri-apps/api` and Osmium UI npm packages, which keep their own
-licenses. Their notices ship inside every package as `Third-Party-Notices.txt`
-and `Rust-Licenses.html`:
+Lantenna bundles Tauri and its Rust crates, the Rust standard library, and the
+Svelte, SvelteKit, `@tauri-apps/api` and Osmium UI npm packages, which keep
+their own licenses. Their notices ship inside every package as
+`Third-Party-Notices.txt` and `Rust-Licenses.html`:
 
 - macOS: `Lantenna.app/Contents/Resources/`
 - Linux `.deb` and `.AppImage`: `/usr/share/doc/lantenna/`, next to a Debian
