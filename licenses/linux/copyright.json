@@ -1,0 +1,45 @@
+{
+  "_comment": [
+    "Spec for scripts/deb-copyright.py: the DEP-5 copyright file that the .deb",
+    "and the AppImage install as /usr/share/doc/lantenna/copyright (the Flatpak,",
+    "repacked from the .deb, as /app/share/doc/lantenna/copyright).",
+    "scripts/notices.sh sets RUST_DOC and RUST_VERSION from the building toolchain.",
+    "The repository has no LICENSE yet, so 'own' makes no claim for Lantenna's code."
+  ],
+  "package": "lantenna",
+  "upstream_name": "Lantenna",
+  "upstream_contact": "https://github.com/L-K-M/Lantenna/issues",
+  "source": "https://github.com/L-K-M/Lantenna",
+  "own": {
+    "pending": "Lantenna has not published a license for its own code yet."
+  },
+  "components": [
+    {
+      "name": "Rust crates",
+      "license": "LicenseRef-Bundled-Crates",
+      "license_text": "Each crate keeps its own license (MIT, Apache-2.0, Unicode-3.0, BSD-3-Clause, ISC, Zlib, BSL-1.0, CDLA-Permissive-2.0, MPL-2.0 and others). Their full license texts, copyright notices and source links, including the Source Code Form of the MPL-2.0 crate option-ext, are in Third-Party-Notices.txt, next to this file.",
+      "copyright": ["The authors of each crate, as listed in Third-Party-Notices.txt"],
+      "embedded_in": ["usr/bin/lantenna"]
+    },
+    {
+      "name": "Frontend npm packages",
+      "license": "LicenseRef-Bundled-Frontend",
+      "license_text": "The web frontend embedded in the binary bundles npm packages (Svelte, SvelteKit, @tauri-apps/api, Osmium UI and bundler runtime helpers; MIT, Apache-2.0, Unlicense). Their full license texts and copyright notices are in Third-Party-Notices.txt, next to this file.",
+      "copyright": ["The authors of each package, as listed in Third-Party-Notices.txt"],
+      "embedded_in": ["usr/bin/lantenna"]
+    },
+    {
+      "name": "Rust standard library",
+      "version": "$RUST_VERSION",
+      "license": "MIT OR Apache-2.0",
+      "copyright": ["The Rust Project Developers"],
+      "source_url": "https://github.com/rust-lang/rust/tree/$RUST_VERSION/library",
+      "license_files": {
+        "MIT": ["$RUST_DOC/licenses/MIT.txt"],
+        "Apache-2.0": ["$RUST_DOC/licenses/Apache-2.0.txt"]
+      },
+      "embedded_in": ["usr/bin/lantenna"],
+      "comment": "The full notices, including those of std's own dependencies, are in Rust-Licenses.html next to this file."
+    }
+  ]
+}

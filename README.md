@@ -111,3 +111,21 @@ To work on the interface in a browser without the backend, run
 Bundles for the host architecture are written below
 `src-tauri/target/release/bundle/` — a `.dmg` on macOS; a `.deb` and an
 `.AppImage` on Linux.
+
+## License
+
+Lantenna bundles Tauri and its Rust crates, the Rust standard library, and the
+Svelte, SvelteKit, `@tauri-apps/api` and Osmium UI npm packages, which keep
+their own licenses. Their notices ship inside every package as
+`Third-Party-Notices.txt` and `Rust-Licenses.html`:
+
+- macOS: `Lantenna.app/Contents/Resources/`
+- Linux `.deb` and `.AppImage`: `/usr/share/doc/lantenna/`, next to a Debian
+  `copyright` file (Flatpak: `/app/share/doc/lantenna/`)
+
+The MPL-2.0 crate `option-ext` is used unmodified; the notices file gives the
+location of its source. The `.AppImage` also bundles Ubuntu 22.04 libraries
+(GTK, WebKitGTK, GLib and others, mostly under the LGPL) and the AppImage
+runtime. Their notices are added to the same `Third-Party-Notices.txt`, their
+source packages are listed in `SOURCES.txt` next to it, and each library's
+Debian copyright file ships under `usr/share/doc/` inside the AppImage.

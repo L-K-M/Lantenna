@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build && node scripts/check-built-html.mjs",
+    "build": "vite build && node scripts/check-built-html.mjs && npm run --silent notices:web",
+    "notices:web": "node scripts/third-party-notices.mjs --modules node_modules/.cache/bundled-modules --check-assets build --title Lantenna --out build/Third-Party-Notices.txt",
+    "notices:app": "bash scripts/notices.sh",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",

@@ -6,6 +6,8 @@ coverage/
 
 src-tauri/target/
 src-tauri/gen/
+# License notices scripts/notices.sh generates for the bundles
+src-tauri/licenses/
 
 npm-debug.log*
 yarn-debug.log*

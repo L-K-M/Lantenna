@@ -45,6 +45,18 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      # The build writes the npm notices next to the bundle and points every
+      # chunk at them; scripts/third-party-notices.mjs fails on a bundled
+      # package or font without license text.
+      - name: Check frontend license notices
+        run: |
+          notices=build/Third-Party-Notices.txt
+          test -s "$notices"
+          grep -q '^svelte ' "$notices"
+          grep -q '^osmium-ui ' "$notices"
+          test -n "$(find build/_app/immutable -name '*.js' -print -quit)"
+          if grep -rL --include='*.js' 'Third-Party-Notices.txt' build/_app/immutable | grep .; then exit 1; fi
+
   rust:
     name: Rust (fmt, clippy, test — ${{ matrix.platform }})
     # Lantenna ships for macOS and Linux, and each OS has code the other never
@@ -101,6 +113,18 @@ jobs:
           workspaces: src-tauri
           key: ${{ matrix.platform }}
 
+      # Every crate linked into a shipped binary must publish its license
+      # text or have an override in licenses/rust-overrides.json. cargo tree
+      # resolves every target from Linux, so one leg checks all three.
+      - name: Check Rust license notices
+        if: startsWith(matrix.platform, 'ubuntu')
+        working-directory: .
+        run: |
+          for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu; do
+            python3 scripts/rust-notices.py --manifest-path src-tauri/Cargo.toml --target "$target" \
+              --overrides licenses/rust-overrides.json --check
+          done
+
       - name: Check formatting
         run: cargo fmt --all --check
 
@@ -109,3 +133,112 @@ jobs:
 
       - name: Test
         run: cargo test --locked
+
+  # Build the packages users download and check that the license notices are
+  # inside them: the macOS app, and the Linux .deb and AppImage (the release
+  # workflow builds the same bundles; the Flatpak job below repacks the .deb).
+  bundles:
+    name: Bundle notices (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            bundles: app
+          - platform: ubuntu-22.04
+            bundles: deb,appimage
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      # As in release.yml; squashfs-tools for scripts/appimage-notices.py.
+      - name: Install Tauri system dependencies (Linux)
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils \
+            squashfs-tools
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: bundles-${{ matrix.platform }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # beforeBuildCommand runs scripts/notices.sh, and the bundle config
+      # places its output in each package.
+      - name: Build bundles
+        run: npm run tauri -- build --bundles ${{ matrix.bundles }}
+
+      - name: Check macOS app notices
+        if: startsWith(matrix.platform, 'macos')
+        run: scripts/check-bundle-notices.sh macos src-tauri/target/release/bundle/macos
+
+      # The release workflow runs the same step before it uploads the AppImage.
+      - name: Add the AppImage's system library notices
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          python3 scripts/appimage-notices.py appimage src-tauri/target/release/bundle/appimage/*.AppImage \
+            --package lantenna --overrides licenses/linux/appimage-notices.json
+
+      - name: Check Linux package notices
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          scripts/check-bundle-notices.sh linux \
+            src-tauri/target/release/bundle/deb/*.deb \
+            src-tauri/target/release/bundle/appimage/*.AppImage
+
+  # The release's Flatpak repacks a .deb built on Ubuntu 24.04;
+  # scripts/build-flatpak.sh fails unless the notices reach /app/share/doc.
+  flatpak:
+    name: Flatpak notices
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Tauri and Flatpak system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils \
+            flatpak flatpak-builder elfutils
+          # As in release.yml: let bubblewrap create user namespaces.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: flatpak
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build the .deb and repack it as a Flatpak
+        run: |
+          npm run tauri -- build --bundles deb
+          ./scripts/build-flatpak.sh src-tauri/target/release/bundle/deb/*.deb

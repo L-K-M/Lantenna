@@ -1,0 +1,108 @@
+{
+  "_comment": [
+    "Overrides for scripts/appimage-notices.py, which adds the notices and source",
+    "pointers for the Ubuntu libraries Tauri's linuxdeploy copies into the AppImage.",
+    "Paths are AppDir-relative fnmatch patterns; license_files are relative to this",
+    "file. Every file no Ubuntu package owns must match 'own' or 'files', or the step",
+    "fails. {placeholders} are read from the AppImage runtime."
+  ],
+  "own": [
+    {
+      "path": "usr/bin/lantenna",
+      "reason": "The app's executable, built from this repository; the code it links is listed in Third-Party-Notices.txt"
+    },
+    {
+      "path": "usr/share/applications/Lantenna.desktop",
+      "reason": "Desktop entry the Tauri bundler writes from tauri.conf.json"
+    },
+    {
+      "path": "usr/share/icons/hicolor/*/apps/lantenna.png",
+      "reason": "The app's icons from src-tauri/icons, drawn from media-sources/antenna-icon.af"
+    },
+    {
+      "path": "Lantenna.png",
+      "reason": "Copy of the largest app icon, made by the Tauri bundler"
+    },
+    {
+      "path": "usr/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache",
+      "reason": "Generated at build time by linuxdeploy-plugin-gtk; lists the bundled pixbuf loaders"
+    },
+    {
+      "path": "usr/lib/gio/modules/giomodule.cache",
+      "reason": "Generated at build time by linuxdeploy-plugin-gtk (gio-querymodules) when it bundles GIO modules; lists their names only"
+    },
+    {
+      "path": "usr/lib/gtk-3.0/3.0.0/immodules.cache",
+      "reason": "Generated at build time by linuxdeploy-plugin-gtk; lists the bundled GTK input methods"
+    },
+    {
+      "path": "usr/share/glib-2.0/schemas/gschemas.compiled",
+      "reason": "Generated at build time by linuxdeploy-plugin-gtk with glib-compile-schemas from the bundled schema files"
+    }
+  ],
+  "files": [
+    {
+      "path": "AppRun.wrapped",
+      "extra": "AppImageKit AppRun",
+      "reason": "The Tauri bundler downloads AppRun-x86_64 from the tauri-apps/binary-releases 'apprun-old' release, a mirror of AppImageKit's continuous build; linuxdeploy renames it when it adds the GTK hook"
+    },
+    {
+      "path": "AppRun",
+      "extra": "linuxdeploy",
+      "reason": "Launcher script linuxdeploy generates to run the hooks in apprun-hooks/ before AppRun.wrapped"
+    },
+    {
+      "path": "apprun-hooks/linuxdeploy-plugin-gtk.sh",
+      "extra": "linuxdeploy-plugin-gtk",
+      "reason": "Hook script written by linuxdeploy-plugin-gtk, which the Tauri bundler downloads from tauri-apps/linuxdeploy-plugin-gtk (master)"
+    }
+  ],
+  "packages": [],
+  "extra": [
+    {
+      "name": "AppImage type2-runtime",
+      "version": "{runtime_commit}",
+      "appimage_runtime": true,
+      "license": "MIT AND LGPL-2.1-only AND BSD-2-Clause AND BSD-3-Clause AND Zlib",
+      "source_url": "https://github.com/AppImage/type2-runtime/commit/{runtime_commit}",
+      "sources": [
+        "Statically links libfuse {libfuse_version} (LGPL-2.1, patched by patches/libfuse in the runtime source): https://github.com/libfuse/libfuse/releases/tag/fuse-{libfuse_version}",
+        "Statically links squashfuse {squashfuse_version} (BSD-2-Clause): https://github.com/vasi/squashfuse/releases/tag/{squashfuse_version}",
+        "Statically links musl (MIT), zstd {zstd_version} (BSD-3-Clause) and zlib {zlib_version} (Zlib) from the Alpine Linux release named in the runtime source's scripts/chroot/chroot_build.sh"
+      ],
+      "license_files": [
+        "appimage/type2-runtime-LICENSE.txt",
+        "appimage/musl-COPYRIGHT.txt",
+        "appimage/libfuse-LGPL2.txt",
+        "appimage/squashfuse-LICENSE.txt",
+        "appimage/zstd-LICENSE.txt",
+        "appimage/zlib-LICENSE.txt"
+      ],
+      "reason": "The runtime is the AppImage's ELF header, outside the squashfs, so no package owns it. Texts vendored from upstream (licenses/README.md); the runtime commit pins the exact sources"
+    },
+    {
+      "name": "AppImageKit AppRun",
+      "version": "continuous build of 2021-08 (tauri-apps/binary-releases apprun-old)",
+      "license": "MIT",
+      "source_url": "https://github.com/AppImage/AppImageKit/tree/1681fd84dbe09c7d9b22e13cdb16ea601aa0ec47",
+      "license_files": ["appimage/AppImageKit-LICENSE"],
+      "reason": "AppImageKit's LICENSE at its last commit before the mirrored build"
+    },
+    {
+      "name": "linuxdeploy",
+      "version": "tauri-apps/binary-releases linuxdeploy build",
+      "license": "MIT",
+      "source_url": "https://github.com/linuxdeploy/linuxdeploy",
+      "license_files": ["appimage/linuxdeploy-LICENSE.txt"],
+      "reason": "Only linuxdeploy's generated AppRun script ships; LICENSE.txt from linuxdeploy/linuxdeploy"
+    },
+    {
+      "name": "linuxdeploy-plugin-gtk",
+      "version": "tauri-apps fork, master",
+      "license": "MIT",
+      "source_url": "https://github.com/tauri-apps/linuxdeploy-plugin-gtk",
+      "license_files": ["appimage/linuxdeploy-plugin-gtk-LICENSE.txt"],
+      "reason": "LICENSE.txt from tauri-apps/linuxdeploy-plugin-gtk at dda522b, the branch the Tauri bundler downloads"
+    }
+  ]
+}

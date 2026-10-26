@@ -80,12 +80,14 @@ jobs:
       # everything out of the box. patchelf and xdg-utils follow Tauri's GitHub
       # Actions guide, but the AppImage builds without them: linuxdeploy ships
       # its own patchelf, and its GTK plugin never calls xdg-open.
+      # squashfs-tools is for scripts/appimage-notices.py.
       - name: Install Tauri system dependencies (Linux)
         if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils \
+            squashfs-tools
 
       - name: Set up Node
         uses: actions/setup-node@v7
@@ -147,9 +149,43 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
 
+      # beforeBuildCommand (scripts/notices.sh) generated the license notices
+      # and the bundle config placed them. The release stays a draft unless
+      # every leg finds them in what it uploaded.
+      - name: Check macOS bundle notices
+        if: startsWith(matrix.platform, 'macos')
+        run: |
+          bundle="src-tauri/target/${{ matrix.rust-targets }}/release/bundle"
+          scripts/check-bundle-notices.sh macos "$bundle/macos"
+          mnt="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$bundle"/dmg/*.dmg >/dev/null
+          scripts/check-bundle-notices.sh macos "$mnt"
+          hdiutil detach "$mnt" >/dev/null
+
+      # tauri-action uploaded the AppImage as linuxdeploy left it. Add the
+      # notices and source pointers for the Ubuntu libraries and the AppImage
+      # runtime inside it, check both packages, then replace the upload.
+      - name: Add AppImage library notices and check Linux packages
+        if: startsWith(matrix.platform, 'ubuntu')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          appimage="$(realpath src-tauri/target/release/bundle/appimage/*.AppImage)"
+          python3 scripts/appimage-notices.py appimage "$appimage" \
+            --package lantenna --overrides licenses/linux/appimage-notices.json
+
+          scripts/check-bundle-notices.sh linux \
+            src-tauri/target/release/bundle/deb/*.deb "$appimage"
+
+          # The rewrite invalidates any signature on the image. None exists:
+          # TAURI_SIGNING_PRIVATE_KEY is exported on the macOS legs only. If
+          # updater signing ever reaches this leg, re-sign before the upload.
+          gh release upload "$GITHUB_REF_NAME" "$appimage" --clobber
+
   # ---------------------------------------------------------------------------
   # Linux Flatpak: repacks a freshly built .deb under the flatpak /app prefix,
-  # so the bundle ships exactly the files the .deb installs.
+  # so the bundle ships exactly the files the .deb installs, license notices
+  # included (scripts/build-flatpak.sh fails without them).
   # ---------------------------------------------------------------------------
   flatpak:
     name: Linux Flatpak

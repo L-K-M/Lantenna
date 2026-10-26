@@ -97,6 +97,40 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 echo "==> tauri build"
 npm run tauri build
 
+# The bundles must carry the license notices scripts/notices.sh generated
+# (CI and release.yml check the same; release.yml also adds the AppImage's
+# system library notices, which a local build leaves out).
+echo "==> check license notices"
+require_notices() {
+  local dir="$1"
+  shift
+  for notice in "$@"; do
+    [[ -s "$dir/$notice" ]] || { echo "!! missing license notice: $dir/$notice" >&2; exit 1; }
+  done
+}
+case "$HOST" in
+  Darwin)
+    require_notices "$BUNDLE_DIR/macos/$APP_NAME.app/Contents/Resources" Third-Party-Notices.txt Rust-Licenses.html
+    ;;
+  Linux)
+    notices_tmp="$(mktemp -d)"
+    # Unpack each package into a fresh directory, so one package's files
+    # cannot satisfy the check for another.
+    for deb in "$BUNDLE_DIR"/deb/*.deb; do
+      rm -rf "$notices_tmp/deb"
+      dpkg-deb -x "$deb" "$notices_tmp/deb"
+      require_notices "$notices_tmp/deb/usr/share/doc/$BINARY_NAME" copyright Third-Party-Notices.txt Rust-Licenses.html
+    done
+    for image in "$BUNDLE_DIR"/appimage/*.AppImage; do
+      image="$(realpath "$image")"
+      rm -rf "$notices_tmp/squashfs-root"
+      (cd "$notices_tmp" && "$image" --appimage-extract 'usr/share/doc/*' >/dev/null)
+      require_notices "$notices_tmp/squashfs-root/usr/share/doc/$BINARY_NAME" copyright Third-Party-Notices.txt Rust-Licenses.html
+    done
+    rm -rf "$notices_tmp"
+    ;;
+esac
+
 # Stage the distributable bundles (not the bare .app) into dist/.
 echo "==> stage to $DIST_DIR/"
 mkdir -p "$DIST_DIR"
